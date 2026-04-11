@@ -1,0 +1,11 @@
+[package]
+name = "dark-rift-shared"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bevy = { workspace = true, features = ["serialize"] }
+serde = { workspace = true }
+rand = { workspace = true }
+lightyear = { workspace = true }
+bincode = { workspace = true }

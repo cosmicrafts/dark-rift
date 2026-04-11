@@ -1,0 +1,11 @@
+[package]
+name = "dark-rift-server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+dark-rift-shared = { path = "../shared" }
+bevy = { workspace = true, features = ["bevy_state", "bevy_log"] }
+serde = { workspace = true }
+rand = { workspace = true }
+lightyear = { workspace = true, features = ["websocket", "server", "netcode"] }
