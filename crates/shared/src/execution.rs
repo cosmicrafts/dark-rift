@@ -23,7 +23,17 @@ impl Eq for PrioritizedTile {}
 impl Ord for PrioritizedTile {
     fn cmp(&self, other: &Self) -> Ordering {
         // Reverse order so lowest priority behaves as max in BinaryHeap
-        other.priority.partial_cmp(&self.priority).unwrap_or(Ordering::Equal)
+        match other.priority.partial_cmp(&self.priority).unwrap_or(Ordering::Equal) {
+            Ordering::Equal => {
+                // Secondary sort by coordinate to ensure 100% determinism 
+                // between identically scored priority tiles.
+                match other.y.cmp(&self.y) {
+                    Ordering::Equal => other.x.cmp(&self.x),
+                    ord => ord,
+                }
+            },
+            ord => ord,
+        }
     }
 }
 
@@ -35,6 +45,7 @@ impl PartialOrd for PrioritizedTile {
 
 #[derive(Component)]
 pub struct AttackExecution {
+    pub id: u64, // Used for deterministic sorting cross-client
     pub owner_id: u16,
     pub target_owner: u16, // 0 = TerraNullius/neutral
     pub troops: f64,
@@ -94,10 +105,13 @@ pub fn system_attack_execution(
     }
 
     let tick_now = game.tick;
-    // We briefly borrow map to do operations.
-    // Notice that a tile ownership change mutates map, so we must be careful with borrows.
-    
-    for (entity, mut execution) in query.iter_mut() {
+    // Collect all AttackExecution entities and sort them by their perfectly coherent monotonic ID 
+    // to strictly enforce identical processing execution order across clients!
+    let mut ordered: Vec<(Entity, u64)> = query.iter().map(|(ent, exec)| (ent, exec.id)).collect();
+    ordered.sort_by_key(|&(_, id)| id);
+
+    for (entity, _) in ordered {
+        let Ok((_, mut execution)) = query.get_mut(entity) else { continue };
         let mut expanded_this_tick = 0u32;
         
         loop {
@@ -171,4 +185,9 @@ pub fn system_attack_execution(
             }
         }
     }
+}
+
+pub fn system_game_tick(game_opt: Option<ResMut<GameState>>) {
+    let Some(mut game) = game_opt else { return };
+    game.tick();
 }

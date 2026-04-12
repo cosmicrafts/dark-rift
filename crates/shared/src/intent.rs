@@ -23,6 +23,7 @@ pub fn apply_stamped_intent(
     commands: &mut Commands,
     game: &GameState,
     stamped: &StampedIntent,
+    intent_index: u32,
 ) {
     let player_id = stamped.player_id;
     let target_owner = stamped.intent.target_owner;
@@ -78,7 +79,10 @@ pub fn apply_stamped_intent(
         return; // No valid border with target — intent is a no-op
     }
 
+    let exec_id = ((game.tick as u64) << 32) | (intent_index as u64);
+
     commands.spawn(AttackExecution {
+        id: exec_id,
         owner_id: player_id,
         target_owner,
         troops,

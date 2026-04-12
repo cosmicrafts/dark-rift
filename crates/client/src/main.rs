@@ -24,7 +24,7 @@ use std::net::SocketAddr;
 use dark_rift_shared::config;
 use dark_rift_shared::game::{GameState, GameEvent};
 use dark_rift_shared::player::Player;
-use dark_rift_shared::execution::{system_attack_execution, system_player_income};
+use dark_rift_shared::execution::{system_attack_execution, system_player_income, system_game_tick};
 use dark_rift_shared::intent::apply_stamped_intent;
 use dark_rift_shared::protocol::*;
 
@@ -44,6 +44,12 @@ struct HoveredTile(Option<(u32, u32)>);
 
 #[derive(Resource, Default)]
 struct GridEntities(HashMap<(u32, u32), Entity>);
+
+#[derive(Resource, Default)]
+struct PendingTicks(u32);
+
+#[derive(Resource, Default)]
+struct TurnQueue(std::collections::VecDeque<Turn>);
 
 // ─── Components ─────────────────────────────────────────────────────────────
 
@@ -72,6 +78,8 @@ fn main() {
         .init_resource::<MyPlayerId>()
         .init_resource::<HoveredTile>()
         .init_resource::<GridEntities>()
+        .init_resource::<PendingTicks>()
+        .init_resource::<TurnQueue>()
         .add_systems(Startup, setup)
         .add_systems(Update, (
             handle_server_start,
@@ -80,17 +88,41 @@ fn main() {
         .add_systems(Update, (
             hover_system,
             player_click,
-            handle_tile_change,
-            update_hud,
         ).run_if(game_is_ready))
         .add_systems(Update, (
+            pop_turn,
             system_player_income,
             system_attack_execution,
-        ).run_if(game_is_ready))
+            handle_tile_change,
+            update_hud,
+            system_game_tick,
+            decrement_pending,
+        ).chain().run_if(has_pending_ticks))
         .run();
 }
 
 fn game_is_ready(ready: Res<GameReady>) -> bool { ready.0 }
+
+fn has_pending_ticks(ready: Res<GameReady>, pending: Res<PendingTicks>) -> bool {
+    ready.0 && pending.0 > 0
+}
+
+fn pop_turn(
+    mut commands: Commands,
+    game_opt: Option<Res<GameState>>,
+    mut queue: ResMut<TurnQueue>,
+) {
+    let Some(game) = game_opt else { return };
+    if let Some(turn) = queue.0.pop_front() {
+        for (i, stamped) in turn.intents.iter().enumerate() {
+            apply_stamped_intent(&mut commands, &game, stamped, i as u32);
+        }
+    }
+}
+
+fn decrement_pending(mut pending: ResMut<PendingTicks>) {
+    pending.0 = pending.0.saturating_sub(1);
+}
 
 // ─── Startup ────────────────────────────────────────────────────────────────
 
@@ -147,13 +179,15 @@ fn setup(mut commands: Commands) {
 /// Receive ServerStartMessage → build GameState and spawn tile grid.
 /// Mirrors OpenFront's message.type === "start" handler in ClientGameRunner.
 fn handle_server_start(
-    mut commands:  Commands,
     mut receivers: Query<&mut MessageReceiver<ServerStartMessage>>,
     mut ready:     ResMut<GameReady>,
     mut my_id:     ResMut<MyPlayerId>,
     mut grid:      ResMut<GridEntities>,
     mut cam_q:     Query<&mut Transform, With<Camera2d>>,
     mut hud_q:     Query<&mut Text, With<HudText>>,
+    mut commands:  Commands,
+    mut queue:     ResMut<TurnQueue>,
+    mut pending:   ResMut<PendingTicks>,
 ) {
     for mut receiver in receivers.iter_mut() {
         for msg in receiver.receive() {
@@ -170,9 +204,8 @@ fn handle_server_start(
 
             // Replay missed turns (late-join) — identical behavior to OpenFront
             for turn in &msg.missed_turns {
-                for stamped in &turn.intents {
-                    apply_stamped_intent(&mut commands, &game, stamped);
-                }
+                queue.0.push_back(turn.clone());
+                pending.0 += 1;
             }
 
             // Center camera on map
@@ -214,19 +247,17 @@ fn handle_server_start(
 /// Mirrors OpenFront: message.type === "turn" → worker.sendTurn(turn)
 ///           → Executor.createExecs() per intent → AttackExecution.tick().
 fn handle_server_turns(
-    mut commands:  Commands,
     mut receivers: Query<&mut MessageReceiver<ServerTurnMessage>>,
-    game_opt:      Option<Res<GameState>>,
     ready:         Res<GameReady>,
+    mut queue:     ResMut<TurnQueue>,
+    mut pending:   ResMut<PendingTicks>,
 ) {
     if !ready.0 { return; }
-    let Some(game) = game_opt else { return };
 
     for mut receiver in receivers.iter_mut() {
         for msg in receiver.receive() {
-            for stamped in &msg.turn.intents {
-                apply_stamped_intent(&mut commands, &game, stamped);
-            }
+            queue.0.push_back(msg.turn);
+            pending.0 += 1;
         }
     }
 }
