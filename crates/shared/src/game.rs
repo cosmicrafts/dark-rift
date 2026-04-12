@@ -1,5 +1,7 @@
-use bevy::prelude::Resource;
+use bevy::prelude::{Event, Resource};
 use serde::{Deserialize, Serialize};
+
+// No more custom bevy event required
 use crate::config;
 use crate::map::GameMap;
 use crate::player::{Player, PlayerId};

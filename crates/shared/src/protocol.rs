@@ -18,8 +18,8 @@ pub struct PlayerJoinRequest {
 /// Sent by Client: Attempt to expand or attack a tile.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct PlayerActionMessage {
-    pub x: u32,
-    pub y: u32,
+    pub target_owner: Option<u16>, // None = TerraNullius (neutral), Some(id) = enemy player
+    pub troops: Option<f64>,       // None = use default logic
 }
 
 /// Sent by Server: The full authoritative state of the game (map, players).

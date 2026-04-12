@@ -3,23 +3,16 @@ use bevy::app::ScheduleRunnerPlugin;
 use lightyear::prelude::*;
 use lightyear::prelude::server::*;
 use lightyear::netcode::NetcodeServer;
-use lightyear::websocket::server::{WebSocketServerIo, ServerConfig as WebSocketConfig, Identity};use std::time::Duration;
+use lightyear::websocket::server::{WebSocketServerIo, ServerConfig as WebSocketConfig};
+use std::time::Duration;
 use std::net::{Ipv4Addr, SocketAddr};
 
 use dark_rift_shared::config;
 use dark_rift_shared::game::GameState;
 use dark_rift_shared::player::{Player, player_colors};
 use dark_rift_shared::protocol::*;
-
-// ─── ECS Components ─────────────────────────────────────────────────────────
-
-/// A task representing an active expansion flood from a player toward a target.
-#[derive(Component, Debug, Clone)]
-pub struct ExpansionExecution {
-    pub player_id: u16,
-    pub target_x: u32,
-    pub target_y: u32,
-}
+use dark_rift_shared::execution::{AttackExecution, PrioritizedTile, system_attack_execution, system_player_income};
+use dark_rift_shared::pseudo_random::PseudoRandom;
 
 // ─── Resources ──────────────────────────────────────────────────────────────
 
@@ -67,15 +60,15 @@ fn main() {
 
     app.add_systems(Startup, setup);
     
-    // Grouping correctly to respect Bevy tuple limits
     app.add_systems(Update, (
         handle_new_clients,
         handle_player_actions,
         game_tick,
     ));
+    // Shared executions run on the server to apply GameState changes deterministically
     app.add_systems(Update, (
-        system_player_execution,
-        system_process_expansions,
+        system_player_income,
+        system_attack_execution,
         broadcast_state,
     ));
 
@@ -91,9 +84,6 @@ fn setup(mut commands: Commands) {
 
     let server_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 5000);
 
-    // For local MVP testing where the client is Native on OS loopback, use `with_no_encryption()`.
-    // Once you compile the client to WASM and host on HTTPS, change this back to:
-    // .with_identity(Identity::self_signed(vec!["localhost"...]).unwrap())
     let ws_config = WebSocketConfig::builder()
         .with_bind_address(server_addr)
         .with_no_encryption();
@@ -110,8 +100,6 @@ fn setup(mut commands: Commands) {
 
 // ─── Systems ────────────────────────────────────────────────────────────────
 
-/// Detect new client connections. 
-/// Using `MessageSender` means we wait until Lightyear sets up the entity's send/recv channels!
 fn handle_new_clients(
     mut game: ResMut<GameState>,
     mut client_map: ResMut<ClientPlayerMap>,
@@ -122,7 +110,6 @@ fn handle_new_clients(
             continue; // Already registered
         }
 
-        // Register a new player
         let player_id = client_map.register(entity);
         let colors = player_colors();
         let color_idx = (player_id as usize - 1) % colors.len();
@@ -131,7 +118,6 @@ fn handle_new_clients(
 
         let player = Player::new_human(player_id, name.clone(), color);
 
-        // Find a good spawn location (away from other players)
         let (sx, sy) = find_spawn_location(&game, player_id);
 
         game.spawn_player(player, sx, sy);
@@ -139,13 +125,11 @@ fn handle_new_clients(
     }
 }
 
-/// Find a spawn location that's reasonably far from existing players.
 fn find_spawn_location(game: &GameState, _player_id: u16) -> (u32, u32) {
     let w = game.map.width;
     let h = game.map.height;
     let margin = config::SPAWN_RADIUS + 2;
 
-    // Predefined spawn positions distributed across the map
     let spawn_points = [
         (w / 4, h / 4),
         (3 * w / 4, h / 4),
@@ -157,7 +141,6 @@ fn find_spawn_location(game: &GameState, _player_id: u16) -> (u32, u32) {
         (3 * w / 4, h / 2),
     ];
 
-    // Find the first spawn point that doesn't overlap existing territory
     for &(sx, sy) in &spawn_points {
         let sx = sx.clamp(margin, w - margin);
         let sy = sy.clamp(margin, h - margin);
@@ -166,14 +149,13 @@ fn find_spawn_location(game: &GameState, _player_id: u16) -> (u32, u32) {
         }
     }
 
-    // Fallback: center
     (w / 2, h / 2)
 }
 
-/// Handle player click actions: queue expansion toward the target.
+/// Receive PlayerActionMessage and spawn AttackExecution logic queue (BFS).
 fn handle_player_actions(
     mut commands: Commands,
-    mut game: ResMut<GameState>,
+    game: Res<GameState>,
     client_map: Res<ClientPlayerMap>,
     mut receivers: Query<(&mut MessageReceiver<PlayerActionMessage>, Entity)>,
 ) {
@@ -184,21 +166,63 @@ fn handle_player_actions(
         };
 
         for msg in receiver.receive() {
-            if !game.map.is_valid_coord(msg.x as i32, msg.y as i32) {
-                continue;
+            let player = match game.player(player_id) {
+                Some(p) => p,
+                None => continue,
+            };
+
+            let target_owner = msg.target_owner.unwrap_or(0); // 0 = TerraNullius/neutral
+            
+            // By default use all available troops, or specified.
+            let troops = msg.troops.unwrap_or_else(|| player.troops);
+
+            let mut rng = PseudoRandom::new(game.seed + game.tick);
+            let mut to_conquer = std::collections::BinaryHeap::new();
+
+            // Seed the BFS with tiles corresponding to target frontiers
+            for (bx, by) in game.map.border_tiles_of(player_id) {
+                // Must border the target owner to begin expansion there
+                let mut valid_border = false;
+                for (nx, ny) in game.map.neighbors(bx, by) {
+                    if game.map.owner_id(nx, ny) == target_owner {
+                        valid_border = true;
+                        
+                        // Push neighbor into conquest queue matching AttackExecution logic
+                        let mut num_owned_by_me = 0;
+                        for (nnx, nny) in game.map.neighbors(nx, ny) {
+                            if game.map.owner_id(nnx, nny) == player_id {
+                                num_owned_by_me += 1;
+                            }
+                        }
+                        
+                        let terrain = game.map.terrain_type(nx, ny);
+                        let r = rng.next_int(0, 7) as f32;
+                        let mag = match terrain {
+                            dark_rift_shared::map::TerrainType::Plains => 1.0,
+                            dark_rift_shared::map::TerrainType::Highland => 1.5,
+                            dark_rift_shared::map::TerrainType::Mountain => 2.0,
+                            _ => 1.0,
+                        };
+                        let prio = (r + 10.0) * (1.0 - (num_owned_by_me as f32) * 0.5 + mag / 2.0) + (game.tick as f32);
+
+                        to_conquer.push(PrioritizedTile { priority: prio, x: nx, y: ny });
+                    }
+                }
             }
 
-            // Queue the expansion by spawning an Execution Entity
-            commands.spawn(ExpansionExecution {
-                player_id,
-                target_x: msg.x,
-                target_y: msg.y,
-            });
+            if !to_conquer.is_empty() {
+                commands.spawn(AttackExecution {
+                    owner_id: player_id,
+                    target_owner,
+                    troops,
+                    to_conquer,
+                    rng,
+                });
+            }
         }
     }
 }
 
-/// Run the authoritative game tick at TICK_RATE.
 fn game_tick(
     mut game: ResMut<GameState>,
     mut timer: ResMut<GameTickTimer>,
@@ -206,124 +230,10 @@ fn game_tick(
 ) {
     timer.0.tick(time.delta());
     if timer.0.just_finished() {
-        game.tick();
+        game.tick(); // Increment tick counter
     }
 }
 
-/// Passive troop generation system (replaces TypeScript PlayerExecution).
-/// Runs exactly in sync with the game tick clock.
-fn system_player_execution(
-    mut game: ResMut<GameState>,
-    timer: Res<GameTickTimer>,
-) {
-    if !timer.0.just_finished() || game.phase != dark_rift_shared::game::GamePhase::Playing {
-        return;
-    }
-
-    // Destructure to appease the borrow checker
-    let GameState { map, players, .. } = &mut *game;
-
-    for player in players.iter_mut() {
-        if !player.alive {
-            continue;
-        }
-
-        let tiles_owned = map.tiles_owned_by(player.id);
-        if tiles_owned == 0 {
-            player.alive = false;
-            continue;
-        }
-
-        // Update max troops based on territory size
-        player.max_troops = config::MAX_TROOPS_BASE
-            + (tiles_owned as f64).powf(0.6) * config::MAX_TROOPS_SCALE;
-
-        // Generate income: base + territory bonus, scaled by how full we are
-        let raw_income = config::TROOP_BASE_INCOME
-            + (player.troops.powf(0.73) / 4.0);
-        let ratio = 1.0 - (player.troops / player.max_troops).min(1.0);
-        let income = raw_income * ratio;
-
-        player.troops = (player.troops + income).min(player.max_troops);
-    }
-}
-
-/// System for processing all active ExpansionExecution tasks on the server map.
-/// Replaces Openfront's AttackExecution looping logic.
-fn system_process_expansions(
-    mut commands: Commands,
-    mut game: ResMut<GameState>,
-    timer: Res<GameTickTimer>,
-    query: Query<(Entity, &ExpansionExecution)>,
-) {
-    if !timer.0.just_finished() || game.phase != dark_rift_shared::game::GamePhase::Playing {
-        return;
-    }
-
-    let GameState { map, players, .. } = &mut *game;
-
-    for (entity, execution) in query.iter() {
-        let pid = execution.player_id;
-        
-        // Use an inner block to drop the mutable borrow if we despawn
-        let player = match players.iter_mut().find(|p| p.id == pid) {
-            Some(p) if p.alive => p,
-            _ => {
-                commands.entity(entity).despawn();
-                continue;
-            }
-        };
-
-        // Already reached the target?
-        if map.owner_id(execution.target_x, execution.target_y) == pid {
-            commands.entity(entity).despawn();
-            continue;
-        }
-
-        // Not enough troops to keep expanding? Let it pause until troops rebuild.
-        if player.troops < config::EXPAND_COST {
-            continue;
-        }
-
-        // Find border tiles nearest to the target and expand from them
-        let mut candidates: Vec<(u32, u32, f64)> = Vec::new();
-        for y in 0..map.height {
-            for x in 0..map.width {
-                let owner = map.owner_id(x, y);
-                if owner != 0 {
-                    continue; // Not neutral
-                }
-                if !map.is_adjacent_to_player(x, y, pid) {
-                    continue; // Not adjacent to our territory
-                }
-                let dx = x as f64 - execution.target_x as f64;
-                let dy = y as f64 - execution.target_y as f64;
-                let dist = (dx * dx + dy * dy).sqrt();
-                candidates.push((x, y, dist));
-            }
-        }
-
-        // Sort by distance to target (closest first)
-        candidates.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
-
-        // Expand up to N tiles this tick
-        let mut expanded_this_tick = 0u32;
-        for (cx, cy, _dist) in &candidates {
-            if expanded_this_tick >= config::EXPAND_TILES_PER_TICK {
-                break;
-            }
-            if player.troops < config::EXPAND_COST {
-                break;
-            }
-
-            map.set_owner_id(*cx, *cy, pid);
-            player.troops -= config::EXPAND_COST;
-            expanded_this_tick += 1;
-        }
-    }
-}
-
-/// Broadcast the full game state to all clients whenever it changes.
 fn broadcast_state(
     game: Res<GameState>,
     mut clients: Query<&mut MessageSender<SyncMapState>>,

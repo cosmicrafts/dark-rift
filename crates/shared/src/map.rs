@@ -1,6 +1,15 @@
 use bevy::prelude::Resource;
 use serde::{Deserialize, Serialize};
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerrainType {
+    Plains,
+    Highland,
+    Mountain,
+    Lake,
+    Ocean,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Resource)]
 pub struct GameMap {
     pub width: u32,
@@ -24,6 +33,17 @@ impl GameMap {
 
     pub fn ref_id(&self, x: u32, y: u32) -> usize {
         (y * self.width + x) as usize
+    }
+
+    pub fn terrain_type(&self, x: u32, y: u32) -> TerrainType {
+        let r = self.ref_id(x, y);
+        match self.terrain[r] {
+            1 => TerrainType::Highland,
+            2 => TerrainType::Mountain,
+            3 => TerrainType::Lake,
+            4 => TerrainType::Ocean,
+            _ => TerrainType::Plains,
+        }
     }
 
     pub fn is_valid_coord(&self, x: i32, y: i32) -> bool {
@@ -62,6 +82,19 @@ impl GameMap {
             }
         }
         false
+    }
+
+    /// Get all border tiles of a specific player.
+    pub fn border_tiles_of(&self, player_id: u16) -> Vec<(u32, u32)> {
+        let mut border = Vec::new();
+        for y in 0..self.height {
+            for x in 0..self.width {
+                if self.is_border_tile(x, y, player_id) {
+                    border.push((x, y));
+                }
+            }
+        }
+        border
     }
 
     /// Count tiles owned by a specific player.
