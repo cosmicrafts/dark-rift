@@ -6,8 +6,6 @@ use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::game::{GameEvent, GameState};
-use crate::map::SystemId;
-use crate::player::PlayerId;
 
 // ─── Messages ───────────────────────────────────────────────────────────────
 
@@ -17,10 +15,11 @@ pub struct PlayerJoinRequest {
     pub name: String,
 }
 
-/// Sent by Client: Attempt to expand or attack a system.
+/// Sent by Client: Attempt to expand or attack a tile.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct PlayerActionMessage {
-    pub target_system_id: SystemId,
+    pub x: u32,
+    pub y: u32,
 }
 
 /// Sent by Server: The full authoritative state of the game (map, players).
@@ -31,10 +30,15 @@ pub struct SyncMapState {
 }
 
 /// Sent by Server: Important events that happened (e.g. system captured).
+/// Sent by Server: Important events that happened (e.g. system captured).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct GameEventBroadcast {
     pub event: GameEvent,
 }
+
+// ─── Channels ───────────────────────────────────────────────────────────────
+
+pub struct ReliableChannel;
 
 // ─── Protocol Plugin ────────────────────────────────────────────────────────
 
@@ -42,6 +46,12 @@ pub struct SharedProtocolPlugin;
 
 impl Plugin for SharedProtocolPlugin {
     fn build(&self, app: &mut App) {
+        // Register channels
+        app.add_channel::<ReliableChannel>(ChannelSettings {
+            mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
+            ..default()
+        });
+        
         // Register messages that are sent over the network
         app.register_message::<PlayerJoinRequest>();
         app.register_message::<PlayerActionMessage>();

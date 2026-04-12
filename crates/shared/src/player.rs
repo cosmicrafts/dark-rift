@@ -3,33 +3,35 @@
 use serde::{Deserialize, Serialize};
 
 /// Unique player identifier.
-pub type PlayerId = u32;
+pub type PlayerId = u16;
 
 /// Types of players in the game.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlayerType {
     /// A human player connected via the network.
     Human,
-    /// An AI faction that holds territory.
-    Faction,
+    /// An AI bot.
+    Bot,
 }
 
-/// Represents a player (human or AI faction) in the game.
+/// Represents a player (human or AI) in the game.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Player {
-    /// Unique player ID. For factions, this matches the Faction::id.
+    /// Unique player ID.
     pub id: PlayerId,
     /// Display name.
     pub name: String,
     /// Player type.
     pub player_type: PlayerType,
-    /// Total ships available (not garrisoned in systems).
-    pub reserve_ships: f32,
+    /// Current troop count (the single resource). Used to expand/attack.
+    pub troops: f64,
+    /// Maximum troops this player can hold (grows with territory).
+    pub max_troops: f64,
     /// RGB color for this player's territory.
     pub color: [f32; 3],
     /// Whether the player is still in the game.
     pub alive: bool,
-    /// Whether the player has completed spawn selection.
+    /// Whether the player has completed initial spawn.
     pub has_spawned: bool,
 }
 
@@ -40,23 +42,25 @@ impl Player {
             id,
             name,
             player_type: PlayerType::Human,
-            reserve_ships: 0.0,
+            troops: 100.0,
+            max_troops: 500.0,
             color,
             alive: true,
             has_spawned: false,
         }
     }
 
-    /// Create a new AI faction player.
-    pub fn new_faction(id: PlayerId, name: String, color: [f32; 3]) -> Self {
+    /// Create a new bot player.
+    pub fn new_bot(id: PlayerId, name: String, color: [f32; 3]) -> Self {
         Self {
             id,
             name,
-            player_type: PlayerType::Faction,
-            reserve_ships: 0.0,
+            player_type: PlayerType::Bot,
+            troops: 100.0,
+            max_troops: 500.0,
             color,
             alive: true,
-            has_spawned: true, // Factions spawn automatically.
+            has_spawned: false,
         }
     }
 
@@ -66,16 +70,16 @@ impl Player {
     }
 }
 
-/// Color palette for human players.
-pub fn human_player_colors() -> Vec<[f32; 3]> {
+/// Color palette for players.
+pub fn player_colors() -> Vec<[f32; 3]> {
     vec![
-        [0.0, 0.8, 1.0],   // Cyan
-        [1.0, 0.3, 0.3],   // Red
-        [0.3, 1.0, 0.3],   // Green
-        [1.0, 0.8, 0.0],   // Yellow
-        [1.0, 0.4, 0.8],   // Pink
-        [0.6, 0.4, 1.0],   // Purple
-        [1.0, 0.6, 0.2],   // Orange
-        [0.4, 0.9, 0.8],   // Mint
+        [0.0, 0.75, 1.0],   // Cyan
+        [1.0, 0.25, 0.25],  // Red
+        [0.2, 0.9, 0.3],    // Green
+        [1.0, 0.85, 0.0],   // Gold
+        [1.0, 0.35, 0.75],  // Pink
+        [0.55, 0.35, 1.0],  // Violet
+        [1.0, 0.55, 0.15],  // Orange
+        [0.35, 0.9, 0.8],   // Teal
     ]
 }

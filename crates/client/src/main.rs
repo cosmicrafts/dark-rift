@@ -1,66 +1,43 @@
-//! Dark Rift — Game Client (Bevy 0.18).
-//!
-//! Renders the star map, handles camera controls, and processes player input.
-//! Single-player local mode for Phase 1–2. Networking (Lightyear) in Phase 3.
-
 use bevy::prelude::*;
-use bevy::input::mouse::{MouseScrollUnit, AccumulatedMouseScroll};
+use bevy::sprite::Sprite;
+
 use dark_rift_shared::config;
-use dark_rift_shared::game::{GamePhase, GameState};
-use dark_rift_shared::map::SystemId;
-use dark_rift_shared::attack::ActionResult;
-use lightyear::prelude::*;
-use lightyear::prelude::client::*;
-use lightyear::netcode::NetcodeClient;
-use lightyear::websocket::client::{WebSocketClientIo, WebSocketTarget};
-use lightyear::prelude::client::NetcodeConfig;
-use dark_rift_shared::protocol::{SharedProtocolPlugin, SyncMapState};
-use std::net::{Ipv4Addr, SocketAddr};
+use dark_rift_shared::game::GameState;
+use dark_rift_shared::player::Player;
 
-// ─── App States ─────────────────────────────────────────────────────────────
-
-#[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default)]
-enum AppState {
-    #[default]
-    MainMenu,
-    SpawnSelect,
-    Playing,
-    GameOver,
-}
+const TILE_SIZE: f32 = 8.0;
 
 // ─── Resources ──────────────────────────────────────────────────────────────
 
+/// Local copy of the game state for our sandbox.
 #[derive(Resource)]
 struct DarkRiftGame {
     state: GameState,
-    local_player_id: Option<u32>,
 }
 
 #[derive(Resource, Default)]
-struct HoveredSystem(Option<SystemId>);
+struct HoveredTile(Option<(u32, u32)>);
 
 #[derive(Resource)]
 struct GameTickTimer(Timer);
 
-/// Camera drag state for panning (right-click drag).
-#[derive(Resource, Default)]
-struct CameraDrag {
-    active: bool,
-    last_pos: Vec2,
-}
-
 // ─── Components ─────────────────────────────────────────────────────────────
 
 #[derive(Component)]
-struct StarSystemNode { system_id: SystemId }
+struct TileNode {
+    x: u32,
+    y: u32,
+}
 
-#[derive(Component)] struct ConnectionLine;
-#[derive(Component)] struct TooltipText;
-#[derive(Component)] struct ShipCounterText;
-#[derive(Component)] struct LeaderboardText;
-#[derive(Component)] struct MessageText;
-#[derive(Component)] struct MainMenuUI;
-#[derive(Component)] struct GameOverOverlay;
+#[derive(Component)]
+struct HudText;
+
+#[derive(Component, Debug, Clone)]
+pub struct ExpansionExecution {
+    pub player_id: u16,
+    pub target_x: u32,
+    pub target_y: u32,
+}
 
 // ─── Main ───────────────────────────────────────────────────────────────────
 
@@ -68,311 +45,135 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Dark Rift — Galactic Conquest".to_string(),
+                title: "Dark Rift — Local Mechanics Sandbox".to_string(),
                 resolution: (1280u32, 720u32).into(),
-                canvas: Some("#bevy-canvas".to_string()),
                 ..default()
             }),
             ..default()
         }).disable::<bevy::audio::AudioPlugin>())
-        .init_state::<AppState>()
-        .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.06)))
-        .init_resource::<HoveredSystem>()
-        .init_resource::<CameraDrag>()
+        .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.04)))
+        .init_resource::<HoveredTile>()
+        .insert_resource(DarkRiftGame { state: GameState::new(42) })
         .insert_resource(GameTickTimer(Timer::from_seconds(
             1.0 / config::TICK_RATE as f32,
             TimerMode::Repeating,
         )))
-        .add_plugins(SharedProtocolPlugin)
-        .add_plugins(ClientPlugins::default())
-        // Startup
         .add_systems(Startup, setup)
-        // Main Menu
-        .add_systems(OnEnter(AppState::MainMenu), setup_main_menu)
-        .add_systems(Update, main_menu_input.run_if(in_state(AppState::MainMenu)))
-        .add_systems(OnExit(AppState::MainMenu), cleanup_main_menu)
-        // Spawn Select
-        .add_systems(OnEnter(AppState::SpawnSelect), setup_spawn_select)
-        .add_systems(
-            Update,
-            (hover_system, spawn_select_click, update_system_visuals, update_tooltip)
-                .chain()
-                .run_if(in_state(AppState::SpawnSelect)),
-        )
-        // Playing
-        .add_systems(OnEnter(AppState::Playing), setup_playing_hud)
-        .add_systems(
-            Update,
-            (game_tick, hover_system, player_click, camera_controls, handle_network_sync)
-                .run_if(in_state(AppState::Playing)),
-        )
-        .add_systems(
-            Update,
-            (update_system_visuals, update_tooltip, update_hud, check_game_over)
-                .run_if(in_state(AppState::Playing)),
-        )
-        // Game Over
-        .add_systems(OnEnter(AppState::GameOver), setup_game_over)
-        .add_systems(Update, game_over_input.run_if(in_state(AppState::GameOver)))
+        .add_systems(Update, (
+            hover_system,
+            player_click,
+            update_tile_visuals,
+            update_hud,
+        ))
+        // Server mechanics executed locally:
+        .add_systems(Update, (
+            game_tick,
+            system_player_execution,
+            system_process_expansions,
+        ))
         .run();
 }
 
 // ─── Startup ────────────────────────────────────────────────────────────────
 
-fn setup(mut commands: Commands) {
-    // 2D camera centered on the map.
+fn setup(mut commands: Commands, mut game: ResMut<DarkRiftGame>) {
+    // 2D camera centered on the grid
     commands.spawn((
         Camera2d,
         Transform::from_translation(Vec3::new(
-            config::MAP_WIDTH / 2.0,
-            config::MAP_HEIGHT / 2.0,
+            (game.state.map.width as f32 * TILE_SIZE) / 2.0,
+            (game.state.map.height as f32 * TILE_SIZE) / 2.0,
             999.0,
         )),
     ));
 
-    let game = GameState::new(42);
-    commands.insert_resource(DarkRiftGame {
-        state: game,
-        local_player_id: None,
-    });
-    
-    // Lightyear Client Networking Setup
-    let server_addr = SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 5000);
-    // Bind the client to an ephemeral local port
-    let client_addr = SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
-    
-    let client_id = rand::random::<u64>();
-    let auth = Authentication::Manual {
-        server_addr,
-        client_id,
-        private_key: [0; 32],
-        protocol_id: 0,
-    };
-    
-    let client_entity = commands.spawn((
-        Name::from("ClientConnection"),
-        Client::default(),
-        PeerAddr(server_addr),
-        LocalAddr(client_addr),
-        NetcodeClient::new(auth, NetcodeConfig::default()).unwrap(),
-        WebSocketClientIo {
-            config: Default::default(), // Removed With_no_cert_validation to use aeronet's default
-            target: WebSocketTarget::Addr(Default::default()),
-        },
-    )).id();
-    
-    commands.trigger(Connect { entity: client_entity });
-}
-
-// ─── Shared: hover detection ─────────────────────────────────────────────────
-
-/// Runs every frame to update which system the cursor is over.
-fn hover_system(
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    camera_q: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    game: Res<DarkRiftGame>,
-    mut hovered: ResMut<HoveredSystem>,
-) {
-    let Ok(window) = windows.single() else { return };
-    let Ok((camera, cam_transform)) = camera_q.single() else { return };
-
-    hovered.0 = None;
-
-    let Some(cursor_pos) = window.cursor_position() else { return };
-    let Ok(world_pos) = camera.viewport_to_world_2d(cam_transform, cursor_pos) else { return };
-
-    let mut closest: Option<(SystemId, f32)> = None;
-    for sys in &game.state.map.systems {
-        let dist = sys.position.distance(world_pos);
-        if dist < 15.0 {
-            if closest.map_or(true, |(_, d)| dist < d) {
-                closest = Some((sys.id, dist));
-            }
-        }
-    }
-    hovered.0 = closest.map(|(id, _)| id);
-}
-
-// ─── Main Menu ──────────────────────────────────────────────────────────────
-
-fn setup_main_menu(mut commands: Commands) {
-    commands
-        .spawn((
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(20.0),
-                ..default()
-            },
-            MainMenuUI,
-        ))
-        .with_children(|p| {
-            p.spawn((
-                Text::new("DARK RIFT"),
-                TextFont { font_size: 80.0, ..default() },
-                TextColor(Color::srgb(0.0, 0.8, 1.0)),
-            ));
-            p.spawn((
-                Text::new("Galactic Conquest"),
-                TextFont { font_size: 28.0, ..default() },
-                TextColor(Color::srgb(0.5, 0.5, 0.7)),
-            ));
-            p.spawn(Node { height: Val::Px(40.0), ..default() });
-            p.spawn((
-                Node {
-                    padding: UiRect::axes(Val::Px(40.0), Val::Px(15.0)),
-                    border: UiRect::all(Val::Px(2.0)),
+    // Spawn tile sprites for the grid
+    for y in 0..game.state.map.height {
+        for x in 0..game.state.map.width {
+            commands.spawn((
+                Sprite {
+                    color: Color::srgb(0.08, 0.08, 0.12),
+                    custom_size: Some(Vec2::new(TILE_SIZE - 0.5, TILE_SIZE - 0.5)),
                     ..default()
                 },
-                BorderColor::all(Color::srgb(0.0, 0.8, 1.0)),
-                BackgroundColor(Color::srgba(0.0, 0.2, 0.4, 0.8)),
-            ))
-            .with_children(|btn| {
-                btn.spawn((
-                    Text::new("[ ENTER THE RIFT ]"),
-                    TextFont { font_size: 24.0, ..default() },
-                    TextColor(Color::srgb(0.0, 0.9, 1.0)),
-                ));
-            });
-            p.spawn((
-                Text::new("Press SPACE or click to begin"),
-                TextFont { font_size: 16.0, ..default() },
-                TextColor(Color::srgb(0.3, 0.3, 0.5)),
+                Transform::from_xyz(
+                    x as f32 * TILE_SIZE,
+                    y as f32 * TILE_SIZE,
+                    0.0,
+                ),
+                TileNode { x, y },
             ));
-        });
-}
-
-fn main_menu_input(
-    keys: Res<ButtonInput<KeyCode>>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    mut next_state: ResMut<NextState<AppState>>,
-    mut game: ResMut<DarkRiftGame>,
-) {
-    if keys.just_pressed(KeyCode::Space) || mouse.just_pressed(MouseButton::Left) {
-        let player_id = game.state.add_human_player("Commander".to_string());
-        game.local_player_id = Some(player_id);
-        game.state.start_spawn_phase();
-        next_state.set(AppState::SpawnSelect);
+        }
     }
-}
 
-fn cleanup_main_menu(mut commands: Commands, q: Query<Entity, With<MainMenuUI>>) {
-    for e in q.iter() {
-        commands.entity(e).try_despawn();
-    }
-}
-
-// ─── Spawn Select ────────────────────────────────────────────────────────────
-
-fn setup_spawn_select(mut commands: Commands, game: Res<DarkRiftGame>) {
-    spawn_star_map(&mut commands, &game.state);
-
+    // HUD text
     commands.spawn((
-        Text::new("Click an unclaimed star system to spawn. Choose wisely."),
+        Text::new("Loading..."),
         TextFont { font_size: 20.0, ..default() },
         TextColor(Color::srgb(0.7, 0.7, 0.9)),
         Node {
             position_type: PositionType::Absolute,
-            top: Val::Px(20.0),
-            left: Val::Px(20.0),
+            left: Val::Px(10.0),
+            top: Val::Px(10.0),
             ..default()
         },
-        MessageText,
+        HudText,
     ));
 
-    commands.spawn((
-        Text::new(""),
-        TextFont { font_size: 14.0, ..default() },
-        TextColor(Color::srgb(0.8, 0.8, 0.8)),
-        Node {
-            position_type: PositionType::Absolute,
-            bottom: Val::Px(20.0),
-            left: Val::Px(20.0),
-            ..default()
-        },
-        TooltipText,
-    ));
+    // Instantly spawn Player 1 for local testing
+    let pid = 1;
+    let player = Player::new_human(pid, "Local Player".to_string(), [0.0, 0.8, 0.8]);
+    let (sx, sy) = (game.state.map.width / 2, game.state.map.height / 2); // Start at center
+    game.state.spawn_player(player, sx, sy);
+    game.state.phase = dark_rift_shared::game::GamePhase::Playing;
 }
 
-fn spawn_select_click(
+// ─── UI & Input Systems ─────────────────────────────────────────────────────
+
+fn hover_system(
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+    mut hovered: ResMut<HoveredTile>,
+    game: Res<DarkRiftGame>,
+) {
+    hovered.0 = None;
+    let Ok(window) = windows.single() else { return };
+    let Ok((camera, cam_transform)) = camera_q.single() else { return };
+    let Some(cursor_pos) = window.cursor_position() else { return };
+    let Ok(world_pos) = camera.viewport_to_world_2d(cam_transform, cursor_pos) else { return };
+
+    let grid_x = (world_pos.x / TILE_SIZE).round() as i32;
+    let grid_y = (world_pos.y / TILE_SIZE).round() as i32;
+
+    if game.state.map.is_valid_coord(grid_x, grid_y) {
+        hovered.0 = Some((grid_x as u32, grid_y as u32));
+    }
+}
+
+/// Send clicks directly into Bevy Local ECS queue for mechanics testing!
+fn player_click(
     mouse: Res<ButtonInput<MouseButton>>,
-    hovered: Res<HoveredSystem>,
-    mut game: ResMut<DarkRiftGame>,
-    mut next_state: ResMut<NextState<AppState>>,
+    hovered: Res<HoveredTile>,
+    mut commands: Commands,
 ) {
     if mouse.just_pressed(MouseButton::Left) {
-        if let (Some(system_id), Some(player_id)) = (hovered.0, game.local_player_id) {
-            if game.state.player_spawn(player_id, system_id) {
-                game.state.start_playing();
-                next_state.set(AppState::Playing);
-            }
+        if let Some((x, y)) = hovered.0 {
+            // Hardcode our Local Player ID (1)
+            commands.spawn(ExpansionExecution {
+                player_id: 1,
+                target_x: x,
+                target_y: y,
+            });
         }
     }
 }
 
-// ─── Playing ─────────────────────────────────────────────────────────────────
-
-fn setup_playing_hud(mut commands: Commands) {
-    commands.spawn((
-        Text::new("Ships: 0"),
-        TextFont { font_size: 22.0, ..default() },
-        TextColor(Color::srgb(0.0, 0.9, 1.0)),
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(15.0),
-            left: Val::Px(15.0),
-            ..default()
-        },
-        ShipCounterText,
-    ));
-
-    commands.spawn((
-        Text::new("Leaderboard"),
-        TextFont { font_size: 16.0, ..default() },
-        TextColor(Color::srgb(0.7, 0.7, 0.9)),
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(15.0),
-            right: Val::Px(15.0),
-            ..default()
-        },
-        LeaderboardText,
-    ));
-
-    commands.spawn((
-        Text::new("Click to expand (unclaimed) or attack (enemy)"),
-        TextFont { font_size: 16.0, ..default() },
-        TextColor(Color::srgb(0.5, 0.5, 0.7)),
-        Node {
-            position_type: PositionType::Absolute,
-            bottom: Val::Px(15.0),
-            left: Val::Px(15.0),
-            ..default()
-        },
-        MessageText,
-    ));
-
-    commands.spawn((
-        Text::new(""),
-        TextFont { font_size: 14.0, ..default() },
-        TextColor(Color::srgb(0.7, 0.7, 0.7)),
-        Node {
-            position_type: PositionType::Absolute,
-            bottom: Val::Px(40.0),
-            left: Val::Px(15.0),
-            ..default()
-        },
-        TooltipText,
-    ));
-}
+// ─── Server Mechanics Systems (Running Locally) ─────────────────────────────
 
 fn game_tick(
-    time: Res<Time>,
-    mut timer: ResMut<GameTickTimer>,
     mut game: ResMut<DarkRiftGame>,
+    mut timer: ResMut<GameTickTimer>,
+    time: Res<Time>,
 ) {
     timer.0.tick(time.delta());
     if timer.0.just_finished() {
@@ -380,305 +181,161 @@ fn game_tick(
     }
 }
 
-fn player_click(
-    mouse: Res<ButtonInput<MouseButton>>,
-    hovered: Res<HoveredSystem>,
+fn system_player_execution(
     mut game: ResMut<DarkRiftGame>,
-    mut msg_q: Query<&mut Text, With<MessageText>>,
+    timer: Res<GameTickTimer>,
 ) {
-    if !mouse.just_pressed(MouseButton::Left) { return; }
+    if !timer.0.just_finished() || game.state.phase != dark_rift_shared::game::GamePhase::Playing {
+        return;
+    }
 
-    let (Some(system_id), Some(player_id)) = (hovered.0, game.local_player_id) else { return };
+    let GameState { map, players, .. } = &mut game.state;
 
-    let result = game.state.player_action(player_id, system_id);
-
-    let msg = match &result {
-        ActionResult::Expanded { system_id } => {
-            let name = game.state.map.system(*system_id).name.clone();
-            format!("✦ Expanded into {name}")
+    for player in players.iter_mut() {
+        if !player.alive {
+            continue;
         }
-        ActionResult::Conquered { system_id, .. } => {
-            let name = game.state.map.system(*system_id).name.clone();
-            format!("⚔ Conquered {name}!")
-        }
-        ActionResult::AttackFailed { system_id, .. } => {
-            let name = game.state.map.system(*system_id).name.clone();
-            format!("✗ Attack on {name} failed — defenders held!")
-        }
-        ActionResult::Invalid { reason } => format!("⚠ {reason}"),
-    };
 
-    for mut text in msg_q.iter_mut() {
-        **text = msg.clone();
+        let tiles_owned = map.tiles_owned_by(player.id);
+        if tiles_owned == 0 {
+            player.alive = false;
+            continue;
+        }
+
+        player.max_troops = config::MAX_TROOPS_BASE
+            + (tiles_owned as f64).powf(0.6) * config::MAX_TROOPS_SCALE;
+
+        let raw_income = config::TROOP_BASE_INCOME
+            + (player.troops.powf(0.73) / 4.0);
+        let ratio = 1.0 - (player.troops / player.max_troops).min(1.0);
+        let income = raw_income * ratio;
+
+        player.troops = (player.troops + income).min(player.max_troops);
     }
 }
 
-fn camera_controls(
-    mut camera_q: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
-    scroll: Res<AccumulatedMouseScroll>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    mut drag: ResMut<CameraDrag>,
-) {
-    let Ok(window) = windows.single() else { return };
-
-    // Zoom: accumulated scroll this frame adjusts the orthographic scale.
-    if scroll.delta.y != 0.0 {
-        let Ok((_, mut projection)) = camera_q.single_mut() else { return };
-        if let Projection::Orthographic(ref mut ortho) = *projection {
-            let zoom_speed = match scroll.unit {
-                MouseScrollUnit::Line  => 0.1,
-                MouseScrollUnit::Pixel => 0.001,
-            };
-            ortho.scale = (ortho.scale - scroll.delta.y * zoom_speed).clamp(0.2, 4.0);
-        }
-    }
-
-    // Pan: right-click drag.
-    if mouse.just_pressed(MouseButton::Right) {
-        if let Some(pos) = window.cursor_position() {
-            drag.active = true;
-            drag.last_pos = pos;
-        }
-    }
-    if mouse.just_released(MouseButton::Right) {
-        drag.active = false;
-    }
-    if drag.active {
-        if let Some(pos) = window.cursor_position() {
-            let delta = pos - drag.last_pos;
-            if let Ok((mut transform, projection)) = camera_q.single_mut() {
-                let scale = if let Projection::Orthographic(ref o) = *projection {
-                    o.scale
-                } else {
-                    1.0
-                };
-                transform.translation.x -= delta.x * scale;
-                transform.translation.y += delta.y * scale;
-            }
-            drag.last_pos = pos;
-        }
-    }
-}
-
-fn check_game_over(game: Res<DarkRiftGame>, mut next_state: ResMut<NextState<AppState>>) {
-    if game.state.phase == GamePhase::GameOver {
-        next_state.set(AppState::GameOver);
-    }
-}
-
-// ─── Game Over ───────────────────────────────────────────────────────────────
-
-fn setup_game_over(mut commands: Commands, game: Res<DarkRiftGame>) {
-    let winner_name = game
-        .state
-        .winner
-        .and_then(|id| game.state.player(id))
-        .map(|p| p.name.clone())
-        .unwrap_or_else(|| "Unknown".to_string());
-
-    let is_local_win = game.state.winner == game.local_player_id;
-
-    commands
-        .spawn((
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(20.0),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.75)),
-            GameOverOverlay,
-        ))
-        .with_children(|p| {
-            p.spawn((
-                Text::new(if is_local_win { "VICTORY" } else { "DEFEATED" }),
-                TextFont { font_size: 72.0, ..default() },
-                TextColor(if is_local_win {
-                    Color::srgb(0.0, 1.0, 0.5)
-                } else {
-                    Color::srgb(1.0, 0.2, 0.2)
-                }),
-            ));
-            p.spawn((
-                Text::new(format!("{winner_name} dominates the galaxy!")),
-                TextFont { font_size: 24.0, ..default() },
-                TextColor(Color::srgb(0.7, 0.7, 0.9)),
-            ));
-            p.spawn((
-                Text::new("Press SPACE to return to menu"),
-                TextFont { font_size: 18.0, ..default() },
-                TextColor(Color::srgb(0.4, 0.4, 0.6)),
-            ));
-        });
-}
-
-fn game_over_input(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut next_state: ResMut<NextState<AppState>>,
+fn system_process_expansions(
     mut commands: Commands,
-    overlay_q: Query<Entity, With<GameOverOverlay>>,
-    map_q: Query<Entity, Or<(With<StarSystemNode>, With<ConnectionLine>)>>,
-    hud_q: Query<Entity, Or<(
-        With<ShipCounterText>,
-        With<LeaderboardText>,
-        With<MessageText>,
-        With<TooltipText>,
-    )>>,
+    mut game: ResMut<DarkRiftGame>,
+    timer: Res<GameTickTimer>,
+    query: Query<(Entity, &ExpansionExecution)>,
 ) {
-    if !keys.just_pressed(KeyCode::Space) { return; }
-
-    for e in overlay_q.iter() { commands.entity(e).try_despawn(); }
-    for e in map_q.iter()     { commands.entity(e).try_despawn(); }
-    for e in hud_q.iter()     { commands.entity(e).try_despawn(); }
-
-    // Fresh game with a random seed.
-    commands.insert_resource(DarkRiftGame {
-        state: GameState::new(rand::random()),
-        local_player_id: None,
-    });
-
-    next_state.set(AppState::MainMenu);
-}
-
-// ─── Shared rendering ────────────────────────────────────────────────────────
-
-fn spawn_star_map(commands: &mut Commands, game_state: &GameState) {
-    let map = &game_state.map;
-
-    // Connection lines (draw behind nodes).
-    for sys in &map.systems {
-        for &conn in &sys.connections {
-            if conn <= sys.id { continue; }
-            let a = sys.position;
-            let b = map.system(conn).position;
-            let mid = (a + b) / 2.0;
-            let diff = b - a;
-            let angle = diff.y.atan2(diff.x);
-
-            commands.spawn((
-                Sprite {
-                    color: Color::srgba(0.15, 0.15, 0.3, 0.4),
-                    custom_size: Some(Vec2::new(diff.length(), 1.5)),
-                    ..default()
-                },
-                Transform::from_translation(mid.extend(0.1))
-                    .with_rotation(Quat::from_rotation_z(angle)),
-                ConnectionLine,
-            ));
-        }
+    if !timer.0.just_finished() || game.state.phase != dark_rift_shared::game::GamePhase::Playing {
+        return;
     }
 
-    // Star system nodes.
-    for sys in &map.systems {
-        let color = owner_color(game_state, sys.owner);
-        commands.spawn((
-            Sprite {
-                color,
-                custom_size: Some(Vec2::splat(if sys.owner.is_some() { 12.0 } else { 8.0 })),
-                ..default()
-            },
-            Transform::from_translation(sys.position.extend(1.0)),
-            StarSystemNode { system_id: sys.id },
-        ));
-    }
-}
+    let GameState { map, players, .. } = &mut game.state;
 
-fn update_system_visuals(
-    game: Res<DarkRiftGame>,
-    hovered: Res<HoveredSystem>,
-    mut q: Query<(&StarSystemNode, &mut Sprite)>,
-) {
-    for (node, mut sprite) in q.iter_mut() {
-        let sys = game.state.map.system(node.system_id);
-        let is_hovered = hovered.0 == Some(node.system_id);
-
-        sprite.color = if is_hovered {
-            Color::WHITE
-        } else {
-            owner_color(&game.state, sys.owner)
+    for (entity, execution) in query.iter() {
+        let pid = execution.player_id;
+        
+        // Fast exit drop to bypass borrow issues
+        let player = match players.iter_mut().find(|p| p.id == pid) {
+            Some(p) if p.alive => p,
+            _ => {
+                commands.entity(entity).despawn();
+                continue;
+            }
         };
 
-        sprite.custom_size = Some(Vec2::splat(match (sys.owner.is_some(), is_hovered) {
-            (true,  true)  => 16.0,
-            (true,  false) => 12.0,
-            (false, true)  => 13.0,
-            (false, false) => 8.0,
-        }));
+        if map.owner_id(execution.target_x, execution.target_y) == pid {
+            commands.entity(entity).despawn();
+            continue;
+        }
+
+        if player.troops < config::EXPAND_COST {
+            continue;
+        }
+
+        let mut candidates: Vec<(u32, u32, f64)> = Vec::new();
+        for y in 0..map.height {
+            for x in 0..map.width {
+                let owner = map.owner_id(x, y);
+                if owner != 0 {
+                    continue; // Not neutral
+                }
+                if !map.is_adjacent_to_player(x, y, pid) {
+                    continue; // Not adjacent to our territory
+                }
+                let dx = x as f64 - execution.target_x as f64;
+                let dy = y as f64 - execution.target_y as f64;
+                let dist = (dx * dx + dy * dy).sqrt();
+                candidates.push((x, y, dist));
+            }
+        }
+
+        candidates.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
+
+        let mut expanded_this_tick = 0u32;
+        for (cx, cy, _dist) in &candidates {
+            if expanded_this_tick >= config::EXPAND_TILES_PER_TICK {
+                break;
+            }
+            if player.troops < config::EXPAND_COST {
+                break;
+            }
+
+            map.set_owner_id(*cx, *cy, pid);
+            player.troops -= config::EXPAND_COST;
+            expanded_this_tick += 1;
+        }
     }
 }
 
-fn update_tooltip(
+// ─── Visual Updates ─────────────────────────────────────────────────────────
+
+fn update_tile_visuals(
     game: Res<DarkRiftGame>,
-    hovered: Res<HoveredSystem>,
-    mut q: Query<&mut Text, With<TooltipText>>,
+    hovered: Res<HoveredTile>,
+    mut tiles_q: Query<(&mut Sprite, &TileNode)>,
 ) {
-    for mut text in q.iter_mut() {
-        if let Some(sid) = hovered.0 {
-            let sys = game.state.map.system(sid);
-            let owner = match sys.owner {
-                None => "Unclaimed".to_string(),
-                Some(id) => game.state.player(id)
-                    .map(|p| p.name.clone())
-                    .unwrap_or_else(|| "Unknown".to_string()),
-            };
-            **text = format!("{} | {} | {:.0} ships | {} lanes",
-                sys.name, owner, sys.ships, sys.connections.len());
+    if !game.is_changed() && !hovered.is_changed() { return; }
+
+    for (mut sprite, node) in tiles_q.iter_mut() {
+        let owner = game.state.map.owner_id(node.x, node.y);
+
+        let base_color = if owner == 0 {
+            Color::srgb(0.08, 0.08, 0.12)
         } else {
-            **text = String::new();
-        }
+            match game.state.players.iter().find(|p| p.id == owner) {
+                Some(player) => Color::srgb(player.color[0], player.color[1], player.color[2]),
+                None => Color::srgb(0.3, 0.3, 0.3),
+            }
+        };
+
+        let final_color = if Some((node.x, node.y)) == hovered.0 {
+            let c = base_color.to_srgba();
+            Color::srgb((c.red + 0.25).min(1.0), (c.green + 0.25).min(1.0), (c.blue + 0.25).min(1.0))
+        } else {
+            base_color
+        };
+
+        sprite.color = final_color;
     }
 }
 
 fn update_hud(
     game: Res<DarkRiftGame>,
-    mut ship_q: Query<&mut Text, (With<ShipCounterText>, Without<LeaderboardText>)>,
-    mut leader_q: Query<&mut Text, (With<LeaderboardText>, Without<ShipCounterText>)>,
+    mut hud_q: Query<&mut Text, With<HudText>>,
 ) {
-    if let Some(pid) = game.local_player_id {
-        if let Some(player) = game.state.player(pid) {
-            for mut t in ship_q.iter_mut() {
-                let systems = game.state.map.systems_owned_by(pid);
-                **t = format!("⚓ Ships: {:.0}   ★ Systems: {}", player.reserve_ships, systems);
+    if !game.is_changed() { return; }
+
+    for mut text in hud_q.iter_mut() {
+        if game.state.players.is_empty() {
+            **text = "Sandbox Loading...".to_string();
+        } else {
+            let mut lines = Vec::new();
+            lines.push(format!("Sandbox Tick: {}", game.state.tick));
+            for p in &game.state.players {
+                let tiles = game.state.map.tiles_owned_by(p.id);
+                lines.push(format!(
+                    "{}: {} troops | {} tiles",
+                    p.name,
+                    p.troops as u32,
+                    tiles,
+                ));
             }
-        }
-    }
-
-    let board = game.state.leaderboard();
-    let board_str = board.iter().take(5).enumerate()
-        .map(|(i, (_, name, n))| format!("{}. {} — {}", i + 1, name, n))
-        .collect::<Vec<_>>().join("\n");
-    for mut t in leader_q.iter_mut() {
-        **t = format!("── TOP 5 ──\n{board_str}");
-    }
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-fn owner_color(game_state: &GameState, owner: Option<u32>) -> Color {
-    match owner {
-        None => Color::srgba(0.35, 0.35, 0.45, 0.7),
-        Some(id) => game_state.players.iter()
-            .find(|p| p.id == id)
-            .map(|p| Color::srgb(p.color[0], p.color[1], p.color[2]))
-            .unwrap_or(Color::srgb(0.5, 0.5, 0.5)),
-    }
-}
-
-// ─── Networking Systems ───────────────────────────────────────────────────────
-
-fn handle_network_sync(
-    mut game: ResMut<DarkRiftGame>,
-    mut receivers: Query<&mut MessageReceiver<SyncMapState>>,
-) {
-    for mut receiver in receivers.iter_mut() {
-        for msg in receiver.receive() {
-            if let Some(state) = msg.state {
-                game.state = state;
-            }
+            **text = lines.join("\n");
         }
     }
 }

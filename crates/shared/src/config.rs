@@ -1,59 +1,36 @@
-/// Game balance constants for Dark Rift.
+/// Game balance constants.
 
-/// Number of star systems to generate on the map.
-pub const DEFAULT_SYSTEM_COUNT: u32 = 300;
+/// Map dimensions (in tiles).
+pub const MAP_WIDTH: u32 = 100;
+pub const MAP_HEIGHT: u32 = 100;
 
-/// Map dimensions (world units).
-pub const MAP_WIDTH: f32 = 1600.0;
-pub const MAP_HEIGHT: f32 = 1000.0;
+/// Starting troops for a new player.
+pub const STARTING_TROOPS: f64 = 100.0;
 
-/// Minimum distance between any two star systems (Poisson disk radius).
-pub const MIN_SYSTEM_DISTANCE: f32 = 40.0;
+/// Radius of the initial spawn cluster (in tiles from center).
+pub const SPAWN_RADIUS: u32 = 3;
 
-/// Maximum edge length for connections between star systems.
-/// Edges longer than this are pruned from the Delaunay triangulation.
-pub const MAX_CONNECTION_DISTANCE: f32 = 120.0;
+/// Troop cost to expand into one neutral tile.
+pub const EXPAND_COST: f64 = 1.0;
 
-/// Number of AI factions to seed on the map.
-pub const DEFAULT_FACTION_COUNT: u32 = 8;
+/// Troop cost to attack one enemy tile (attacker pays this).
+pub const ATTACK_COST: f64 = 5.0;
 
-/// Number of systems each faction starts with.
-pub const FACTION_STARTING_SYSTEMS: u32 = 5;
+/// How many neutral tiles to expand per server tick when expanding.
+pub const EXPAND_TILES_PER_TICK: u32 = 3;
 
-/// Number of systems a human player starts with (the picked one + neighbors).
-pub const PLAYER_STARTING_SYSTEMS: u32 = 3;
+/// Fixed troop generation base: you always gain at least this per tick.
+pub const TROOP_BASE_INCOME: f64 = 2.0;
 
-/// Base ship generation rate per owned system per tick.
-pub const SHIPS_PER_SYSTEM_PER_TICK: f32 = 0.05;
+/// Troop generation per owned tile per tick.
+pub const TROOP_PER_TILE: f64 = 0.05;
 
-/// Cost in ships to expand into an unclaimed system.
-pub const EXPAND_COST: f32 = 5.0;
+/// How max troops scale with territory: max_troops = BASE + TILES^0.6 * SCALE.
+pub const MAX_TROOPS_BASE: f64 = 200.0;
+pub const MAX_TROOPS_SCALE: f64 = 50.0;
 
-/// Minimum ships required to launch an attack.
-pub const MIN_ATTACK_SHIPS: f32 = 10.0;
-
-/// Attacker troop loss multiplier when attacking an enemy system.
-/// attacker_losses = defender_ships * ATTACKER_LOSS_RATIO
-pub const ATTACKER_LOSS_RATIO: f32 = 0.5;
-
-/// Defender troop loss multiplier when being attacked.
-/// defender_losses = attacker_ships * DEFENDER_LOSS_RATIO
-pub const DEFENDER_LOSS_RATIO: f32 = 0.8;
-
-/// Percentage of total systems a player must own to trigger a Domination win.
-pub const WIN_PERCENTAGE: f32 = 85.0;
-
-/// How often (in ticks) to check win conditions.
-pub const WIN_CHECK_INTERVAL: u32 = 60;
-
-/// Minimum distance (in world units) between player spawn locations.
-pub const MIN_SPAWN_DISTANCE: f32 = 200.0;
-
-/// Maximum number of players per game.
-pub const MAX_PLAYERS: u32 = 8;
-
-/// Duration of the spawn selection phase in seconds.
-pub const SPAWN_PHASE_DURATION_SECS: f32 = 30.0;
-
-/// Game tick rate (ticks per second for the fixed timestep).
+/// Server tick rate (ticks per second).
 pub const TICK_RATE: f64 = 10.0;
+
+/// Percentage of tiles needed to win.
+pub const WIN_PERCENTAGE: f64 = 80.0;
