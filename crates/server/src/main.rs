@@ -26,7 +26,7 @@ use dark_rift_shared::protocol::*;
 
 /// Turn interval: how often the server bundles + broadcasts a turn.
 /// Mirrors OpenFront's config.turnIntervalMs() (200ms = 5 turns/sec).
-const TURN_INTERVAL_MS: f32 = 200.0;
+const TURN_INTERVAL_MS: f32 = 50.0;
 
 /// Auto-start when this many players connect.
 const MIN_PLAYERS: usize = 2;
