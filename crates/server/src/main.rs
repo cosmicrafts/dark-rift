@@ -1,3 +1,14 @@
+//! Dark Rift Server — Pure Turn-Relay (mirrors OpenFront's GameServer.ts)
+//!
+//! The server does NOT simulate the game. It:
+//!   1. Accepts WebSocket connections via Lightyear
+//!   2. Assigns player IDs and spawn points on connect
+//!   3. Collects incoming ClientIntentMessage into an IntentBuffer
+//!   4. At fixed TURN_INTERVAL, bundles intents into a Turn → broadcasts ServerTurnMessage
+//!   5. Sends ServerStartMessage with seed + player roster + missed turns on join
+//!
+//! Each client runs the identical shared ECS systems to simulate game state independently.
+
 use bevy::prelude::*;
 use bevy::app::ScheduleRunnerPlugin;
 use lightyear::prelude::*;
@@ -8,15 +19,21 @@ use std::time::Duration;
 use std::net::{Ipv4Addr, SocketAddr};
 
 use dark_rift_shared::config;
-use dark_rift_shared::game::GameState;
-use dark_rift_shared::player::{Player, player_colors};
+use dark_rift_shared::player::player_colors;
 use dark_rift_shared::protocol::*;
-use dark_rift_shared::execution::{AttackExecution, PrioritizedTile, system_attack_execution, system_player_income};
-use dark_rift_shared::pseudo_random::PseudoRandom;
+
+// ─── Constants ──────────────────────────────────────────────────────────────
+
+/// Turn interval: how often the server bundles + broadcasts a turn.
+/// Mirrors OpenFront's config.turnIntervalMs() (200ms = 5 turns/sec).
+const TURN_INTERVAL_MS: f32 = 200.0;
+
+/// Auto-start when this many players connect.
+const MIN_PLAYERS: usize = 2;
 
 // ─── Resources ──────────────────────────────────────────────────────────────
 
-/// Maps Bevy Entity → PlayerId so we know who sent what.
+/// Maps Bevy Entity (ClientOf) → our game PlayerId.
 #[derive(Resource, Default)]
 struct ClientPlayerMap {
     entries: Vec<(Entity, u16)>,
@@ -24,21 +41,54 @@ struct ClientPlayerMap {
 }
 
 impl ClientPlayerMap {
-    fn get_player_id(&self, entity: Entity) -> Option<u16> {
+    fn player_id(&self, entity: Entity) -> Option<u16> {
         self.entries.iter().find(|(e, _)| *e == entity).map(|(_, id)| *id)
     }
 
     fn register(&mut self, entity: Entity) -> u16 {
         self.next_id += 1;
-        let id = self.next_id;
-        self.entries.push((entity, id));
-        id
+        self.entries.push((entity, self.next_id));
+        self.next_id
+    }
+
+    fn count(&self) -> usize { self.entries.len() }
+    
+    fn entities(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.entries.iter().map(|(e, _)| *e)
     }
 }
 
-/// Timer for the game tick (runs at TICK_RATE).
+/// Accumulates StampedIntents between turns.
+/// Mirrors OpenFront's `private intents: StampedIntent[]`.
+#[derive(Resource, Default)]
+struct IntentBuffer(Vec<StampedIntent>);
+
+/// All turns broadcast so far — needed for late-join catchup.
+/// Mirrors OpenFront's `private turns: Turn[]`.
+#[derive(Resource, Default)]
+struct TurnLog {
+    turns: Vec<Turn>,
+    current: u64,
+}
+
+/// Full player roster (for ServerStartMessage).
+#[derive(Resource, Default)]
+struct PlayerRoster(Vec<PlayerInfo>);
+
+/// Game seed + started flag.
 #[derive(Resource)]
-struct GameTickTimer(Timer);
+struct GameMetadata {
+    seed: u64,
+    started: bool,
+}
+
+impl Default for GameMetadata {
+    fn default() -> Self { Self { seed: 42, started: false } }
+}
+
+/// Turn dispatch timer.
+#[derive(Resource)]
+struct TurnTimer(Timer);
 
 // ─── Main ───────────────────────────────────────────────────────────────────
 
@@ -46,30 +96,28 @@ fn main() {
     let mut app = App::new();
 
     app.add_plugins(MinimalPlugins.set(ScheduleRunnerPlugin::run_loop(
-        Duration::from_secs_f64(1.0 / 60.0), // Bevy loop at 60fps
+        Duration::from_millis(16),
     )));
     app.add_plugins(bevy::log::LogPlugin::default());
     app.add_plugins(SharedProtocolPlugin);
     app.add_plugins(ServerPlugins::default());
 
-    app.insert_resource(ClientPlayerMap::default());
-    app.insert_resource(GameTickTimer(Timer::from_seconds(
-        1.0 / config::TICK_RATE as f32,
+    app.init_resource::<ClientPlayerMap>()
+       .init_resource::<IntentBuffer>()
+       .init_resource::<TurnLog>()
+       .init_resource::<PlayerRoster>()
+       .init_resource::<GameMetadata>();
+
+    app.insert_resource(TurnTimer(Timer::from_seconds(
+        TURN_INTERVAL_MS / 1000.0,
         TimerMode::Repeating,
     )));
 
     app.add_systems(Startup, setup);
-    
     app.add_systems(Update, (
         handle_new_clients,
-        handle_player_actions,
-        game_tick,
-    ));
-    // Shared executions run on the server to apply GameState changes deterministically
-    app.add_systems(Update, (
-        system_player_income,
-        system_attack_execution,
-        broadcast_state,
+        handle_intent_messages,
+        system_end_turn,
     ));
 
     app.run();
@@ -78,170 +126,175 @@ fn main() {
 // ─── Startup ────────────────────────────────────────────────────────────────
 
 fn setup(mut commands: Commands) {
-    let game = GameState::new(42);
-    info!("Server starting with Map Grid: {}x{}", game.map.width, game.map.height);
-    commands.insert_resource(game);
-
-    let server_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 5000);
+    let server_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 5005);
 
     let ws_config = WebSocketConfig::builder()
         .with_bind_address(server_addr)
         .with_no_encryption();
 
     let server_entity = commands.spawn((
-        Name::from("Server"),
+        Name::from("DarkRiftServer"),
         NetcodeServer::new(NetcodeConfig::default()),
         LocalAddr(server_addr),
         WebSocketServerIo { config: ws_config },
     )).id();
 
     commands.trigger(Start { entity: server_entity });
+
+    info!("🚀 Dark Rift relay server → ws://0.0.0.0:5005");
+    info!("   Waiting for {} players...", MIN_PLAYERS);
 }
 
-// ─── Systems ────────────────────────────────────────────────────────────────
+// ─── Connection Handling ────────────────────────────────────────────────────
 
+/// Detect new connected ClientOf entities, register them, auto-start after MIN_PLAYERS.
+/// Mirrors OpenFront's GameServer.ts onConnect() + startGameIfReady() → sendToAll().
 fn handle_new_clients(
-    mut game: ResMut<GameState>,
     mut client_map: ResMut<ClientPlayerMap>,
-    senders: Query<Entity, With<MessageSender<SyncMapState>>>,
+    mut roster:     ResMut<PlayerRoster>,
+    mut metadata:   ResMut<GameMetadata>,
+    turn_log:       Res<TurnLog>,
+    mut senders:    Query<&mut MessageSender<ServerStartMessage>>,
+    new_clients:    Query<Entity, Added<ClientOf>>,
 ) {
-    for entity in senders.iter() {
-        if client_map.get_player_id(entity).is_some() {
-            continue; // Already registered
+    for entity in new_clients.iter() {
+        // Verify the MessageSender component is present (it should be, via add_direction)
+        if senders.get_mut(entity).is_err() {
+            error!("Client {:?} missing MessageSender<ServerStartMessage>! Skipping.", entity);
+            continue;
         }
 
         let player_id = client_map.register(entity);
         let colors = player_colors();
-        let color_idx = (player_id as usize - 1) % colors.len();
-        let color = colors[color_idx];
+        let color = colors[(player_id as usize - 1) % colors.len()];
         let name = format!("Player {}", player_id);
+        let (sx, sy) = pick_spawn(&roster, player_id);
 
-        let player = Player::new_human(player_id, name.clone(), color);
+        roster.0.push(PlayerInfo { id: player_id, name: name.clone(), color, spawn_x: sx, spawn_y: sy });
+        info!("✅ {} (id={}) joined → spawn({},{})", name, player_id, sx, sy);
 
-        let (sx, sy) = find_spawn_location(&game, player_id);
-
-        game.spawn_player(player, sx, sy);
-        info!("Player '{}' (id={}) spawned at ({}, {})", name, player_id, sx, sy);
-    }
-}
-
-fn find_spawn_location(game: &GameState, _player_id: u16) -> (u32, u32) {
-    let w = game.map.width;
-    let h = game.map.height;
-    let margin = config::SPAWN_RADIUS + 2;
-
-    let spawn_points = [
-        (w / 4, h / 4),
-        (3 * w / 4, h / 4),
-        (w / 4, 3 * h / 4),
-        (3 * w / 4, 3 * h / 4),
-        (w / 2, h / 4),
-        (w / 2, 3 * h / 4),
-        (w / 4, h / 2),
-        (3 * w / 4, h / 2),
-    ];
-
-    for &(sx, sy) in &spawn_points {
-        let sx = sx.clamp(margin, w - margin);
-        let sy = sy.clamp(margin, h - margin);
-        if game.map.owner_id(sx, sy) == 0 {
-            return (sx, sy);
+        let just_started = !metadata.started && client_map.count() >= MIN_PLAYERS;
+        if just_started {
+            metadata.started = true;
+            info!("⚔️  {} players — GAME START!", client_map.count());
         }
-    }
 
-    (w / 2, h / 2)
-}
+        if !metadata.started {
+            continue; // Still waiting for more players, don't send start yet
+        }
 
-/// Receive PlayerActionMessage and spawn AttackExecution logic queue (BFS).
-fn handle_player_actions(
-    mut commands: Commands,
-    game: Res<GameState>,
-    client_map: Res<ClientPlayerMap>,
-    mut receivers: Query<(&mut MessageReceiver<PlayerActionMessage>, Entity)>,
-) {
-    for (mut receiver, entity) in receivers.iter_mut() {
-        let player_id = match client_map.get_player_id(entity) {
-            Some(id) => id,
-            None => continue,
-        };
-
-        for msg in receiver.receive() {
-            let player = match game.player(player_id) {
-                Some(p) => p,
-                None => continue,
-            };
-
-            let target_owner = msg.target_owner.unwrap_or(0); // 0 = TerraNullius/neutral
-            
-            // By default use all available troops, or specified.
-            let troops = msg.troops.unwrap_or_else(|| player.troops);
-
-            let mut rng = PseudoRandom::new(game.seed + game.tick);
-            let mut to_conquer = std::collections::BinaryHeap::new();
-
-            // Seed the BFS with tiles corresponding to target frontiers
-            for (bx, by) in game.map.border_tiles_of(player_id) {
-                // Must border the target owner to begin expansion there
-                let mut valid_border = false;
-                for (nx, ny) in game.map.neighbors(bx, by) {
-                    if game.map.owner_id(nx, ny) == target_owner {
-                        valid_border = true;
-                        
-                        // Push neighbor into conquest queue matching AttackExecution logic
-                        let mut num_owned_by_me = 0;
-                        for (nnx, nny) in game.map.neighbors(nx, ny) {
-                            if game.map.owner_id(nnx, nny) == player_id {
-                                num_owned_by_me += 1;
-                            }
-                        }
-                        
-                        let terrain = game.map.terrain_type(nx, ny);
-                        let r = rng.next_int(0, 7) as f32;
-                        let mag = match terrain {
-                            dark_rift_shared::map::TerrainType::Plains => 1.0,
-                            dark_rift_shared::map::TerrainType::Highland => 1.5,
-                            dark_rift_shared::map::TerrainType::Mountain => 2.0,
-                            _ => 1.0,
-                        };
-                        let prio = (r + 10.0) * (1.0 - (num_owned_by_me as f32) * 0.5 + mag / 2.0) + (game.tick as f32);
-
-                        to_conquer.push(PrioritizedTile { priority: prio, x: nx, y: ny });
-                    }
+        if just_started {
+            // ── Broadcast to ALL players simultaneously ──────────────────────
+            // Mirrors OpenFront's startGameIfReady() → sendToAll(startGameMsg).
+            // Snapshot entries to avoid borrow-checker issues with the query.
+            let all: Vec<(Entity, u16)> = client_map.entries.clone();
+            for (target, their_id) in all {
+                let msg = ServerStartMessage {
+                    my_player_id: their_id,
+                    seed: metadata.seed,
+                    players: roster.0.clone(),
+                    missed_turns: turn_log.turns.clone(),
+                };
+                if let Ok(mut s) = senders.get_mut(target) {
+                    info!("📨 → ServerStartMessage to Player {} ({:?})", their_id, target);
+                    let _ = s.send::<ReliableChannel>(msg);
                 }
             }
+        } else {
+            // ── Late joiner: catch up with turn history ───────────────────────
+            let msg = ServerStartMessage {
+                my_player_id: player_id,
+                seed: metadata.seed,
+                players: roster.0.clone(),
+                missed_turns: turn_log.turns.clone(),
+            };
+            if let Ok(mut s) = senders.get_mut(entity) {
+                info!("📨 → ServerStartMessage (late-join) to Player {} ({:?})", player_id, entity);
+                let _ = s.send::<ReliableChannel>(msg);
+            }
+        }
+    }
+}
 
-            if !to_conquer.is_empty() {
-                commands.spawn(AttackExecution {
-                    owner_id: player_id,
-                    target_owner,
-                    troops,
-                    to_conquer,
-                    rng,
+
+/// Collect incoming intents, stamp with player_id.
+/// Mirrors OpenFront's: intents.push({ ...clientMsg.intent, clientID }).
+fn handle_intent_messages(
+    client_map:   Res<ClientPlayerMap>,
+    metadata:     Res<GameMetadata>,
+    mut buffer:   ResMut<IntentBuffer>,
+    mut receivers: Query<(Entity, &mut MessageReceiver<ClientIntentMessage>)>,
+) {
+    if !metadata.started { return; }
+
+    for (entity, mut receiver) in receivers.iter_mut() {
+        if let Some(player_id) = client_map.player_id(entity) {
+            for msg in receiver.receive() {
+                buffer.0.push(StampedIntent {
+                    player_id,
+                    intent: msg.intent,
                 });
             }
         }
     }
 }
 
-fn game_tick(
-    mut game: ResMut<GameState>,
-    mut timer: ResMut<GameTickTimer>,
-    time: Res<Time>,
+/// Timer-driven: bundle intents → broadcast Turn to all clients.
+/// Mirrors OpenFront's endTurn() called by setInterval(endTurn, turnIntervalMs).
+fn system_end_turn(
+    time:       Res<Time>,
+    mut timer:  ResMut<TurnTimer>,
+    mut buffer: ResMut<IntentBuffer>,
+    mut log:    ResMut<TurnLog>,
+    metadata:   Res<GameMetadata>,
+    mut senders: Query<&mut MessageSender<ServerTurnMessage>>,
 ) {
+    if !metadata.started { return; }
+
     timer.0.tick(time.delta());
-    if timer.0.just_finished() {
-        game.tick(); // Increment tick counter
+    if !timer.0.just_finished() { return; }
+
+    let turn = Turn {
+        turn_number: log.current,
+        intents: std::mem::take(&mut buffer.0),
+    };
+    log.current += 1;
+    log.turns.push(turn.clone());
+
+    let msg = ServerTurnMessage { turn };
+    for mut sender in senders.iter_mut() {
+        let _ = sender.send::<ReliableChannel>(msg.clone());
     }
 }
 
-fn broadcast_state(
-    game: Res<GameState>,
-    mut clients: Query<&mut MessageSender<SyncMapState>>,
-) {
-    if !game.is_changed() { return; }
+// ─── Helpers ────────────────────────────────────────────────────────────────
 
-    let msg = SyncMapState { state: Some(game.clone()) };
-    for mut sender in clients.iter_mut() {
-        let _ = sender.send::<dark_rift_shared::protocol::ReliableChannel>(msg.clone());
+fn pick_spawn(roster: &PlayerRoster, _player_id: u16) -> (u32, u32) {
+    let w = config::MAP_WIDTH;
+    let h = config::MAP_HEIGHT;
+    let margin = config::SPAWN_RADIUS + 4;
+
+    let candidates: [(u32, u32); 8] = [
+        (w / 4,     h / 4),
+        (3 * w / 4, h / 4),
+        (w / 4,     3 * h / 4),
+        (3 * w / 4, 3 * h / 4),
+        (w / 2,     h / 4),
+        (w / 2,     3 * h / 4),
+        (w / 4,     h / 2),
+        (3 * w / 4, h / 2),
+    ];
+
+    let used: std::collections::HashSet<(u32, u32)> =
+        roster.0.iter().map(|p| (p.spawn_x, p.spawn_y)).collect();
+
+    for &(sx, sy) in &candidates {
+        let sx = sx.clamp(margin, w.saturating_sub(margin));
+        let sy = sy.clamp(margin, h.saturating_sub(margin));
+        if !used.contains(&(sx, sy)) {
+            return (sx, sy);
+        }
     }
+
+    (w / 2, h / 2)
 }

@@ -6,3 +6,4 @@ pub mod protocol;
 pub mod config;
 pub mod pseudo_random;
 pub mod execution;
+pub mod intent;

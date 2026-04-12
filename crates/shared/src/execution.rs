@@ -56,7 +56,8 @@ impl AttackExecution {
 }
 
 // System analogous to PlayerExecution.tick() in OpenFront
-pub fn system_player_income(mut game: ResMut<GameState>) {
+pub fn system_player_income(game_opt: Option<ResMut<GameState>>) {
+    let Some(mut game) = game_opt else { return };
     if game.phase != GamePhase::Playing {
         return;
     }
@@ -84,9 +85,10 @@ pub fn system_player_income(mut game: ResMut<GameState>) {
 // System analogous to AttackExecution.tick() in OpenFront
 pub fn system_attack_execution(
     mut commands: Commands,
-    mut game: ResMut<GameState>,
+    game_opt: Option<ResMut<GameState>>,
     mut query: Query<(Entity, &mut AttackExecution)>,
 ) {
+    let Some(mut game) = game_opt else { return };
     if game.phase != GamePhase::Playing {
         return;
     }

@@ -9,3 +9,5 @@ bevy = { version = "0.18", features = ["dynamic_linking"] }
 serde = { workspace = true }
 rand = { workspace = true }
 lightyear = { workspace = true, features = ["websocket", "client", "netcode"] }
+aeronet_io = { workspace = true }
+aeronet_websocket = { workspace = true }

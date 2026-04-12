@@ -2585,6 +2585,8 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 name = "dark-rift-client"
 version = "0.1.0"
 dependencies = [
+ "aeronet_io",
+ "aeronet_websocket",
  "bevy",
  "dark-rift-shared",
  "lightyear",

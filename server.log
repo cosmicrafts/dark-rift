@@ -1,0 +1,39 @@
+warning: unused import: `Event`
+ --> crates/shared/src/game.rs:1:21
+  |
+1 | use bevy::prelude::{Event, Resource};
+  |                     ^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `dark-rift-shared` (lib) generated 1 warning (run `cargo fix --lib -p dark-rift-shared` to apply 1 suggestion)
+warning: variable does not need to be mutable
+   --> crates/server/src/main.rs:156:5
+    |
+156 |     mut turn_log:   ResMut<TurnLog>,
+    |     ----^^^^^^^^
+    |     |
+    |     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `entities` is never used
+  --> crates/server/src/main.rs:56:8
+   |
+43 | impl ClientPlayerMap {
+   | -------------------- method in this implementation
+...
+56 |     fn entities(&self) -> impl Iterator<Item = Entity> + '_ {
+   |        ^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `dark-rift-server` (bin "dark-rift-server") generated 2 warnings (run `cargo fix --bin "dark-rift-server" -p dark-rift-server` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.48s
+     Running `target/debug/dark-rift-server`
+[2m2026-04-12T18:24:02.166235Z[0m [32m INFO[0m [2mdark_rift_server[0m[2m:[0m 🚀 Dark Rift relay server → ws://0.0.0.0:5005
+[2m2026-04-12T18:24:02.166287Z[0m [32m INFO[0m [2mdark_rift_server[0m[2m:[0m    Waiting for 2 players...
+[2m2026-04-12T18:24:02.167141Z[0m [32m INFO[0m [2mlightyear_websocket::server[0m[2m:[0m Server WebSocket starting at 0.0.0.0:5005
+[2m2026-04-12T18:24:06.705619Z[0m [32m INFO[0m [2mlightyear_netcode::server_plugin[0m[2m:[0m New connection on netcode from 319915083 (88v0)
+[2m2026-04-12T18:24:06.713380Z[0m [32m INFO[0m [2mdark_rift_server[0m[2m:[0m A new core client entity spawned in ECS! 88v0
+[2m2026-04-12T18:24:06.713462Z[0m [31mERROR[0m [2mdark_rift_server[0m[2m:[0m Client entity 88v0 is MISSING MessageSender<ServerStartMessage> component! Cannot send server start payload. Skipping...

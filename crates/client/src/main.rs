@@ -1,22 +1,46 @@
+//! Dark Rift Client — Networked (Lightyear WebSocket + Netcode)
+//!
+//! Flow:
+//!   1. Spawn a Client entity: NetcodeClient + WebSocketClientIo → ws://127.0.0.1:5000
+//!   2. Trigger Connect to start handshake
+//!   3. MessageReceiver<ServerStartMessage>: init local GameState, spawn tile grid
+//!   4. On player click: send ClientIntentMessage via MessageSender
+//!   5. MessageReceiver<ServerTurnMessage>: apply intents via apply_stamped_intent()
+//!   6. Shared ECS systems run locally (system_player_income, system_attack_execution)
+//!   7. Tile visuals updated from game.events (event-driven, O(events) not O(map))
+
 use bevy::prelude::*;
 use bevy::sprite::Sprite;
+use lightyear::prelude::*;
+use lightyear::prelude::client::*;
+use lightyear::netcode::{NetcodeClient, Key};
+use lightyear::netcode::prelude::client::NetcodeConfig;
+use lightyear::netcode::auth::Authentication;
+use lightyear::websocket::client::{WebSocketClientIo, WebSocketScheme};
+use aeronet_io::connection::PeerAddr;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 
 use dark_rift_shared::config;
 use dark_rift_shared::game::{GameState, GameEvent};
 use dark_rift_shared::player::Player;
-use dark_rift_shared::execution::{AttackExecution, PrioritizedTile, system_attack_execution, system_player_income};
-use dark_rift_shared::pseudo_random::PseudoRandom;
+use dark_rift_shared::execution::{system_attack_execution, system_player_income};
+use dark_rift_shared::intent::apply_stamped_intent;
+use dark_rift_shared::protocol::*;
 
 const TILE_SIZE: f32 = 8.0;
+const SERVER_ADDR: &str = "127.0.0.1:5005";
 
 // ─── Resources ──────────────────────────────────────────────────────────────
 
 #[derive(Resource, Default)]
-struct HoveredTile(Option<(u32, u32)>);
+struct GameReady(bool);
 
-#[derive(Resource)]
-struct GameTickTimer(Timer);
+#[derive(Resource, Default)]
+struct MyPlayerId(u16);
+
+#[derive(Resource, Default)]
+struct HoveredTile(Option<(u32, u32)>);
 
 #[derive(Resource, Default)]
 struct GridEntities(HashMap<(u32, u32), Entity>);
@@ -24,10 +48,7 @@ struct GridEntities(HashMap<(u32, u32), Entity>);
 // ─── Components ─────────────────────────────────────────────────────────────
 
 #[derive(Component)]
-struct TileNode {
-    x: u32,
-    y: u32,
-}
+struct TileNode { x: u32, y: u32 }
 
 #[derive(Component)]
 struct HudText;
@@ -38,75 +59,51 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Dark Rift — Local Mechanics Sandbox".to_string(),
+                title: "Dark Rift — Multiplayer".to_string(),
                 resolution: (1280u32, 720u32).into(),
                 ..default()
             }),
             ..default()
         }).disable::<bevy::audio::AudioPlugin>())
         .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.04)))
+        .add_plugins(SharedProtocolPlugin)
+        .add_plugins(ClientPlugins::default())
+        .init_resource::<GameReady>()
+        .init_resource::<MyPlayerId>()
         .init_resource::<HoveredTile>()
         .init_resource::<GridEntities>()
-        .insert_resource(GameState::new(42)) // Inject the true shared core Resource directly!
-        .insert_resource(GameTickTimer(Timer::from_seconds(
-            1.0 / config::TICK_RATE as f32,
-            TimerMode::Repeating,
-        )))
         .add_systems(Startup, setup)
         .add_systems(Update, (
-            hover_system,
-            hover_visuals,
-            player_click,
-            update_hud,
+            handle_server_start,
+            handle_server_turns,
         ))
-        // Run identical shared mechanics natively! True simulation locally!
         .add_systems(Update, (
-            game_tick,
+            hover_system,
+            player_click,
             handle_tile_change,
+            update_hud,
+        ).run_if(game_is_ready))
+        .add_systems(Update, (
             system_player_income,
             system_attack_execution,
-        ))
+        ).run_if(game_is_ready))
         .run();
 }
 
+fn game_is_ready(ready: Res<GameReady>) -> bool { ready.0 }
+
 // ─── Startup ────────────────────────────────────────────────────────────────
 
-fn setup(mut commands: Commands, mut game: ResMut<GameState>, mut grid: ResMut<GridEntities>) {
-    // 2D camera centered on the grid
+fn setup(mut commands: Commands) {
     commands.spawn((
         Camera2d,
-        Transform::from_translation(Vec3::new(
-            (game.map.width as f32 * TILE_SIZE) / 2.0,
-            (game.map.height as f32 * TILE_SIZE) / 2.0,
-            999.0,
-        )),
+        Transform::from_xyz(0.0, 0.0, 999.0),
     ));
 
-    // Spawn tiles
-    for y in 0..game.map.height {
-        for x in 0..game.map.width {
-            let entity = commands.spawn((
-                Sprite {
-                    color: Color::srgb(0.08, 0.08, 0.12),
-                    custom_size: Some(Vec2::new(TILE_SIZE - 0.5, TILE_SIZE - 0.5)),
-                    ..default()
-                },
-                Transform::from_xyz(
-                    x as f32 * TILE_SIZE,
-                    y as f32 * TILE_SIZE,
-                    0.0,
-                ),
-                TileNode { x, y },
-            )).id();
-
-            grid.0.insert((x, y), entity);
-        }
-    }
-
     commands.spawn((
-        Text::new("Loading..."),
+        Text::new("Connecting to server..."),
         TextFont { font_size: 20.0, ..default() },
-        TextColor(Color::srgb(0.7, 0.7, 0.9)),
+        TextColor(Color::srgb(0.7, 0.9, 0.7)),
         Node {
             position_type: PositionType::Absolute,
             left: Val::Px(10.0),
@@ -116,172 +113,227 @@ fn setup(mut commands: Commands, mut game: ResMut<GameState>, mut grid: ResMut<G
         HudText,
     ));
 
-    let w = game.map.width;
-    let h = game.map.height;
+    let server_addr: SocketAddr = SERVER_ADDR.parse().unwrap();
+    let client_id = rand_client_id();
 
-    // Instantly spawn Player 1 and Player 2 for testing collision and clashing!
-    let player1 = Player::new_human(1, "Player 1".to_string(), [0.0, 0.8, 0.8]);
-    game.spawn_player(player1, w / 3, h / 2);
-    
-    let player2 = Player::new_human(2, "Bot Player 2".to_string(), [0.8, 0.2, 0.2]);
-    game.spawn_player(player2, w * 2 / 3, h / 2);
+    let netcode = NetcodeClient::new(
+        Authentication::Manual {
+            server_addr,
+            client_id,
+            private_key: Key::default(),
+            protocol_id: 0,
+        },
+        NetcodeConfig::default(),
+    ).expect("Failed to build NetcodeClient");
 
-    // Initial event dispatch so their clusters render
-    for (x, y) in grid.0.keys() {
-        let owner = game.map.owner_id(*x, *y);
-        if owner != 0 {
-            game.events.push(dark_rift_shared::game::GameEvent::TileCaptured { x: *x, y: *y, new_owner: owner });
-        }
-    }
+    let client_entity = commands.spawn((
+        Name::from("DarkRiftClient"),
+        netcode,
+        PeerAddr(server_addr),
+        WebSocketClientIo::from_addr(
+            aeronet_websocket::client::ClientConfig::default(),
+            WebSocketScheme::Plain,
+        ),
+    )).id();
+
+    // Trigger Netcode connection (which internally initiates LinkStart)
+    commands.trigger(lightyear::prelude::client::Connect { entity: client_entity });
+
+    info!("🔌 Connecting to ws://{}... (client_id={})", SERVER_ADDR, client_id);
 }
 
-// ─── Systems ────────────────────────────────────────────────────────────────
+// ─── Network Handlers ────────────────────────────────────────────────────────
 
-fn game_tick(mut game: ResMut<GameState>, mut timer: ResMut<GameTickTimer>, time: Res<Time>) {
-    timer.0.tick(time.delta());
-    if timer.0.just_finished() {
-        game.tick();
-    }
-}
-
-fn hover_system(
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    camera_q: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    mut hovered: ResMut<HoveredTile>,
-    game: Res<GameState>,
+/// Receive ServerStartMessage → build GameState and spawn tile grid.
+/// Mirrors OpenFront's message.type === "start" handler in ClientGameRunner.
+fn handle_server_start(
+    mut commands:  Commands,
+    mut receivers: Query<&mut MessageReceiver<ServerStartMessage>>,
+    mut ready:     ResMut<GameReady>,
+    mut my_id:     ResMut<MyPlayerId>,
+    mut grid:      ResMut<GridEntities>,
+    mut cam_q:     Query<&mut Transform, With<Camera2d>>,
+    mut hud_q:     Query<&mut Text, With<HudText>>,
 ) {
-    hovered.0 = None;
-    let Ok(window) = windows.single() else { return };
-    let Ok((camera, cam_transform)) = camera_q.single() else { return };
-    let Some(cursor_pos) = window.cursor_position() else { return };
-    let Ok(world_pos) = camera.viewport_to_world_2d(cam_transform, cursor_pos) else { return };
+    for mut receiver in receivers.iter_mut() {
+        for msg in receiver.receive() {
+            if ready.0 { continue; }
 
-    let grid_x = (world_pos.x / TILE_SIZE).round() as i32;
-    let grid_y = (world_pos.y / TILE_SIZE).round() as i32;
+            info!("🎮 Game starting! I am player {}", msg.my_player_id);
+            my_id.0 = msg.my_player_id;
 
-    if game.map.is_valid_coord(grid_x, grid_y) {
-        hovered.0 = Some((grid_x as u32, grid_y as u32));
-    }
-}
+            let mut game = GameState::new(msg.seed);
+            for info in &msg.players {
+                let player = Player::new_human(info.id, info.name.clone(), info.color);
+                game.spawn_player(player, info.spawn_x, info.spawn_y);
+            }
 
-fn player_click(
-    mouse: Res<ButtonInput<MouseButton>>,
-    hovered: Res<HoveredTile>,
-    mut commands: Commands,
-    game: Res<GameState>,
-) {
-    if mouse.just_pressed(MouseButton::Left) {
-        if let Some((x, y)) = hovered.0 {
-            let pid = 1; // You play as Player 1 in sandbox
-            
-            let player = match game.players.iter().find(|p| p.id == pid) {
-                Some(p) => p,
-                None => return,
-            };
-
-            let target_owner = game.map.owner_id(x, y);
-
-            // Exactly the Openfront intent-based seed logic!
-            let mut rng = PseudoRandom::new(game.seed + game.tick);
-            let mut to_conquer = std::collections::BinaryHeap::new();
-
-            for (bx, by) in game.map.border_tiles_of(pid) {
-                let mut valid_border = false;
-                for (nx, ny) in game.map.neighbors(bx, by) {
-                    if game.map.owner_id(nx, ny) == target_owner {
-                        valid_border = true;
-                        
-                        let mut num_owned_by_me = 0;
-                        for (nnx, nny) in game.map.neighbors(nx, ny) {
-                            if game.map.owner_id(nnx, nny) == pid {
-                                num_owned_by_me += 1;
-                            }
-                        }
-                        
-                        let terrain = game.map.terrain_type(nx, ny);
-                        let r = rng.next_int(0, 7) as f32;
-                        let mag = match terrain {
-                            dark_rift_shared::map::TerrainType::Plains => 1.0,
-                            dark_rift_shared::map::TerrainType::Highland => 1.5,
-                            dark_rift_shared::map::TerrainType::Mountain => 2.0,
-                            _ => 1.0,
-                        };
-                        let prio = (r + 10.0) * (1.0 - (num_owned_by_me as f32) * 0.5 + mag / 2.0) + (game.tick as f32);
-
-                        to_conquer.push(PrioritizedTile { priority: prio, x: nx, y: ny });
-                    }
+            // Replay missed turns (late-join) — identical behavior to OpenFront
+            for turn in &msg.missed_turns {
+                for stamped in &turn.intents {
+                    apply_stamped_intent(&mut commands, &game, stamped);
                 }
             }
 
-            if !to_conquer.is_empty() {
-                commands.spawn(AttackExecution {
-                    owner_id: pid,
-                    target_owner,
-                    troops: player.troops, // Commit all troops by default for sandbox
-                    to_conquer,
-                    rng,
-                });
+            // Center camera on map
+            let cx = config::MAP_WIDTH as f32 * TILE_SIZE / 2.0;
+            let cy = config::MAP_HEIGHT as f32 * TILE_SIZE / 2.0;
+            if let Ok(mut cam) = cam_q.single_mut() {
+                cam.translation = Vec3::new(cx, cy, 999.0);
+            }
+
+            // Spawn tile sprites
+            for y in 0..game.map.height {
+                for x in 0..game.map.width {
+                    let owner = game.map.owner_id(x, y);
+                    let color = color_for_owner(&game, owner);
+                    let entity = commands.spawn((
+                        Sprite {
+                            color,
+                            custom_size: Some(Vec2::new(TILE_SIZE - 0.5, TILE_SIZE - 0.5)),
+                            ..default()
+                        },
+                        Transform::from_xyz(x as f32 * TILE_SIZE, y as f32 * TILE_SIZE, 0.0),
+                        TileNode { x, y },
+                    )).id();
+                    grid.0.insert((x, y), entity);
+                }
+            }
+
+            commands.insert_resource(game);
+            ready.0 = true;
+
+            if let Ok(mut text) = hud_q.single_mut() {
+                **text = format!("Connected — Player {}", msg.my_player_id);
             }
         }
     }
 }
 
+/// Receive ServerTurnMessage → apply each StampedIntent locally.
+/// Mirrors OpenFront: message.type === "turn" → worker.sendTurn(turn)
+///           → Executor.createExecs() per intent → AttackExecution.tick().
+fn handle_server_turns(
+    mut commands:  Commands,
+    mut receivers: Query<&mut MessageReceiver<ServerTurnMessage>>,
+    game_opt:      Option<Res<GameState>>,
+    ready:         Res<GameReady>,
+) {
+    if !ready.0 { return; }
+    let Some(game) = game_opt else { return };
+
+    for mut receiver in receivers.iter_mut() {
+        for msg in receiver.receive() {
+            for stamped in &msg.turn.intents {
+                apply_stamped_intent(&mut commands, &game, stamped);
+            }
+        }
+    }
+}
+
+// ─── Input ────────────────────────────────────────────────────────────────────
+
+fn hover_system(
+    windows:     Query<&Window, With<bevy::window::PrimaryWindow>>,
+    camera_q:    Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+    mut hovered: ResMut<HoveredTile>,
+    game_opt:    Option<Res<GameState>>,
+) {
+    hovered.0 = None;
+    let Some(game) = game_opt else { return };
+    let Ok(window) = windows.single() else { return };
+    let Ok((camera, cam_t)) = camera_q.single() else { return };
+    let Some(cursor) = window.cursor_position() else { return };
+    let Ok(world) = camera.viewport_to_world_2d(cam_t, cursor) else { return };
+
+    let gx = (world.x / TILE_SIZE).round() as i32;
+    let gy = (world.y / TILE_SIZE).round() as i32;
+    if game.map.is_valid_coord(gx, gy) {
+        hovered.0 = Some((gx as u32, gy as u32));
+    }
+}
+
+/// On click: send intent to server via MessageSender.
+/// Server stamps player_id → bundles into next Turn → broadcasts → we apply next frame.
+fn player_click(
+    mouse:       Res<ButtonInput<MouseButton>>,
+    hovered:     Res<HoveredTile>,
+    game_opt:    Option<Res<GameState>>,
+    my_id:       Res<MyPlayerId>,
+    mut senders: Query<&mut MessageSender<ClientIntentMessage>>,
+) {
+    if !mouse.just_pressed(MouseButton::Left) { return; }
+    let Some((x, y)) = hovered.0 else { return };
+    let Some(game) = game_opt else { return };
+
+    let pid = my_id.0;
+    let Some(player) = game.players.iter().find(|p| p.id == pid) else { return };
+    if !player.alive || player.troops < config::EXPAND_COST { return; }
+
+    let target_owner = game.map.owner_id(x, y);
+    if target_owner == pid { return; }
+
+    for mut sender in senders.iter_mut() {
+        let _ = sender.send::<ReliableChannel>(ClientIntentMessage {
+            intent: AttackIntent { target_owner, troops: None },
+        });
+    }
+}
+
+// ─── Visual ──────────────────────────────────────────────────────────────────
+
 fn handle_tile_change(
-    game: Res<GameState>,
-    grid: Res<GridEntities>,
+    game_opt:    Option<Res<GameState>>,
+    grid:        Res<GridEntities>,
     mut sprites: Query<&mut Sprite>,
 ) {
+    let Some(game) = game_opt else { return };
     if !game.is_changed() { return; }
 
     for ev in &game.events {
         if let GameEvent::TileCaptured { x, y, new_owner } = ev {
             if let Some(&entity) = grid.0.get(&(*x, *y)) {
                 if let Ok(mut sprite) = sprites.get_mut(entity) {
-                    if *new_owner == 0 {
-                        sprite.color = Color::srgb(0.08, 0.08, 0.12);
-                    } else {
-                        if let Some(player) = game.players.iter().find(|p| p.id == *new_owner) {
-                            sprite.color = Color::srgb(player.color[0], player.color[1], player.color[2]);
-                        } else {
-                            sprite.color = Color::srgb(0.3, 0.3, 0.3);
-                        }
-                    }
+                    sprite.color = color_for_owner(&game, *new_owner);
                 }
             }
         }
     }
 }
 
-fn hover_visuals(
-    hovered: Res<HoveredTile>,
-    grid: Res<GridEntities>,
-    mut sprites: Query<&mut Sprite>,
-) {
-    // Basic implementation that brightens hovered tile.
-    // For MVP sandbox this is fine, skipping un-hovering previous tile to keep logic simple
-    // since we do TileOwnerChanged observers now.
-    if !hovered.is_changed() { return; }
-    // ...
-}
-
 fn update_hud(
-    game: Res<GameState>,
+    game_opt:  Option<Res<GameState>>,
+    my_id:     Res<MyPlayerId>,
     mut hud_q: Query<&mut Text, With<HudText>>,
 ) {
+    let Some(game) = game_opt else { return };
     if !game.is_changed() { return; }
+    let Ok(mut text) = hud_q.single_mut() else { return };
 
-    for mut text in hud_q.iter_mut() {
-        let mut lines = Vec::new();
-        lines.push(format!("Sandbox Tick: {}", game.tick));
-        for p in &game.players {
-            let tiles = game.map.tiles_owned_by(p.id);
-            lines.push(format!(
-                "{}: {} troops | {} tiles",
-                p.name,
-                p.troops as u32,
-                tiles,
-            ));
-        }
-        **text = lines.join("\n");
+    let mut lines = vec![format!("Tick: {}", game.tick)];
+    for p in &game.players {
+        let tiles = game.map.tiles_owned_by(p.id);
+        let you = if p.id == my_id.0 { " ◀ YOU" } else { "" };
+        lines.push(format!("{}: {}t | {}tiles{}", p.name, p.troops as u32, tiles, you));
     }
+    **text = lines.join("\n");
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+fn color_for_owner(game: &GameState, owner: u16) -> Color {
+    if owner == 0 {
+        Color::srgb(0.08, 0.08, 0.12)
+    } else {
+        game.players.iter()
+            .find(|p| p.id == owner)
+            .map(|p| Color::srgb(p.color[0], p.color[1], p.color[2]))
+            .unwrap_or(Color::srgb(0.3, 0.3, 0.3))
+    }
+}
+
+fn rand_client_id() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_nanos();
+    nanos as u64
 }
