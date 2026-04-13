@@ -13,7 +13,8 @@ use crate::game::GameState;
 use crate::execution::{AttackExecution, PrioritizedTile};
 use crate::map::TerrainType;
 use crate::pseudo_random::PseudoRandom;
-use crate::protocol::StampedIntent;
+use crate::protocol::{StampedIntent, AttackIntent};
+use crate::config;
 
 /// Convert a StampedIntent into a seeded AttackExecution entity.
 /// Called by every client when they receive a ServerTurnMessage.
@@ -89,4 +90,59 @@ pub fn apply_stamped_intent(
         to_conquer,
         rng,
     });
+}
+
+/// Simulation-driven Bot AI behavior. Runs locally on every client deterministically.
+pub fn system_bot_think(
+    mut commands: Commands,
+    game: Res<GameState>,
+) {
+    if game.phase != crate::game::GamePhase::Playing {
+        return;
+    }
+
+    let bot_ids: Vec<u16> = game.players.iter().filter(|p| !p.is_human() && p.alive).map(|p| p.id).collect();
+    if bot_ids.is_empty() { return; }
+
+    let mut rng = PseudoRandom::new(game.seed.wrapping_add(game.tick));
+
+    for bot_id in bot_ids {
+        if rng.next_int(0, 100) < 5 { // 5% chance per tick (~0.5 actions per second)
+            let Some(player) = game.player(bot_id) else { continue; };
+            if player.troops < config::EXPAND_COST { continue; }
+
+            let borders = game.map.border_tiles_of(bot_id);
+            if borders.is_empty() { continue; }
+
+            let r_idx = rng.next_int(0, borders.len() as i32) as usize;
+            let (bx, by) = borders[r_idx];
+
+            let neighbors = game.map.neighbors(bx, by);
+            let mut targets = Vec::new();
+            for (nx, ny) in neighbors {
+                let owner = game.map.owner_id(nx, ny);
+                if owner != bot_id {
+                    targets.push(owner);
+                    if owner == 0 {
+                        // Double priority for expanding into neutral territory
+                        targets.push(0);
+                        targets.push(0);
+                    }
+                }
+            }
+
+            if targets.is_empty() { continue; }
+            let target_owner = targets[rng.next_int(0, targets.len() as i32) as usize];
+
+            let required_cost = if target_owner == 0 { config::EXPAND_COST } else { config::ATTACK_COST };
+            if player.troops < required_cost { continue; }
+            
+            let intent = StampedIntent {
+                player_id: bot_id,
+                intent: AttackIntent { target_owner, troops: None }
+            };
+            
+            apply_stamped_intent(&mut commands, &game, &intent, bot_id as u32);
+        }
+    }
 }

@@ -27,8 +27,9 @@ use dark_rift_shared::config;
 use dark_rift_shared::game::{GameState, GameEvent};
 use dark_rift_shared::player::Player;
 use dark_rift_shared::execution::{system_attack_execution, system_player_income, system_game_tick};
-use dark_rift_shared::intent::apply_stamped_intent;
+use dark_rift_shared::intent::{apply_stamped_intent, system_bot_think};
 use dark_rift_shared::protocol::*;
+use dark_rift_shared::pseudo_random::PseudoRandom;
 
 const TILE_SIZE: f32 = 8.0;
 const SERVER_ADDR: &str = "127.0.0.1:5005";
@@ -136,6 +137,7 @@ fn main() {
     sim_schedule.add_systems((
         pop_turn,
         system_player_income,
+        system_bot_think,
         system_attack_execution,
         system_game_tick,
         decrement_pending,
@@ -416,6 +418,43 @@ fn handle_server_start(
             for info in &msg.players {
                 let player = Player::new_human(info.id, info.name.clone(), info.color);
                 game.spawn_player(player, info.spawn_x, info.spawn_y);
+            }
+
+            // Spawn deterministic bots (Tribes)
+            let mut rng = PseudoRandom::new(msg.seed);
+            for i in 0..config::BOT_COUNT {
+                let bot_id = 100 + i as u16;
+                let mut tries = 0;
+                let (mut sx, mut sy) = (0, 0);
+                
+                while tries < 1000 {
+                    sx = rng.next_int(0, config::MAP_WIDTH as i32) as u32;
+                    sy = rng.next_int(0, config::MAP_HEIGHT as i32) as u32;
+                    let mut valid = true;
+                    
+                    // Check radius 15 clearance from map edge and any owned tiles
+                    for dy in -15..=15 {
+                        for dx in -15..=15 {
+                            let nx = sx as i32 + dx;
+                            let ny = sy as i32 + dy;
+                            if !game.map.is_valid_coord(nx, ny) || game.map.owner_id(nx as u32, ny as u32) != 0 {
+                                valid = false;
+                                break;
+                            }
+                        }
+                        if !valid { break; }
+                    }
+                    if valid { break; }
+                    tries += 1;
+                }
+
+                if tries < 1000 {
+                    let player = Player::new_bot(bot_id, format!("Tribe {}", i+1), [0.35, 0.35, 0.4]);
+                    game.spawn_player(player, sx, sy);
+                    info!("🤖 Spawned Tribe {} at {},{}", bot_id, sx, sy);
+                } else {
+                    warn!("⚠️ Failed to spawn Tribe {} (no space)", bot_id);
+                }
             }
 
             // Replay missed turns (late-join) — identical behavior to OpenFront
