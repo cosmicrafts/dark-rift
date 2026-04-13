@@ -52,10 +52,6 @@ impl ClientPlayerMap {
     }
 
     fn count(&self) -> usize { self.entries.len() }
-    
-    fn entities(&self) -> impl Iterator<Item = Entity> + '_ {
-        self.entries.iter().map(|(e, _)| *e)
-    }
 }
 
 /// Accumulates StampedIntents between turns.

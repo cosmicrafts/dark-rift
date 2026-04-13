@@ -20,7 +20,6 @@ use lightyear::netcode::prelude::client::NetcodeConfig;
 use lightyear::netcode::auth::Authentication;
 use lightyear::websocket::client::{WebSocketClientIo, WebSocketScheme};
 use aeronet_io::connection::PeerAddr;
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use clap::Parser;
 
@@ -44,9 +43,6 @@ struct MyPlayerId(u16);
 
 #[derive(Resource, Default)]
 struct HoveredTile(Option<(u32, u32)>);
-
-#[derive(Resource, Default)]
-struct GridEntities(HashMap<(u32, u32), Entity>);
 
 #[derive(Resource, Default)]
 struct PendingTicks(u32);
@@ -98,7 +94,6 @@ fn main() {
     .init_resource::<GameReady>()
     .init_resource::<MyPlayerId>()
     .init_resource::<HoveredTile>()
-    .init_resource::<GridEntities>()
     .init_resource::<PendingTicks>()
     .init_resource::<TurnQueue>()
     .init_resource::<HighestReceivedTurn>();
@@ -134,6 +129,8 @@ fn main() {
         update_hud,
         camera_movement_and_zoom,
     ).run_if(game_is_ready));
+
+    app.add_systems(Update, clear_inputs_on_focus_loss);
 
     let mut sim_schedule = Schedule::new(SimulationSchedule);
     sim_schedule.add_systems((
@@ -239,7 +236,6 @@ fn camera_movement_and_zoom(
 fn setup_offline(
     mut commands: Commands,
     mut ready: ResMut<GameReady>,
-    _grid: ResMut<GridEntities>,
     director: NonSend<ReplayDirector>,
     asset_server: Res<AssetServer>,
 ) {
@@ -284,15 +280,8 @@ fn setup_offline(
 
     for y in 0..game.map.height {
         for x in 0..game.map.width {
-            let owner = game.map.owner_id(x, y);
-            let color = color_for_owner(&game, owner);
             let idx = (y * game.map.width + x) as usize;
-            
-            tile_data[idx] = Some(TileData {
-                tileset_index: 0,
-                color: color.into(),
-                ..default()
-            });
+            tile_data[idx] = Some(openfront_tile_color(&game, x as i32, y as i32));
         }
     }
 
@@ -403,7 +392,6 @@ fn handle_server_start(
     mut receivers: Query<&mut MessageReceiver<ServerStartMessage>>,
     mut ready:     ResMut<GameReady>,
     mut my_id:     ResMut<MyPlayerId>,
-    _grid:         ResMut<GridEntities>,
     mut cam_q:     Query<&mut Transform, With<Camera2d>>,
     mut hud_q:     Query<&mut Text, With<HudText>>,
     mut commands:  Commands,
@@ -457,15 +445,8 @@ fn handle_server_start(
 
             for y in 0..game.map.height {
                 for x in 0..game.map.width {
-                    let owner = game.map.owner_id(x, y);
-                    let color = color_for_owner(&game, owner);
                     let idx = (y * game.map.width + x) as usize;
-                    
-                    tile_data[idx] = Some(TileData {
-                        tileset_index: 0,
-                        color: color.into(),
-                        ..default()
-                    });
+                    tile_data[idx] = Some(openfront_tile_color(&game, x as i32, y as i32));
                 }
             }
 
@@ -526,6 +507,19 @@ fn handle_server_turns(
 
 // ─── Input ────────────────────────────────────────────────────────────────────
 
+fn clear_inputs_on_focus_loss(
+    mut events: MessageReader<bevy::window::WindowFocused>,
+    mut mouse:  ResMut<ButtonInput<MouseButton>>,
+    mut kb:     ResMut<ButtonInput<KeyCode>>,
+) {
+    for ev in events.read() {
+        if !ev.focused {
+            mouse.clear();
+            kb.clear();
+        }
+    }
+}
+
 fn hover_system(
     windows:     Query<&Window, With<bevy::window::PrimaryWindow>>,
     camera_q:    Query<(&Camera, &GlobalTransform), With<Camera2d>>,
@@ -583,12 +577,21 @@ fn handle_tile_change(
     if !game.is_changed() { return; }
 
     for ev in &game.events {
-        if let GameEvent::TileCaptured { x, y, new_owner } = ev {
-            let color = color_for_owner(&game, *new_owner);
+        if let GameEvent::TileCaptured { x, y, new_owner: _ } = ev {
+            // OpenFront: update the tile AND its 4 cardinal neighbors (they may flip border/interior)
+            let coords = [
+                (*x as i32, *y as i32),
+                (*x as i32, *y as i32 - 1),
+                (*x as i32, *y as i32 + 1),
+                (*x as i32 - 1, *y as i32),
+                (*x as i32 + 1, *y as i32),
+            ];
             for mut chunk_data in chunks.iter_mut() {
-                let idx = (*y as u32 * config::MAP_WIDTH as u32 + *x as u32) as usize;
-                if idx < chunk_data.len() {
-                    chunk_data[idx] = Some(TileData { color: color.into(), ..default() });
+                for (cx, cy) in coords {
+                    if game.map.is_valid_coord(cx, cy) {
+                        let idx = (cy as u32 * config::MAP_WIDTH as u32 + cx as u32) as usize;
+                        chunk_data[idx] = Some(openfront_tile_color(&game, cx, cy));
+                    }
                 }
             }
         }
@@ -622,15 +625,43 @@ fn update_hud(
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-fn color_for_owner(game: &GameState, owner: u16) -> Color {
+/// Returns the raw [r, g, b] (0..1) for a player, or dark void for unowned.
+fn player_base_color(game: &GameState, owner: u16) -> [f32; 3] {
     if owner == 0 {
-        Color::srgb(0.08, 0.08, 0.12)
-    } else {
-        game.players.iter()
-            .find(|p| p.id == owner)
-            .map(|p| Color::srgb(p.color[0], p.color[1], p.color[2]))
-            .unwrap_or(Color::srgb(0.3, 0.3, 0.3))
+        return [0.08, 0.08, 0.12];
     }
+    game.players.iter()
+        .find(|p| p.id == owner)
+        .map(|p| p.color)
+        .unwrap_or([0.3, 0.3, 0.3])
+}
+
+/// OpenFront-style TileData:
+/// - Border (any cardinal neighbor has different owner) → darken(0.125), alpha 100%
+/// - Interior → base color, alpha 150/255
+fn openfront_tile_color(game: &GameState, cx: i32, cy: i32) -> TileData {
+    let owner = game.map.owner_id(cx as u32, cy as u32);
+    let base = player_base_color(game, owner);
+
+    let is_border = [(cx, cy - 1), (cx + 1, cy), (cx, cy + 1), (cx - 1, cy)]
+        .iter()
+        .any(|&(nx, ny)| {
+            game.map.is_valid_coord(nx, ny)
+                && game.map.owner_id(nx as u32, ny as u32) != owner
+        });
+
+    // Unowned tiles: always paint as dark void, no transparency effect needed
+    let color = if owner == 0 {
+        Color::srgba(base[0], base[1], base[2], 1.0)
+    } else if is_border {
+        // borderColor = territoryColor.darken(0.125), alpha = 255
+        Color::srgba(base[0] * 0.875, base[1] * 0.875, base[2] * 0.875, 1.0)
+    } else {
+        // territoryColor, alpha = 150/255
+        Color::srgba(base[0], base[1], base[2], 150.0 / 255.0)
+    };
+
+    TileData { tileset_index: 0, color, ..default() }
 }
 
 fn rand_client_id() -> u64 {
