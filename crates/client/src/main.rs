@@ -59,46 +59,83 @@ struct TileNode { x: u32, y: u32 }
 #[derive(Component)]
 struct HudText;
 
+#[derive(clap::Parser, Resource, Clone)]
+struct Cli {
+    #[arg(long)]
+    replay: Option<String>,
+    #[arg(long, default_value_t = false)]
+    observer: bool,
+}
+
+#[derive(Resource)]
+struct ReplayDirector {
+    turn_index: usize,
+    record: dark_rift_shared::protocol::ReplayFile,
+    timer: Timer,
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 
 fn main() {
-    App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "Dark Rift — Multiplayer".to_string(),
-                resolution: (1280u32, 720u32).into(),
-                ..default()
-            }),
+    let cli = <Cli as clap::Parser>::parse();
+
+    let mut app = App::new();
+    
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window {
+            title: "Dark Rift — Multiplayer".to_string(),
+            resolution: (1280u32, 720u32).into(),
             ..default()
-        }).disable::<bevy::audio::AudioPlugin>())
-        .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.04)))
-        .add_plugins(SharedProtocolPlugin)
-        .add_plugins(ClientPlugins::default())
-        .init_resource::<GameReady>()
-        .init_resource::<MyPlayerId>()
-        .init_resource::<HoveredTile>()
-        .init_resource::<GridEntities>()
-        .init_resource::<PendingTicks>()
-        .init_resource::<TurnQueue>()
-        .add_systems(Startup, setup)
-        .add_systems(Update, (
+        }),
+        ..default()
+    }).disable::<bevy::audio::AudioPlugin>())
+    .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.04)))
+    .add_plugins(SharedProtocolPlugin)
+    .init_resource::<GameReady>()
+    .init_resource::<MyPlayerId>()
+    .init_resource::<HoveredTile>()
+    .init_resource::<GridEntities>()
+    .init_resource::<PendingTicks>()
+    .init_resource::<TurnQueue>();
+
+    if let Some(path) = cli.replay.clone() {
+        let json = std::fs::read_to_string(&path).expect("Failed to read replay file");
+        let record: dark_rift_shared::protocol::ReplayFile = serde_json::from_str(&json).expect("Failed to deserialize ReplayFile");
+        
+        app.insert_resource(ReplayDirector {
+            turn_index: 0,
+            record,
+            timer: Timer::from_seconds(50.0 / 1000.0, TimerMode::Repeating),
+        });
+
+        app.add_systems(Startup, setup_offline);
+        app.add_systems(Update, system_replay_pulse);
+    } else {
+        // Only load live Networking plugins
+        app.add_plugins(ClientPlugins::default());
+        app.insert_resource(cli); // Pass to setup
+        app.add_systems(Startup, setup_live);
+        app.add_systems(Update, (
             handle_server_start,
             handle_server_turns,
-        ))
-        .add_systems(Update, (
-            hover_system,
-            player_click,
-        ).run_if(game_is_ready))
-        .add_systems(Update, (
-            pop_turn,
-            system_player_income,
-            system_attack_execution,
-            handle_tile_change,
-            update_hud,
-            system_game_tick,
-            decrement_pending,
-        ).chain().run_if(has_pending_ticks))
-        .run();
+            handle_connection,
+        ));
+    }
+
+    app.add_systems(Update, (
+        hover_system,
+        player_click,
+    ).run_if(game_is_ready))
+    .add_systems(Update, (
+        pop_turn,
+        system_player_income,
+        system_attack_execution,
+        handle_tile_change,
+        update_hud,
+        system_game_tick,
+        decrement_pending,
+    ).chain().run_if(has_pending_ticks))
+    .run();
 }
 
 fn game_is_ready(ready: Res<GameReady>) -> bool { ready.0 }
@@ -124,24 +161,77 @@ fn decrement_pending(mut pending: ResMut<PendingTicks>) {
     pending.0 = pending.0.saturating_sub(1);
 }
 
-// ─── Startup ────────────────────────────────────────────────────────────────
+// ─── Replay Offline & Live Handlers ──────────────────────────────────────────
 
-fn setup(mut commands: Commands) {
+fn system_replay_pulse(
+    time: Res<Time>,
+    mut director: ResMut<ReplayDirector>,
+    mut queue: ResMut<TurnQueue>,
+    mut pending: ResMut<PendingTicks>,
+) {
+    if director.timer.tick(time.delta()).just_finished() {
+        if director.turn_index < director.record.turns.len() {
+            queue.0.push_back(director.record.turns[director.turn_index].clone());
+            pending.0 += 1;
+            director.turn_index += 1;
+        }
+    }
+}
+
+fn setup_offline(
+    mut commands: Commands,
+    mut game_ready: ResMut<GameReady>,
+    mut grid: ResMut<GridEntities>,
+    director: Res<ReplayDirector>,
+) {
+    let cx = config::MAP_WIDTH as f32 * TILE_SIZE / 2.0;
+    let cy = config::MAP_HEIGHT as f32 * TILE_SIZE / 2.0;
+    commands.spawn((Camera2d, Transform::from_xyz(cx, cy, 999.0)));
     commands.spawn((
-        Camera2d,
-        Transform::from_xyz(0.0, 0.0, 999.0),
+        Text::new("Replay Viewer"),
+        TextFont { font_size: 20.0, ..default() },
+        TextColor(Color::srgb(0.7, 0.9, 0.7)),
+        Node { position_type: PositionType::Absolute, left: Val::Px(10.0), top: Val::Px(10.0), ..default() },
+        HudText,
     ));
 
+    // Construct the explicit offline game configuration.
+    let mut game = GameState::new(director.record.seed);
+    for info in &director.record.players {
+        let player = Player::new_human(info.id, info.name.clone(), info.color);
+        game.spawn_player(player, info.spawn_x, info.spawn_y);
+    }
+
+    // Spawn identical Map Grid tiles locally
+    for y in 0..game.map.height {
+        for x in 0..game.map.width {
+            let owner = game.map.owner_id(x, y);
+            let color = color_for_owner(&game, owner);
+            let entity = commands.spawn((
+                Sprite {
+                    color,
+                    custom_size: Some(Vec2::new(TILE_SIZE - 0.5, TILE_SIZE - 0.5)),
+                    ..default()
+                },
+                Transform::from_xyz(x as f32 * TILE_SIZE, y as f32 * TILE_SIZE, 0.0),
+                TileNode { x, y },
+            )).id();
+            grid.0.insert((x, y), entity);
+        }
+    }
+
+    // Inject offline GameState + trigger systems
+    commands.insert_resource(game);
+    game_ready.0 = true;
+}
+
+fn setup_live(mut commands: Commands, cli: Res<Cli>) {
+    commands.spawn((Camera2d, Transform::from_xyz(0.0, 0.0, 999.0)));
     commands.spawn((
         Text::new("Connecting to server..."),
         TextFont { font_size: 20.0, ..default() },
         TextColor(Color::srgb(0.7, 0.9, 0.7)),
-        Node {
-            position_type: PositionType::Absolute,
-            left: Val::Px(10.0),
-            top: Val::Px(10.0),
-            ..default()
-        },
+        Node { position_type: PositionType::Absolute, left: Val::Px(10.0), top: Val::Px(10.0), ..default() },
         HudText,
     ));
 
@@ -171,7 +261,22 @@ fn setup(mut commands: Commands) {
     // Trigger Netcode connection (which internally initiates LinkStart)
     commands.trigger(lightyear::prelude::client::Connect { entity: client_entity });
 
-    info!("🔌 Connecting to ws://{}... (client_id={})", SERVER_ADDR, client_id);
+    info!("🔌 Connecting to ws://{}... (client_id={}), observer={}", SERVER_ADDR, client_id, cli.observer);
+}
+
+fn handle_connection(
+    cli: Res<Cli>,
+    mut senders: Query<&mut MessageSender<ClientJoinMessage>>,
+    mut sent: Local<bool>,
+) {
+    if *sent { return; }
+    for mut sender in senders.iter_mut() {
+        let name = format!("Rig-{}", rand_client_id() % 1000);
+        let msg = ClientJoinMessage { name: name.clone(), is_observer: cli.observer };
+        info!("🤝 Dispatching ClientJoinMessage (Observer: {})...", cli.observer);
+        let _ = sender.send::<ReliableChannel>(msg);
+        *sent = true;
+    }
 }
 
 // ─── Network Handlers ────────────────────────────────────────────────────────
@@ -193,8 +298,13 @@ fn handle_server_start(
         for msg in receiver.receive() {
             if ready.0 { continue; }
 
-            info!("🎮 Game starting! I am player {}", msg.my_player_id);
-            my_id.0 = msg.my_player_id;
+            if let Some(pid) = msg.my_player_id {
+                info!("🎮 Game starting! I am player {}", pid);
+                my_id.0 = pid;
+            } else {
+                info!("👁  Game starting! I am an observer");
+                my_id.0 = 0;
+            }
 
             let mut game = GameState::new(msg.seed);
             for info in &msg.players {
@@ -237,7 +347,11 @@ fn handle_server_start(
             ready.0 = true;
 
             if let Ok(mut text) = hud_q.single_mut() {
-                **text = format!("Connected — Player {}", msg.my_player_id);
+                if let Some(pid) = msg.my_player_id {
+                    **text = format!("Connected — Player {}", pid);
+                } else {
+                    **text = "Connected — Observer".to_string();
+                }
             }
         }
     }

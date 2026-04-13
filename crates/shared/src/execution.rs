@@ -85,11 +85,13 @@ pub fn system_player_income(game_opt: Option<ResMut<GameState>>) {
         player.max_troops =
             config::MAX_TROOPS_BASE + (tiles_owned as f64).powf(0.6) * config::MAX_TROOPS_SCALE;
 
-        let raw_income = config::TROOP_BASE_INCOME + (player.troops.powf(0.73) / 4.0);
-        let ratio = 1.0 - (player.troops / player.max_troops).min(1.0);
+        // Defensive clamp against mathematically desyncing NaN generations when troop pool is aggressively drained
+        let safe_troops = player.troops.max(0.0);
+        let raw_income = config::TROOP_BASE_INCOME + (safe_troops.powf(0.73) / 4.0);
+        let ratio = 1.0 - (safe_troops / player.max_troops).min(1.0);
         let income = raw_income * ratio;
 
-        player.troops = (player.troops + income).min(player.max_troops);
+        player.troops = (safe_troops + income).min(player.max_troops);
     }
 }
 
@@ -119,7 +121,7 @@ pub fn system_attack_execution(
                 break;
             }
 
-            if execution.troops < config::EXPAND_COST {
+            if execution.troops < config::EXPAND_COST || execution.troops.is_nan() {
                 // Out of troops! Despawn
                 commands.entity(entity).despawn();
                 break;
@@ -140,6 +142,7 @@ pub fn system_attack_execution(
                 // Apply change!
                 game.map.set_owner_id(target_tile.x, target_tile.y, execution.owner_id);
                 execution.troops -= config::EXPAND_COST;
+                execution.troops = execution.troops.max(0.0);
                 expanded_this_tick += 1;
 
                 // Send event
@@ -152,6 +155,7 @@ pub fn system_attack_execution(
                 // Subtract from player total if player exists
                 if let Some(player) = game.players.iter_mut().find(|p| p.id == execution.owner_id) {
                     player.troops -= config::EXPAND_COST;
+                    player.troops = player.troops.max(0.0);
                 }
 
                 // Enqueue new neutral/enemy neighbors that touch our newly acquired tile

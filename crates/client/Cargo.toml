@@ -11,3 +11,5 @@ rand = { workspace = true }
 lightyear = { workspace = true, features = ["websocket", "client", "netcode"] }
 aeronet_io = { workspace = true }
 aeronet_websocket = { workspace = true }
+clap = { version = "4.6.0", features = ["derive"] }
+serde_json = "1.0.149"

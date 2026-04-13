@@ -9,3 +9,4 @@ bevy = { workspace = true, features = ["bevy_state", "bevy_log"] }
 serde = { workspace = true }
 rand = { workspace = true }
 lightyear = { workspace = true, features = ["websocket", "server", "netcode"] }
+serde_json = "1.0.149"

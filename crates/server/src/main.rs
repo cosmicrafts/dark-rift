@@ -63,14 +63,6 @@ impl ClientPlayerMap {
 #[derive(Resource, Default)]
 struct IntentBuffer(Vec<StampedIntent>);
 
-/// All turns broadcast so far — needed for late-join catchup.
-/// Mirrors OpenFront's `private turns: Turn[]`.
-#[derive(Resource, Default)]
-struct TurnLog {
-    turns: Vec<Turn>,
-    current: u64,
-}
-
 /// Full player roster (for ServerStartMessage).
 #[derive(Resource, Default)]
 struct PlayerRoster(Vec<PlayerInfo>);
@@ -90,7 +82,43 @@ impl Default for GameMetadata {
 #[derive(Resource)]
 struct TurnTimer(Timer);
 
-// ─── Main ───────────────────────────────────────────────────────────────────
+#[derive(Resource)]
+struct ReplayDumpTimer(Timer);
+
+fn system_dump_replay(
+    time: Res<Time>,
+    mut timer: ResMut<ReplayDumpTimer>,
+    log: Res<TurnLog>,
+    metadata: Res<GameMetadata>,
+    roster: Res<PlayerRoster>,
+) {
+    if !metadata.started { return; }
+    if timer.0.tick(time.delta()).just_finished() {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let file_path = format!("replay_{}.json", timestamp);
+
+        // Async dispatch: serialize and write off the ECS main thread
+        // This ensures WebSocket queues never stutter or drop incoming ClientIntents.
+        let log_clone = log.turns.clone();
+        let seed = metadata.seed;
+        let players = roster.0.clone();
+        
+        std::thread::spawn(move || {
+            let record = ReplayFile { seed, players, turns: log_clone };
+            if let Ok(json) = serde_json::to_string(&record) {
+                if std::fs::write(&file_path, json).is_ok() {
+                    // We can't easily `info!` from background thread reliably into Bevy's logger
+                    // without passing an event, so we just let it be silent success offline,
+                    // or print to stdout directly.
+                    println!("[SERVER] 💾 MATCH SAVED: Replay exported to {}", file_path);
+                }
+            }
+        });
+    }
+}
 
 fn main() {
     let mut app = App::new();
@@ -104,7 +132,7 @@ fn main() {
 
     app.init_resource::<ClientPlayerMap>()
        .init_resource::<IntentBuffer>()
-       .init_resource::<TurnLog>()
+       .insert_resource(TurnLog::default())
        .init_resource::<PlayerRoster>()
        .init_resource::<GameMetadata>();
 
@@ -112,12 +140,14 @@ fn main() {
         TURN_INTERVAL_MS / 1000.0,
         TimerMode::Repeating,
     )));
+    app.insert_resource(ReplayDumpTimer(Timer::from_seconds(10.0, TimerMode::Repeating)));
 
     app.add_systems(Startup, setup);
     app.add_systems(Update, (
-        handle_new_clients,
+        handle_client_joins,
         handle_intent_messages,
         system_end_turn,
+        system_dump_replay,
     ));
 
     app.run();
@@ -148,69 +178,67 @@ fn setup(mut commands: Commands) {
 // ─── Connection Handling ────────────────────────────────────────────────────
 
 /// Detect new connected ClientOf entities, register them, auto-start after MIN_PLAYERS.
-/// Mirrors OpenFront's GameServer.ts onConnect() + startGameIfReady() → sendToAll().
-fn handle_new_clients(
+fn handle_client_joins(
     mut client_map: ResMut<ClientPlayerMap>,
     mut roster:     ResMut<PlayerRoster>,
     mut metadata:   ResMut<GameMetadata>,
     turn_log:       Res<TurnLog>,
-    mut senders:    Query<&mut MessageSender<ServerStartMessage>>,
-    new_clients:    Query<Entity, Added<ClientOf>>,
+    mut senders:    Query<(Entity, &mut MessageSender<ServerStartMessage>)>,
+    mut receivers:  Query<(Entity, &mut MessageReceiver<ClientJoinMessage>)>,
 ) {
-    for entity in new_clients.iter() {
-        // Verify the MessageSender component is present (it should be, via add_direction)
-        if senders.get_mut(entity).is_err() {
-            error!("Client {:?} missing MessageSender<ServerStartMessage>! Skipping.", entity);
-            continue;
-        }
+    for (entity, mut receiver) in receivers.iter_mut() {
+        for msg in receiver.receive() {
+            let mut assigned_id = None;
+            
+            if msg.is_observer {
+                info!("👁  Observer joined (name={})", msg.name);
+            } else {
+                let player_id = client_map.register(entity);
+                assigned_id = Some(player_id);
+                let colors = player_colors();
+                let color = colors[(player_id as usize - 1) % colors.len()];
+                let (sx, sy) = pick_spawn(&roster, player_id);
 
-        let player_id = client_map.register(entity);
-        let colors = player_colors();
-        let color = colors[(player_id as usize - 1) % colors.len()];
-        let name = format!("Player {}", player_id);
-        let (sx, sy) = pick_spawn(&roster, player_id);
+                roster.0.push(PlayerInfo { id: player_id, name: msg.name.clone(), color, spawn_x: sx, spawn_y: sy });
+                info!("✅ {} (id={}) joined → spawn({},{})", msg.name, player_id, sx, sy);
+            }
 
-        roster.0.push(PlayerInfo { id: player_id, name: name.clone(), color, spawn_x: sx, spawn_y: sy });
-        info!("✅ {} (id={}) joined → spawn({},{})", name, player_id, sx, sy);
+            let just_started = !metadata.started && client_map.count() >= MIN_PLAYERS;
+            if just_started {
+                metadata.started = true;
+                info!("⚔️  {} players — GAME START!", client_map.count());
+            }
 
-        let just_started = !metadata.started && client_map.count() >= MIN_PLAYERS;
-        if just_started {
-            metadata.started = true;
-            info!("⚔️  {} players — GAME START!", client_map.count());
-        }
+            if !metadata.started {
+                continue; // Still waiting for more players, don't send start yet
+            }
 
-        if !metadata.started {
-            continue; // Still waiting for more players, don't send start yet
-        }
-
-        if just_started {
-            // ── Broadcast to ALL players simultaneously ──────────────────────
-            // Mirrors OpenFront's startGameIfReady() → sendToAll(startGameMsg).
-            // Snapshot entries to avoid borrow-checker issues with the query.
-            let all: Vec<(Entity, u16)> = client_map.entries.clone();
-            for (target, their_id) in all {
-                let msg = ServerStartMessage {
-                    my_player_id: their_id,
+            if just_started {
+                // ── Broadcast to ALL connected clients simultaneously
+                // Anyone with a ServerStartMessage sender gets it!
+                for (target, mut s) in senders.iter_mut() {
+                    let their_id = client_map.player_id(target);
+                    let start_msg = ServerStartMessage {
+                        my_player_id: their_id, // None for observers
+                        seed: metadata.seed,
+                        players: roster.0.clone(),
+                        missed_turns: turn_log.turns.clone(),
+                    };
+                    info!("📨 → ServerStartMessage to Player {:?}", their_id);
+                    let _ = s.send::<ReliableChannel>(start_msg);
+                }
+            } else {
+                // ── Late joiner/Observer: catch up with turn history
+                let out_msg = ServerStartMessage {
+                    my_player_id: assigned_id,
                     seed: metadata.seed,
                     players: roster.0.clone(),
                     missed_turns: turn_log.turns.clone(),
                 };
-                if let Ok(mut s) = senders.get_mut(target) {
-                    info!("📨 → ServerStartMessage to Player {} ({:?})", their_id, target);
-                    let _ = s.send::<ReliableChannel>(msg);
+                if let Ok((_, mut s)) = senders.get_mut(entity) {
+                    info!("📨 → ServerStartMessage (late-join/observer) to {:?}", assigned_id);
+                    let _ = s.send::<ReliableChannel>(out_msg);
                 }
-            }
-        } else {
-            // ── Late joiner: catch up with turn history ───────────────────────
-            let msg = ServerStartMessage {
-                my_player_id: player_id,
-                seed: metadata.seed,
-                players: roster.0.clone(),
-                missed_turns: turn_log.turns.clone(),
-            };
-            if let Ok(mut s) = senders.get_mut(entity) {
-                info!("📨 → ServerStartMessage (late-join) to Player {} ({:?})", player_id, entity);
-                let _ = s.send::<ReliableChannel>(msg);
             }
         }
     }
