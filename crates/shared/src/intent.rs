@@ -107,42 +107,52 @@ pub fn system_bot_think(
     let mut rng = PseudoRandom::new(game.seed.wrapping_add(game.tick));
 
     for bot_id in bot_ids {
-        if rng.next_int(0, 100) < 5 { // 5% chance per tick (~0.5 actions per second)
-            let Some(player) = game.player(bot_id) else { continue; };
-            if player.troops < config::EXPAND_COST { continue; }
+        let Some(player) = game.player(bot_id) else { continue; };
 
-            let borders = game.map.border_tiles_of(bot_id);
-            if borders.is_empty() { continue; }
+        // Organic Pacing:
+        // Attack rate ~30 ticks (3 seconds). We use deterministic modulo based on bot_id.
+        let attack_interval = 30; 
+        if game.tick % attack_interval != (bot_id as u64 % attack_interval) {
+            continue;
+        }
 
-            let r_idx = rng.next_int(0, borders.len() as i32) as usize;
-            let (bx, by) = borders[r_idx];
+        // Trigger Phase: Save troops until we reach 60% capacity
+        let trigger_limit = player.max_troops * 0.6;
+        if player.troops < trigger_limit { continue; }
 
-            let neighbors = game.map.neighbors(bx, by);
-            let mut targets = Vec::new();
-            for (nx, ny) in neighbors {
-                let owner = game.map.owner_id(nx, ny);
-                if owner != bot_id {
-                    targets.push(owner);
-                    if owner == 0 {
-                        // Double priority for expanding into neutral territory
-                        targets.push(0);
-                        targets.push(0);
-                    }
+        // Burst Phase: Send what we have, minus a 30% reserve
+        let reserve = player.max_troops * 0.3;
+        let p_send = (player.troops - reserve).max(0.0);
+        if p_send < config::EXPAND_COST { continue; }
+
+        let borders = game.map.border_tiles_of(bot_id);
+        if borders.is_empty() { continue; }
+
+        let r_idx = rng.next_int(0, borders.len() as i32) as usize;
+        let (bx, by) = borders[r_idx];
+
+        let neighbors = game.map.neighbors(bx, by);
+        let mut targets = Vec::new();
+        for (nx, ny) in neighbors {
+            let owner = game.map.owner_id(nx, ny);
+            if owner != bot_id {
+                targets.push(owner);
+                if owner == 0 {
+                    // Double priority for expanding into neutral territory
+                    targets.push(0);
+                    targets.push(0);
                 }
             }
-
-            if targets.is_empty() { continue; }
-            let target_owner = targets[rng.next_int(0, targets.len() as i32) as usize];
-
-            let required_cost = if target_owner == 0 { config::EXPAND_COST } else { config::ATTACK_COST };
-            if player.troops < required_cost { continue; }
-            
-            let intent = StampedIntent {
-                player_id: bot_id,
-                intent: AttackIntent { target_owner, troops: None }
-            };
-            
-            apply_stamped_intent(&mut commands, &game, &intent, bot_id as u32);
         }
+
+        if targets.is_empty() { continue; }
+        let target_owner = targets[rng.next_int(0, targets.len() as i32) as usize];
+        
+        let intent = StampedIntent {
+            player_id: bot_id,
+            intent: AttackIntent { target_owner, troops: Some(p_send) }
+        };
+        
+        apply_stamped_intent(&mut commands, &game, &intent, bot_id as u32);
     }
 }

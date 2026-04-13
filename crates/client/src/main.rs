@@ -58,6 +58,9 @@ struct TurnQueue(std::collections::VecDeque<Turn>);
 #[derive(Component)]
 struct HudText;
 
+#[derive(Component)]
+struct PlayerLabel(u16);
+
 #[derive(Parser, Resource)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
@@ -129,6 +132,9 @@ fn main() {
         handle_tile_change,
         update_hud,
         camera_movement_and_zoom,
+        system_track_new_attacks,
+        system_sync_floating_text,
+        system_sync_player_labels,
     ).run_if(game_is_ready));
 
     app.add_systems(Update, clear_inputs_on_focus_loss);
@@ -252,7 +258,7 @@ fn setup_offline(
 
     commands.spawn((
         Text::new("Replay Mode"),
-        TextFont { font_size: 20.0, ..default() },
+        TextFont { font_size: 14.0, ..default() },
         TextColor(Color::srgb(0.7, 0.9, 0.7)),
         Node {
             position_type: PositionType::Absolute,
@@ -295,7 +301,11 @@ fn setup_offline(
             ..default()
         },
         TilemapChunkTileData(tile_data),
-        Transform::from_xyz(0.0, 0.0, 0.0),
+        Transform::from_xyz(
+            config::MAP_WIDTH  as f32 * TILE_SIZE / 2.0,
+            config::MAP_HEIGHT as f32 * TILE_SIZE / 2.0,
+            0.0
+        ),
     ));
 
     commands.insert_resource(game);
@@ -310,7 +320,7 @@ fn setup_live(mut commands: Commands, cli: Res<Cli>) {
 
     commands.spawn((
         Text::new("Connecting to server..."),
-        TextFont { font_size: 20.0, ..default() },
+        TextFont { font_size: 14.0, ..default() },
         TextColor(Color::srgb(0.7, 0.9, 0.7)),
         Node {
             position_type: PositionType::Absolute,
@@ -497,7 +507,11 @@ fn handle_server_start(
                     ..default()
                 },
                 TilemapChunkTileData(tile_data),
-                Transform::from_xyz(0.0, 0.0, 0.0),
+                Transform::from_xyz(
+                    config::MAP_WIDTH  as f32 * TILE_SIZE / 2.0,
+                    config::MAP_HEIGHT as f32 * TILE_SIZE / 2.0,
+                    0.0
+                ),
             ));
 
             commands.insert_resource(game);
@@ -548,12 +562,10 @@ fn handle_server_turns(
 
 fn clear_inputs_on_focus_loss(
     mut events: MessageReader<bevy::window::WindowFocused>,
-    mut mouse:  ResMut<ButtonInput<MouseButton>>,
     mut kb:     ResMut<ButtonInput<KeyCode>>,
 ) {
     for ev in events.read() {
         if !ev.focused {
-            mouse.clear();
             kb.clear();
         }
     }
@@ -642,21 +654,14 @@ fn handle_tile_change(
 
 fn update_hud(
     game_opt:  Option<Res<GameState>>,
-    my_id:     Res<MyPlayerId>,
     mut hud_q: Query<&mut Text, With<HudText>>,
 ) {
     let Some(game) = game_opt else { return };
     if !game.is_changed() { return; }
     let Ok(mut text) = hud_q.single_mut() else { return };
 
-    let mut lines = vec![format!("Tick: {}", game.tick)];
-    for p in &game.players {
-        let tiles = game.map.tiles_owned_by(p.id);
-        let you = if p.id == my_id.0 { " ◀ YOU" } else { "" };
-        lines.push(format!("{}: {}t | {}tiles{}", p.name, p.troops as u32, tiles, you));
-    }
+    let final_str = format!("Tick: {}", game.tick);
     
-    let final_str = lines.join("\n");
     if **text != final_str {
         **text = final_str;
     }
@@ -707,4 +712,111 @@ fn rand_client_id() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_nanos();
     nanos as u64
+}
+
+// -------------------------------------------------------------
+// UI: Floating Texts for Attacks (Added dynamically via Observer pattern)
+// -------------------------------------------------------------
+
+fn system_track_new_attacks(
+    mut commands: Commands,
+    q_new_attacks: Query<(Entity, &dark_rift_shared::execution::AttackExecution), Added<dark_rift_shared::execution::AttackExecution>>,
+) {
+    for (entity, exec) in &q_new_attacks {
+        let is_incoming = exec.target_owner != 0; // if hitting terra nulla it's expansion
+        let icon = if is_incoming { "⚔️" } else { "🏳️" };
+        let color = if is_incoming { Color::srgb(1.0, 0.4, 0.4) } else { Color::srgb(0.6, 0.8, 1.0) };
+
+        commands.entity(entity).insert((
+            Text2d::new(format!("{} {:.0}", icon, exec.troops)),
+            TextFont { font_size: 14.0, ..default() },
+            TextColor(color),
+            // Layer 100 for Floating UI
+            Transform::from_xyz(0.0, 0.0, 100.0),
+        ));
+    }
+}
+
+fn system_sync_floating_text(
+    mut q_attacks: Query<(&mut Text2d, &mut Transform, &dark_rift_shared::execution::AttackExecution)>,
+) {
+    for (mut text, mut transform, exec) in &mut q_attacks {
+        let is_incoming = exec.target_owner != 0;
+        let icon = if is_incoming { "⚔️" } else { "🏳️" };
+        text.0 = format!("{} {:.0}", icon, exec.troops);
+        
+        // Peek at the front of the queue to center the text exactly on the frontline
+        if let Some(front) = exec.to_conquer.peek() {
+            transform.translation.x = front.x as f32 * TILE_SIZE;
+            transform.translation.y = front.y as f32 * TILE_SIZE;
+        }
+    }
+}
+
+// -------------------------------------------------------------
+// UI: Floating Player Identifiers (Center of mass on map)
+// -------------------------------------------------------------
+
+fn system_sync_player_labels(
+    mut commands: Commands,
+    game_opt: Option<Res<GameState>>,
+    mut q_labels: Query<(Entity, &mut Text2d, &mut Transform, &PlayerLabel)>,
+) {
+    let Some(game) = game_opt else { return };
+
+    // 1. Despawn labels for dead players
+    for (entity, _, _, label) in &q_labels {
+        let alive = game.players.iter().any(|p| p.id == label.0 && p.alive);
+        if !alive {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    // 2. Spawn labels for alive players if they don't exist
+    for player in game.players.iter().filter(|p| p.alive) {
+        let exists = q_labels.iter().any(|(_, _, _, label)| label.0 == player.id);
+        if !exists {
+            commands.spawn((
+                PlayerLabel(player.id),
+                Text2d::new(format!("{}\n⚔️{:.0}", player.name, player.troops)),
+                TextFont { font_size: 16.0, ..default() },
+                TextColor(Color::WHITE),
+                Transform::from_xyz(0.0, 0.0, 150.0).with_scale(Vec3::splat(0.7)),
+            ));
+        }
+    }
+
+    // 3. Update positions and text based on territory center of mass
+    for (_, mut text, mut transform, label) in q_labels.iter_mut() {
+        let Some(player) = game.player(label.0) else { continue };
+
+        text.0 = format!("{}\n⚔️{:.0}", player.name, player.troops);
+
+        let mut sum_x = 0;
+        let mut sum_y = 0;
+        let mut count = 0;
+        for (idx, &owner) in game.map.state.iter().enumerate() {
+            if owner == player.id {
+                let y = idx as u32 / game.map.width;
+                let x = idx as u32 % game.map.width;
+                sum_x += x;
+                sum_y += y;
+                count += 1;
+            }
+        }
+
+        if count > 0 {
+            let cx = (sum_x as f32 / count as f32) * TILE_SIZE;
+            let cy = (sum_y as f32 / count as f32) * TILE_SIZE;
+            
+            let target = Vec3::new(cx, cy, 150.0);
+            
+            // Just jump directly to target if too far, otherwise float smoothly
+            if transform.translation.distance(target) > 100.0 {
+                transform.translation = target;
+            } else {
+                transform.translation = transform.translation.lerp(target, 0.2);
+            }
+        }
+    }
 }
