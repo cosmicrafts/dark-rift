@@ -1,4 +1,4 @@
-use bevy::prelude::{Event, Resource};
+use bevy::prelude::Resource;
 use serde::{Deserialize, Serialize};
 
 // No more custom bevy event required
@@ -82,9 +82,8 @@ impl GameState {
         }
 
         self.tick += 1;
-        self.events.clear();
-
-        // Game simulation is now driven iteratively by Bevy server Systems.
+        // NOTE: self.events.clear() is intentional omitted here for batched visual processing.
+        // It is safely cleared manually by visual consumers instead (e.g. handle_tile_change).
     }
 
     pub fn player(&self, id: PlayerId) -> Option<&Player> {

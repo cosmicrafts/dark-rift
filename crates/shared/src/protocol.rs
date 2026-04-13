@@ -44,6 +44,7 @@ pub struct Turn {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ClientJoinMessage {
     pub name: String,
+    pub is_observer: bool,
 }
 
 /// Client sends a gameplay intent.
@@ -60,10 +61,26 @@ pub struct ClientIntentMessage {
 /// Mirrors OpenFront's ServerStartGameMessage { gameStartInfo, turns, myClientID }.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ServerStartMessage {
-    pub my_player_id: u16,
+    pub my_player_id: Option<u16>,
     pub seed: u64,
     pub players: Vec<PlayerInfo>,
     pub missed_turns: Vec<Turn>, // For late-joining clients
+}
+
+/// All turns broadcast so far — needed for late-join catchup.
+/// Mirrors OpenFront's `private turns: Turn[]`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, bevy::prelude::Resource)]
+pub struct TurnLog {
+    pub turns: Vec<Turn>,
+    pub current: u64,
+}
+
+/// Offline Replay schema bundle
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ReplayFile {
+    pub seed: u64,
+    pub players: Vec<PlayerInfo>,
+    pub turns: Vec<Turn>,
 }
 
 /// Player descriptor embedded in ServerStartMessage.

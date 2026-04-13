@@ -7,5 +7,6 @@ edition.workspace = true
 dark-rift-shared = { path = "../shared" }
 bevy = { workspace = true, features = ["bevy_state", "bevy_log"] }
 serde = { workspace = true }
+serde_json = "1.0.149"
 rand = { workspace = true }
 lightyear = { workspace = true, features = ["websocket", "server", "netcode"] }
