@@ -49,6 +49,7 @@ pub struct AttackExecution {
     pub owner_id: u16,
     pub target_owner: u16, // 0 = TerraNullius/neutral
     pub troops: f64,
+    pub initial_troops: f64,
     pub to_conquer: BinaryHeap<PrioritizedTile>,
     pub rng: PseudoRandom,
 }

@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::pseudo_random::PseudoRandom;
+
 /// Unique player identifier.
 pub type PlayerId = u16;
 
@@ -81,5 +83,45 @@ pub fn player_colors() -> Vec<[f32; 3]> {
         [0.55, 0.35, 1.0],  // Violet
         [1.0, 0.55, 0.15],  // Orange
         [0.35, 0.9, 0.8],   // Teal
+    ]
+}
+
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
+    let h = h.clamp(0.0, 1.0).fract();
+    let s = s.clamp(0.0, 1.0);
+    let v = v.clamp(0.0, 1.0);
+    let i = (h * 6.0).floor() as i32;
+    let f = h * 6.0 - i as f32;
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - f * s);
+    let t = v * (1.0 - (1.0 - f) * s);
+    let (r, g, b) = match i.rem_euclid(6) {
+        0 => (v, t, p),
+        1 => (q, v, p),
+        2 => (p, v, t),
+        3 => (p, q, v),
+        4 => (t, p, v),
+        _ => (v, p, q),
+    };
+    [r, g, b]
+}
+
+/// Deterministic pastel territory color for bots (OpenFront-style: hue + moderate saturation).
+/// PRNG stream is independent of spawn-placement RNG so map layout stays unchanged.
+pub fn bot_territory_color(game_seed: u64, bot_id: u16) -> [f32; 3] {
+    let mix = game_seed
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (bot_id as u64).wrapping_shl(32)
+        ^ (bot_id as u64);
+    let mut rng = PseudoRandom::new(mix);
+    let h = rng.next_int(0, 10_000) as f32 / 10_000.0;
+    // Saturated enough to read as a color on the map, still softer than `player_colors()`.
+    let s = 0.42 + rng.next_int(0, 1000) as f32 / 1000.0 * 0.24;
+    let v = 0.54 + rng.next_int(0, 1000) as f32 / 1000.0 * 0.22;
+    let [r, g, b] = hsv_to_rgb(h, s, v);
+    [
+        r.clamp(0.14, 0.92),
+        g.clamp(0.14, 0.92),
+        b.clamp(0.14, 0.92),
     ]
 }

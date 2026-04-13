@@ -1,0 +1,9 @@
+(
+    font_path: "../Adventures-Bevy/assets/fonts/Rajdhani-Medium.ttf",
+    font_size: 32.0,
+    outline_thickness: 1.5,
+    outline_color: (0.0, 0.0, 0.0, 1.0),
+    name_color_ally: (0.2, 1.0, 0.4, 1.0),
+    name_color_enemy: (1.0, 0.35, 0.28, 1.0),
+    label_offset_y: 12.0,
+)

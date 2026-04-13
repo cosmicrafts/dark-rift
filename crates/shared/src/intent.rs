@@ -87,6 +87,7 @@ pub fn apply_stamped_intent(
         owner_id: player_id,
         target_owner,
         troops,
+        initial_troops: troops,
         to_conquer,
         rng,
     });

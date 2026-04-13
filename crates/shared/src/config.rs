@@ -37,3 +37,11 @@ pub const TICK_RATE: f64 = 10.0;
 
 /// Percentage of tiles needed to win.
 pub const WIN_PERCENTAGE: f64 = 80.0;
+
+// --- Visual (client tilemap; OpenFront-style parity) ---
+
+/// Alpha for non-border owned tiles (1.0 = fully opaque). Borders always use 1.0.
+pub const TERRITORY_INTERIOR_ALPHA: f32 = 1.0;
+
+/// RGB multiplier for border tiles vs interior (same hue, darker edge). Lower = stronger outline.
+pub const TERRITORY_BORDER_RGB_MULTIPLIER: f32 = 0.58;
