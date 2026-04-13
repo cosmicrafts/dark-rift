@@ -10,7 +10,9 @@
 //!   7. Tile visuals updated from game.events (event-driven, O(events) not O(map))
 
 use bevy::prelude::*;
-use bevy::sprite::Sprite;
+use bevy::sprite_render::{TileData, TilemapChunk, TilemapChunkTileData};
+use bevy::image::{ImageArrayLayout, ImageLoaderSettings};
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use lightyear::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::netcode::{NetcodeClient, Key};
@@ -54,8 +56,7 @@ struct TurnQueue(std::collections::VecDeque<Turn>);
 
 // ─── Components ─────────────────────────────────────────────────────────────
 
-#[derive(Component)]
-struct TileNode;
+// Custom grid hashmap component track mapping Entity ID to spatial location.
 
 #[derive(Component)]
 struct HudText;
@@ -131,6 +132,7 @@ fn main() {
         player_click,
         handle_tile_change,
         update_hud,
+        camera_movement_and_zoom,
     ).run_if(game_is_ready));
 
     let mut sim_schedule = Schedule::new(SimulationSchedule);
@@ -187,13 +189,59 @@ fn decrement_pending(mut pending: ResMut<PendingTicks>) {
     pending.0 = pending.0.saturating_sub(1);
 }
 
+// ─── Camera Controls ────────────────────────────────────────────────────────
+
+fn camera_movement_and_zoom(
+    mut q_camera: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut scroll_evr: MessageReader<MouseWheel>,
+) {
+    for (mut transform, mut projection) in q_camera.iter_mut() {
+        let bevy::prelude::Projection::Orthographic(ref mut ortho) = *projection else { continue };
+        
+        // Zoom
+        let mut zoom = 0.0;
+        for ev in scroll_evr.read() {
+            match ev.unit {
+                MouseScrollUnit::Line => zoom -= ev.y * 0.1,
+                MouseScrollUnit::Pixel => zoom -= ev.y * 0.005,
+            }
+        }
+        
+        if zoom != 0.0 {
+            ortho.scale = (ortho.scale * (1.0 + zoom)).clamp(0.1, 10.0);
+        }
+        
+        // Pan
+        let mut pan = Vec2::ZERO;
+        let speed = 20.0 * ortho.scale;
+        
+        if keyboard_input.pressed(KeyCode::KeyW) || keyboard_input.pressed(KeyCode::ArrowUp) {
+            pan.y += speed;
+        }
+        if keyboard_input.pressed(KeyCode::KeyS) || keyboard_input.pressed(KeyCode::ArrowDown) {
+            pan.y -= speed;
+        }
+        if keyboard_input.pressed(KeyCode::KeyA) || keyboard_input.pressed(KeyCode::ArrowLeft) {
+            pan.x -= speed;
+        }
+        if keyboard_input.pressed(KeyCode::KeyD) || keyboard_input.pressed(KeyCode::ArrowRight) {
+            pan.x += speed;
+        }
+        
+        transform.translation.x += pan.x;
+        transform.translation.y += pan.y;
+    }
+}
+
 // ─── Startup ────────────────────────────────────────────────────────────────
 
 fn setup_offline(
     mut commands: Commands,
     mut ready: ResMut<GameReady>,
-    mut grid: ResMut<GridEntities>,
+    _grid: ResMut<GridEntities>,
     director: NonSend<ReplayDirector>,
+    asset_server: Res<AssetServer>,
 ) {
     commands.spawn((
         Camera2d,
@@ -223,22 +271,41 @@ fn setup_offline(
         game.spawn_player(player, info.spawn_x, info.spawn_y);
     }
 
+    let tileset = asset_server.load_with_settings(
+        "white_array.png",
+        |settings: &mut ImageLoaderSettings| {
+            settings.array_layout = Some(ImageArrayLayout::RowCount { rows: 2 });
+        },
+    );
+
+    let chunk_size = UVec2::new(config::MAP_WIDTH as u32, config::MAP_HEIGHT as u32);
+    let tile_display_size = UVec2::splat(TILE_SIZE as u32);
+    let mut tile_data: Vec<Option<TileData>> = vec![None; (chunk_size.x * chunk_size.y) as usize];
+
     for y in 0..game.map.height {
         for x in 0..game.map.width {
             let owner = game.map.owner_id(x, y);
             let color = color_for_owner(&game, owner);
-            let entity = commands.spawn((
-                Sprite {
-                    color,
-                    custom_size: Some(Vec2::new(TILE_SIZE - 0.5, TILE_SIZE - 0.5)),
-                    ..default()
-                },
-                Transform::from_xyz(x as f32 * TILE_SIZE, y as f32 * TILE_SIZE, 0.0),
-                TileNode,
-            )).id();
-            grid.0.insert((x, y), entity);
+            let idx = (y * game.map.width + x) as usize;
+            
+            tile_data[idx] = Some(TileData {
+                tileset_index: 0,
+                color: color.into(),
+                ..default()
+            });
         }
     }
+
+    commands.spawn((
+        TilemapChunk {
+            chunk_size,
+            tile_display_size,
+            tileset,
+            ..default()
+        },
+        TilemapChunkTileData(tile_data),
+        Transform::from_xyz(0.0, 0.0, 0.0),
+    ));
 
     commands.insert_resource(game);
     ready.0 = true;
@@ -336,13 +403,14 @@ fn handle_server_start(
     mut receivers: Query<&mut MessageReceiver<ServerStartMessage>>,
     mut ready:     ResMut<GameReady>,
     mut my_id:     ResMut<MyPlayerId>,
-    mut grid:      ResMut<GridEntities>,
+    _grid:         ResMut<GridEntities>,
     mut cam_q:     Query<&mut Transform, With<Camera2d>>,
     mut hud_q:     Query<&mut Text, With<HudText>>,
     mut commands:  Commands,
     mut queue:     ResMut<TurnQueue>,
     mut pending:   ResMut<PendingTicks>,
     mut highest:   ResMut<HighestReceivedTurn>,
+    asset_server:  Res<AssetServer>,
 ) {
     for mut receiver in receivers.iter_mut() {
         for msg in receiver.receive() {
@@ -376,23 +444,41 @@ fn handle_server_start(
                 cam.translation = Vec3::new(cx, cy, 999.0);
             }
 
-            // Spawn tile sprites
+            let tileset = asset_server.load_with_settings(
+                "white_array.png",
+                |settings: &mut ImageLoaderSettings| {
+                    settings.array_layout = Some(ImageArrayLayout::RowCount { rows: 2 });
+                },
+            );
+
+            let chunk_size = UVec2::new(config::MAP_WIDTH as u32, config::MAP_HEIGHT as u32);
+            let tile_display_size = UVec2::splat(TILE_SIZE as u32);
+            let mut tile_data: Vec<Option<TileData>> = vec![None; (chunk_size.x * chunk_size.y) as usize];
+
             for y in 0..game.map.height {
                 for x in 0..game.map.width {
                     let owner = game.map.owner_id(x, y);
                     let color = color_for_owner(&game, owner);
-                    let entity = commands.spawn((
-                        Sprite {
-                            color,
-                            custom_size: Some(Vec2::new(TILE_SIZE - 0.5, TILE_SIZE - 0.5)),
-                            ..default()
-                        },
-                        Transform::from_xyz(x as f32 * TILE_SIZE, y as f32 * TILE_SIZE, 0.0),
-                        TileNode,
-                    )).id();
-                    grid.0.insert((x, y), entity);
+                    let idx = (y * game.map.width + x) as usize;
+                    
+                    tile_data[idx] = Some(TileData {
+                        tileset_index: 0,
+                        color: color.into(),
+                        ..default()
+                    });
                 }
             }
+
+            commands.spawn((
+                TilemapChunk {
+                    chunk_size,
+                    tile_display_size,
+                    tileset,
+                    ..default()
+                },
+                TilemapChunkTileData(tile_data),
+                Transform::from_xyz(0.0, 0.0, 0.0),
+            ));
 
             commands.insert_resource(game);
             ready.0 = true;
@@ -491,17 +577,18 @@ fn player_click(
 
 fn handle_tile_change(
     game_opt:    Option<ResMut<GameState>>,
-    grid:        Res<GridEntities>,
-    mut sprites: Query<&mut Sprite>,
+    mut chunks:  Query<&mut TilemapChunkTileData>,
 ) {
     let Some(mut game) = game_opt else { return };
     if !game.is_changed() { return; }
 
     for ev in &game.events {
         if let GameEvent::TileCaptured { x, y, new_owner } = ev {
-            if let Some(&entity) = grid.0.get(&(*x, *y)) {
-                if let Ok(mut sprite) = sprites.get_mut(entity) {
-                    sprite.color = color_for_owner(&game, *new_owner);
+            let color = color_for_owner(&game, *new_owner);
+            for mut chunk_data in chunks.iter_mut() {
+                let idx = (*y as u32 * config::MAP_WIDTH as u32 + *x as u32) as usize;
+                if idx < chunk_data.len() {
+                    chunk_data[idx] = Some(TileData { color: color.into(), ..default() });
                 }
             }
         }

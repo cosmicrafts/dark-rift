@@ -1,2 +1,5 @@
 target/
 .DS_Store
+latest_replay.json
+server.log
+client.log
