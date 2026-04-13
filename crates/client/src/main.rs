@@ -13,6 +13,7 @@ use bevy::prelude::*;
 use bevy::sprite_render::{TileData, TilemapChunk, TilemapChunkTileData};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::post_process::bloom::{Bloom, BloomCompositeMode};
+use bevy_enoki::prelude::*;
 use std::collections::HashMap;
 use bevy::image::{ImageArrayLayout, ImageLoaderSettings};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
@@ -140,6 +141,7 @@ fn main() {
     } else {
         app.add_plugins(SharedProtocolPlugin)
            .add_plugins(ClientPlugins::default())
+           .add_plugins(EnokiPlugin)
            .add_systems(Startup, (setup_live, load_ui_settings))
            .add_systems(Update, (
                handle_server_start,
@@ -160,7 +162,7 @@ fn main() {
     app.add_systems(Update, (
         camera_movement_and_zoom,
         system_track_new_attacks,
-        system_sync_floating_text,
+        system_sync_attack_particles,
         system_sync_player_labels,
     ).run_if(game_is_ready));
 
@@ -952,37 +954,28 @@ fn rand_client_id() -> u64 {
 }
 
 // -------------------------------------------------------------
-// UI: Floating Texts for Attacks (Added dynamically via Observer pattern)
+// VFX: Particles for Attacks 
 // -------------------------------------------------------------
 
 fn system_track_new_attacks(
     mut commands: Commands,
+    asset_server: Res<AssetServer>,
     q_new_attacks: Query<(Entity, &dark_rift_shared::execution::AttackExecution), Added<dark_rift_shared::execution::AttackExecution>>,
 ) {
-    for (entity, exec) in &q_new_attacks {
-        let is_incoming = exec.target_owner != 0; // if hitting terra nulla it's expansion
-        let icon = if is_incoming { ">>>" } else { "---" };
-        let color = if is_incoming { Color::srgb(1.0, 0.4, 0.4) } else { Color::srgb(0.6, 0.8, 1.0) };
-
+    for (entity, _exec) in &q_new_attacks {
         commands.entity(entity).insert((
-            Text2d::new(format!("{} {:.0}", icon, exec.troops)),
-            TextFont { font_size: 14.0, ..default() },
-            TextColor(color),
-            // Layer 100 for Floating UI
+            ParticleSpawner::<ColorParticle2dMaterial>::default(),
+            ParticleEffectHandle(asset_server.load("enoki_impact.ron")),
             Transform::from_xyz(0.0, 0.0, 100.0),
         ));
     }
 }
 
-fn system_sync_floating_text(
-    mut q_attacks: Query<(&mut Text2d, &mut Transform, &dark_rift_shared::execution::AttackExecution)>,
+fn system_sync_attack_particles(
+    mut q_attacks: Query<(&mut Transform, &dark_rift_shared::execution::AttackExecution), With<ParticleEffectHandle>>,
 ) {
-    for (mut text, mut transform, exec) in &mut q_attacks {
-        let is_incoming = exec.target_owner != 0;
-        let icon = if is_incoming { ">>>" } else { "---" };
-        text.0 = format!("{} {:.0}", icon, exec.troops);
-        
-        // Peek at the front of the queue to center the text exactly on the frontline
+    for (mut transform, exec) in &mut q_attacks {
+        // Peek at the front of the queue to center the vfx exactly on the frontline
         if let Some(front) = exec.to_conquer.peek() {
             transform.translation.x = front.x as f32 * TILE_SIZE;
             transform.translation.y = front.y as f32 * TILE_SIZE;
