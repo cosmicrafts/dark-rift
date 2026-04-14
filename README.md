@@ -4,6 +4,9 @@
 
 Welcome to **Dark Rift**, the ECS-driven (Bevy + Lightyear) child of OpenFront.
 
+## UI assets (Bevypunk)
+
+The HUD uses 9-sliced panel and button textures taken from the [Bevypunk](https://github.com/IDEDARY/Bevypunk) sample project, licensed **MIT OR Apache-2.0** (same as Bevypunk). They live under `assets/ui/bevypunk/`.
 
 ## Philosophy: "Organic Feel" vs Strict Math
 In OpenFront (Typescript), we achieved an incredible dynamic combat feel: attacks looked alive, expanding like mycelium, waves, and organic tentacles. When porting this to Rust for flawless Lockstep synchronization and WASM/Mobile cross-play, we quickly realized that a 1-to-1 math translation wasn't enough. Rust is mathematically rigid, and its standard library contracts exposed deep underlying flaws that Typescript's V8 engine implicitly hid.

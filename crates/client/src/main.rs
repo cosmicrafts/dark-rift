@@ -1506,7 +1506,7 @@ fn system_sync_outgoing_attack_rows(
                     ChildOf(slot),
                     OutgoingAttackRowRoot,
                     UiLayout::window()
-                        .anchor(Anchor::TopLeft)
+                        .anchor(Anchor::TOP_LEFT)
                         .pos(Ab((8.0, 4.0)))
                         .size(Rl((98.0, 16.0)))
                         .pack(),
@@ -1523,7 +1523,7 @@ fn system_sync_outgoing_attack_rows(
                     ChildOf(row_e),
                     OutgoingAttackLineText,
                     UiLayout::window()
-                        .anchor(Anchor::CenterLeft)
+                        .anchor(Anchor::CENTER_LEFT)
                         .pos(Rl((4.0, 50.0)))
                         .size(Rl((78.0, 75.0)))
                         .pack(),
@@ -1546,21 +1546,21 @@ fn system_sync_outgoing_attack_rows(
                     ChildOf(row_e),
                     CancelAttackButton(exec_id),
                     UiLayout::window()
-                        .anchor(Anchor::CenterRight)
+                        .anchor(Anchor::CENTER_RIGHT)
                         .pos(Rl((97.0, 50.0)))
                         .size(Rw(7.5))
                         .pack(),
                     UiLayout::new(vec![
                         (
                             UiBase::id(),
-                            UiLayout::window().anchor(Anchor::Center).full().pack(),
+                            UiLayout::window().anchor(Anchor::CENTER).full().wrap(),
                         ),
                         (
                             UiHover::id(),
                             UiLayout::window()
-                                .anchor(Anchor::Center)
+                                .anchor(Anchor::CENTER)
                                 .size(Rl((112.0, 112.0)))
-                                .pack(),
+                                .wrap(),
                         ),
                     ]),
                     UiHover::new().forward_speed(18.0).backward_speed(14.0),
@@ -1576,24 +1576,27 @@ fn system_sync_outgoing_attack_rows(
                 .observe(hover_set::<Pointer<Over>, true>)
                 .observe(hover_set::<Pointer<Out>, false>)
                 .observe(observe_cancel_attack)
-                .with_children(|x| {
-                    x.spawn((
-                        UiLayout::window()
-                            .anchor(Anchor::Center)
-                            .size(Rh(40.0))
-                            .pack(),
-                        UiTextSize::from(Rh(36.0)),
-                        Text2d::new("✕"),
-                        TextFont {
-                            font,
-                            font_size: 56.0,
-                            weight: FontWeight::BOLD,
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                        NoLunexPicking,
-                        UiDepth::Add(2.0),
-                    ));
+                .with_children({
+                    let font_x = font.clone();
+                    move |x| {
+                        x.spawn((
+                            UiLayout::window()
+                                .anchor(Anchor::CENTER)
+                                .size(Rh(40.0))
+                                .pack(),
+                            UiTextSize::from(Rh(36.0)),
+                            Text2d::new("✕"),
+                            TextFont {
+                                font: font_x.clone(),
+                                font_size: 56.0,
+                                weight: FontWeight::BOLD,
+                                ..default()
+                            },
+                            TextColor(Color::WHITE),
+                            NoLunexPicking,
+                            UiDepth::Add(2.0),
+                        ));
+                    }
                 });
 
             row_map.0.insert(exec_id, (row_e, text_e));
