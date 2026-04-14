@@ -37,6 +37,7 @@ fn build_attack_frontier(
     player_id: u16,
     target_owner: u16,
     rng: &mut PseudoRandom,
+    insert_seq_counter: &mut u32,
 ) -> BinaryHeap<PrioritizedTile> {
     let mut to_conquer = BinaryHeap::new();
     for (bx, by) in game.map.border_tiles_of(player_id) {
@@ -52,18 +53,23 @@ fn build_attack_frontier(
                 .count() as u32;
 
             let terrain = game.map.terrain_type(nx, ny);
-            let mag = match terrain {
-                TerrainType::Plains => 1.0f32,
-                TerrainType::Highland => 1.5,
-                TerrainType::Mountain => 2.0,
-                _ => 1.0,
+            let mag_x2 = match terrain {
+                TerrainType::Plains => 2,
+                TerrainType::Highland => 3,
+                TerrainType::Mountain => 4,
+                _ => 2,
             };
-            let r = rng.next_int(0, 7) as f32;
-            let prio = (r + 10.0) * (1.0 - (num_owned_by_me as f32) * 0.5 + mag / 2.0)
-                + game.tick as f32;
+            let r = rng.next_int(0, 7) as i64;
+            // Formula scaled by 4 to maintain OpenFront quartiles in integer space
+            let prio = (r + 10) * (4 - (num_owned_by_me as i64 * 2) + mag_x2)
+                + (game.tick as i64 * 4);
+            
+            let seq = *insert_seq_counter;
+            *insert_seq_counter = insert_seq_counter.wrapping_add(1);
 
             to_conquer.push(PrioritizedTile {
                 priority: prio,
+                insert_seq: seq,
                 x: nx,
                 y: ny,
             });
@@ -155,7 +161,7 @@ fn apply_attack_intent(
         let Ok((_, mut enemy_ex)) = q_exec.get_mut(*e_enemy) else {
             continue;
         };
-        if enemy_ex.troops < config::EXPAND_COST {
+        if enemy_ex.troops < config::ATTACK_COST {
             continue;
         }
         let clash = enemy_ex.troops.min(remaining);
@@ -187,7 +193,8 @@ fn apply_attack_intent(
             .wrapping_add(game.tick)
             .wrapping_add(intent_index as u64),
     );
-    let fresh = build_attack_frontier(game, player_id, target_owner, &mut rng);
+    let mut initial_seq = 0;
+    let fresh = build_attack_frontier(game, player_id, target_owner, &mut rng, &mut initial_seq);
 
     if fresh.is_empty() {
         if let Some(p) = game.players.iter_mut().find(|p| p.id == player_id) {
@@ -225,6 +232,7 @@ fn apply_attack_intent(
         troops: remaining,
         initial_troops: remaining,
         to_conquer: fresh,
+        insert_seq_counter: initial_seq,
         rng,
         retreating: false,
     });

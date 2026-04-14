@@ -14,26 +14,22 @@ pub struct PlayerExecutionTag {
     pub player_id: u16,
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrioritizedTile {
-    pub priority: f32, // Lower is processed first
+    pub priority: i64, // Lower is processed first
+    pub insert_seq: u32, // Deterministic BFS tie-breaker
     pub x: u32,
     pub y: u32,
 }
 
-impl Eq for PrioritizedTile {}
-
 impl Ord for PrioritizedTile {
     fn cmp(&self, other: &Self) -> Ordering {
         // Reverse order so lowest priority behaves as max in BinaryHeap
-        match other.priority.partial_cmp(&self.priority).unwrap_or(Ordering::Equal) {
+        match other.priority.cmp(&self.priority) {
             Ordering::Equal => {
-                // Secondary sort by coordinate to ensure 100% determinism 
-                // between identically scored priority tiles.
-                match other.y.cmp(&self.y) {
-                    Ordering::Equal => other.x.cmp(&self.x),
-                    ord => ord,
-                }
+                // Return exact Insertion Time inverse!
+                // Older items (smallest insert_seq) pop FIRST, guaranteeing deterministic BFS organicity!
+                other.insert_seq.cmp(&self.insert_seq) 
             },
             ord => ord,
         }
@@ -54,21 +50,23 @@ pub struct AttackExecution {
     pub troops: f64,
     pub initial_troops: f64,
     pub to_conquer: BinaryHeap<PrioritizedTile>,
+    pub insert_seq_counter: u32,
     pub rng: PseudoRandom,
     /// Player cancelled via HUD; next tick refunds remaining troops (with penalty vs players).
     pub retreating: bool,
 }
 
 impl AttackExecution {
-    pub fn calc_priority(&mut self, num_owned_by_me: u32, terrain: TerrainType, tick: u64) -> f32 {
-        let mag = match terrain {
-            TerrainType::Plains => 1.0,
-            TerrainType::Highland => 1.5,
-            TerrainType::Mountain => 2.0,
-            _ => 1.0,
+    pub fn calc_priority(&mut self, num_owned_by_me: u32, terrain: TerrainType, tick: u64) -> i64 {
+        let mag_x2 = match terrain {
+            TerrainType::Plains => 2,
+            TerrainType::Highland => 3,
+            TerrainType::Mountain => 4,
+            _ => 2,
         };
-        let r = self.rng.next_int(0, 7) as f32;
-        (r + 10.0) * (1.0 - (num_owned_by_me as f32) * 0.5 + mag / 2.0) + (tick as f32)
+        let r = self.rng.next_int(0, 7) as i64;
+        // Formula scaled by 4 to maintain OpenFront quartiles in integer space
+        (r + 10) * (4 - (num_owned_by_me as i64 * 2) + mag_x2) + (tick as i64 * 4)
     }
 }
 
@@ -143,7 +141,7 @@ pub fn system_attack_execution(
             continue;
         }
 
-        let mut max_tiles_f32 = if execution.target_owner == 0 {
+        let max_tiles_f32 = if execution.target_owner == 0 {
             // Neutral expansion speed: grows purely with attack troops
             let base_speed = execution.troops as f32 / 50.0;
             base_speed.max(1.0).min(50.0) // At least 1, max 50
@@ -191,19 +189,10 @@ pub fn system_attack_execution(
                     continue; // Skip, edge was severed
                 }
 
-                // VALID CONQUEST
-                // Apply change!
-                game.map.set_owner_id(target_tile.x, target_tile.y, execution.owner_id);
-                execution.troops -= config::EXPAND_COST;
+                // Troops were reserved on intent; only drain execution pool per tile (OpenFront).
+                execution.troops -= crate::config::EXPAND_COST;
                 execution.troops = execution.troops.max(0.0);
                 expanded_this_tick += 1;
-
-                // Send event
-                game.events.push(GameEvent::TileCaptured {
-                    x: target_tile.x,
-                    y: target_tile.y,
-                    new_owner: execution.owner_id,
-                });
 
                 // Troops were reserved on intent; only drain execution pool per tile (OpenFront).
 
@@ -224,13 +213,29 @@ pub fn system_attack_execution(
 
                     let terrain = game.map.terrain_type(nx, ny);
                     let prio = execution.calc_priority(num_owned_by_me, terrain, tick_now);
+                    let seq = execution.insert_seq_counter;
+                    execution.insert_seq_counter = execution.insert_seq_counter.wrapping_add(1);
 
                     execution.to_conquer.push(PrioritizedTile {
                         priority: prio,
+                        insert_seq: seq,
                         x: nx,
                         y: ny,
                     });
                 }
+
+                // VALID CONQUEST
+                // Apply change AFTER enqueuing neighbors, mimicking OpenFront's `this._owner.conquer`
+                // This ensures new neighbors don't artificially lower their priority by counting this tile as friendly yet!
+                // Guaranteed BFS spread without DFS spikes!
+                game.map.set_owner_id(target_tile.x, target_tile.y, execution.owner_id);
+
+                // Send event
+                game.events.push(GameEvent::TileCaptured {
+                    x: target_tile.x,
+                    y: target_tile.y,
+                    new_owner: execution.owner_id,
+                });
             } else {
                 let refund = execution.troops.max(0.0);
                 if refund > 0.0 && refund.is_finite() {

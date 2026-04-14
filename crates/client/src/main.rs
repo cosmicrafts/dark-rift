@@ -43,7 +43,11 @@ use dark_rift_shared::protocol::*;
 use dark_rift_shared::pseudo_random::PseudoRandom;
 
 mod settings;
+mod ui_shell;
+mod ui_theme;
 use settings::*;
+use ui_shell::*;
+use ui_theme::*;
 
 const TILE_SIZE: f32 = 8.0;
 const SERVER_ADDR: &str = "127.0.0.1:5005";
@@ -247,7 +251,8 @@ fn main() {
     .init_resource::<AttackRatio>()
     .init_resource::<OutgoingAttackRowMap>()
     .init_resource::<NetTiming>()
-    .init_resource::<OverlayDiagnostics>();
+    .init_resource::<OverlayDiagnostics>()
+    .init_resource::<UiShellState>();
 
     if let Some(path) = is_replay {
         let file = std::fs::read_to_string(&path)
@@ -265,6 +270,7 @@ fn main() {
             (
                 load_client_settings,
                 init_attack_ratio_from_ui_settings,
+                setup_hud_shell,
                 setup_offline,
             )
                 .chain(),
@@ -280,6 +286,7 @@ fn main() {
                 (
                     load_client_settings,
                     init_attack_ratio_from_ui_settings,
+                    setup_hud_shell,
                     setup_live,
                     setup_combat_vfx,
                 )
@@ -292,7 +299,7 @@ fn main() {
            ).chain());
     }
 
-    app.add_systems(Update, system_update_perf_overlay);
+    app.add_systems(Update, (system_update_ui_shell_state, system_apply_ui_shell_layout, system_update_perf_overlay));
 
     app.add_systems(Update, (
         hover_system,
@@ -303,6 +310,7 @@ fn main() {
         handle_tile_change,
         system_animate_tile_colors,
         update_hud,
+        system_apply_responsive_hud_layout,
         system_sync_bottom_combat_hud,
         system_sync_outgoing_attack_rows,
         system_handle_cancel_click,
@@ -488,6 +496,7 @@ fn setup_offline(
     asset_server: Res<AssetServer>,
     settings: Res<ClientSettings>,
     mut overlay: ResMut<OverlayDiagnostics>,
+    shell: Res<HudShellRegions>,
 ) {
     commands.spawn((
         Camera2d,
@@ -509,18 +518,17 @@ fn setup_offline(
 
     commands
         .spawn((
+            ChildOf(shell.top_bar),
             Node {
-                position_type: PositionType::Absolute,
-                right: Val::Px(12.0),
-                top: Val::Px(10.0),
+                width: Val::Auto,
                 min_width: Val::Px(228.0),
                 padding: UiRect::all(Val::Px(8.0)),
                 border: UiRect::all(Val::Px(1.0)),
                 border_radius: BorderRadius::all(Val::Px(8.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.1, 0.11, 0.14, 0.9)),
-            BorderColor::all(Color::srgba(0.32, 0.34, 0.4, 0.95)),
+            BackgroundColor(panel_bg()),
+            BorderColor::all(panel_border()),
         ))
         .with_children(|p| {
             p.spawn((
@@ -531,7 +539,7 @@ fn setup_offline(
                     font_size: 13.0,
                     ..default()
                 },
-                TextColor(Color::srgba(0.72, 0.82, 0.94, 0.95)),
+                TextColor(text_secondary()),
             ));
         });
 
@@ -583,6 +591,7 @@ fn setup_live(
     cli: Res<Cli>,
     settings: Res<ClientSettings>,
     mut overlay: ResMut<OverlayDiagnostics>,
+    shell: Res<HudShellRegions>,
 ) {
     let mut cmd = commands.spawn((
         Camera2d,
@@ -603,18 +612,17 @@ fn setup_live(
 
     commands
         .spawn((
+            ChildOf(shell.top_bar),
             Node {
-                position_type: PositionType::Absolute,
-                right: Val::Px(12.0),
-                top: Val::Px(10.0),
+                width: Val::Auto,
                 min_width: Val::Px(228.0),
                 padding: UiRect::all(Val::Px(8.0)),
                 border: UiRect::all(Val::Px(1.0)),
                 border_radius: BorderRadius::all(Val::Px(8.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.1, 0.11, 0.14, 0.9)),
-            BorderColor::all(Color::srgba(0.32, 0.34, 0.4, 0.95)),
+            BackgroundColor(panel_bg()),
+            BorderColor::all(panel_border()),
         ))
         .with_children(|p| {
             p.spawn((
@@ -625,16 +633,14 @@ fn setup_live(
                     font_size: 13.0,
                     ..default()
                 },
-                TextColor(Color::srgba(0.72, 0.82, 0.94, 0.95)),
+                TextColor(text_secondary()),
             ));
         });
 
     // Home Button
     commands.spawn((
+        ChildOf(shell.action_dock),
         Node {
-            position_type: PositionType::Absolute,
-            right: Val::Px(20.0),
-            bottom: Val::Px(20.0),
             width: Val::Px(100.0),
             height: Val::Px(60.0),
             justify_content: JustifyContent::Center,
@@ -645,7 +651,7 @@ fn setup_live(
         },
         Button,
         HomeButton,
-        BackgroundColor(Color::srgb(0.9, 0.4, 0.0)),
+        BackgroundColor(accent_home()),
         BorderColor::all(Color::WHITE),
     )).with_children(|b| {
         b.spawn((
@@ -781,7 +787,7 @@ fn system_update_perf_overlay(
 }
 
 /// Bottom-center stack: attack summary (OpenFront `AttacksDisplay`) + ratio slider row (`ControlPanel` row 2).
-fn spawn_bottom_combat_hud(commands: &mut Commands, observer: bool) {
+fn spawn_bottom_combat_hud(commands: &mut Commands, shell: &HudShellRegions, observer: bool) {
     let vis = if observer {
         Visibility::Hidden
     } else {
@@ -789,14 +795,12 @@ fn spawn_bottom_combat_hud(commands: &mut Commands, observer: bool) {
     };
     commands
         .spawn((
+            ChildOf(shell.bottom_sheet),
             BottomHudRoot,
             RelativeCursorPosition::default(),
             vis,
             Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                right: Val::Px(0.0),
-                bottom: Val::Px(86.0),
+                width: Val::Percent(100.0),
                 align_items: AlignItems::Center,
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(6.0),
@@ -806,8 +810,9 @@ fn spawn_bottom_combat_hud(commands: &mut Commands, observer: bool) {
         .with_children(|root| {
             root.spawn((
                 Node {
-                    min_width: Val::Px(260.0),
-                    max_width: Val::Px(520.0),
+                    width: Val::Percent(92.0),
+                    min_width: Val::Px(220.0),
+                    max_width: Val::Px(620.0),
                     padding: UiRect::all(Val::Px(8.0)),
                     flex_direction: FlexDirection::Column,
                     row_gap: Val::Px(4.0),
@@ -815,33 +820,38 @@ fn spawn_bottom_combat_hud(commands: &mut Commands, observer: bool) {
                     border_radius: BorderRadius::all(Val::Px(8.0)),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.1, 0.11, 0.14, 0.92)),
-                BorderColor::all(Color::srgba(0.32, 0.34, 0.4, 0.95)),
+                BackgroundColor(panel_bg()),
+                BorderColor::all(panel_border()),
                 AttackSummaryText,
                 Text::new(""),
                 TextFont {
                     font_size: 12.0,
                     ..default()
                 },
-                TextColor(Color::srgba(0.9, 0.92, 0.96, 1.0)),
+                TextColor(text_primary()),
             ));
 
             root.spawn((
                 OutgoingRowsContainer,
                 Node {
-                    min_width: Val::Px(260.0),
-                    max_width: Val::Px(520.0),
+                    width: Val::Percent(92.0),
+                    min_width: Val::Px(220.0),
+                    max_width: Val::Px(620.0),
                     flex_direction: FlexDirection::Column,
                     row_gap: Val::Px(4.0),
+                    max_height: Val::Px(220.0),
+                    overflow: Overflow::scroll_y(),
                     ..default()
                 },
             ));
 
             root.spawn(Node {
-                width: Val::Px(400.0),
+                width: Val::Percent(92.0),
+                max_width: Val::Px(620.0),
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
                 column_gap: Val::Px(10.0),
+                flex_wrap: FlexWrap::Wrap,
                 ..default()
             })
             .with_children(|row| {
@@ -891,7 +901,7 @@ fn spawn_bottom_combat_hud(commands: &mut Commands, observer: bool) {
                                     height: Val::Percent(100.0),
                                     ..default()
                                 },
-                                BackgroundColor(Color::srgb(0.32, 0.52, 0.92)),
+                                BackgroundColor(accent_primary()),
                             ));
                             bar.spawn((
                                 Node {
@@ -920,6 +930,7 @@ fn handle_server_start(
     mut highest:   ResMut<HighestReceivedTurn>,
     mut net:       ResMut<NetTiming>,
     mut overlay:   ResMut<OverlayDiagnostics>,
+    shell:         Res<HudShellRegions>,
     asset_server:  Res<AssetServer>,
 ) {
     for mut receiver in receivers.iter_mut() {
@@ -1045,7 +1056,7 @@ fn handle_server_start(
             commands.insert_resource(game);
             ready.0 = true;
 
-            spawn_bottom_combat_hud(&mut commands, msg.my_player_id.is_none());
+            spawn_bottom_combat_hud(&mut commands, &shell, msg.my_player_id.is_none());
 
             if msg.my_player_id.is_some() {
                 overlay.status_line = format!("Connected — Player {:?}", msg.my_player_id);
@@ -1267,7 +1278,7 @@ fn system_home_button(
     for (interaction, mut color) in interaction_q.iter_mut() {
         match *interaction {
             Interaction::Pressed => {
-                *color = Color::srgb(0.7, 0.3, 0.0).into(); 
+                *color = accent_home_pressed().into();
                 // Home the camera
                 let mut target_pos = None;
                 for (lbl_trans, lbl) in labels_q.iter() {
@@ -1284,10 +1295,10 @@ fn system_home_button(
                 }
             }
             Interaction::Hovered => {
-                *color = Color::srgb(1.0, 0.5, 0.0).into();
+                *color = accent_home_hover().into();
             }
             Interaction::None => {
-                *color = Color::srgb(0.9, 0.4, 0.0).into();
+                *color = accent_home().into();
             }
         }
     }
@@ -1437,6 +1448,54 @@ fn update_hud(
     
     if **text != final_str {
         **text = final_str;
+    }
+}
+
+fn system_apply_responsive_hud_layout(
+    ui_shell: Res<UiShellState>,
+    mut nodes: ParamSet<(
+        Query<&mut Node, With<BottomHudRoot>>,
+        Query<&mut Node, With<AttackRatioTrack>>,
+        Query<&mut Node, With<OutgoingRowsContainer>>,
+        Query<&mut Node, (With<HomeButton>, With<Button>)>,
+    )>,
+) {
+    let compact = matches!(ui_shell.breakpoint, UiBreakpoint::Compact);
+
+    {
+        let mut root_q = nodes.p0();
+        let Ok(mut root_node) = root_q.single_mut() else {
+            return;
+        };
+        root_node.row_gap = Val::Px(if compact { 8.0 } else { 6.0 });
+    }
+
+    {
+        let mut track_q = nodes.p1();
+        let Ok(mut track_node) = track_q.single_mut() else {
+            return;
+        };
+        track_node.height = Val::Px(if compact { 18.0 } else { 12.0 });
+    }
+
+    {
+        let mut outgoing_q = nodes.p2();
+        let Ok(mut outgoing_node) = outgoing_q.single_mut() else {
+            return;
+        };
+        outgoing_node.max_height = Val::Px(if compact { 180.0 } else { 220.0 });
+    }
+
+    let mut home_q = nodes.p3();
+    if let Ok(mut home_node) = home_q.single_mut() {
+        let size = match ui_shell.breakpoint {
+            UiBreakpoint::Compact => 44.0,
+            UiBreakpoint::Medium => 52.0,
+            UiBreakpoint::Wide => 60.0,
+        };
+        home_node.width = Val::Px(size * 1.6);
+        home_node.height = Val::Px(size);
+        home_node.border_radius = BorderRadius::all(Val::Px(if compact { 10.0 } else { 12.0 }));
     }
 }
 
@@ -1597,6 +1656,7 @@ fn system_sync_outgoing_attack_rows(
     q_exec: Query<&AttackExecution>,
     my_id: Res<MyPlayerId>,
     settings: Res<ClientSettings>,
+    ui_shell: Res<UiShellState>,
     mut row_map: ResMut<OutgoingAttackRowMap>,
     mut q_line: Query<&mut Text, With<OutgoingAttackLineText>>,
 ) {
@@ -1635,6 +1695,7 @@ fn system_sync_outgoing_attack_rows(
     }
 
     for exec in outgoing {
+        let (cancel_w, cancel_h) = touch_target_for_breakpoint(ui_shell.breakpoint);
         let who = if exec.target_owner == 0 {
             "Neutral".to_string()
         } else {
@@ -1671,11 +1732,11 @@ fn system_sync_outgoing_attack_rows(
                         column_gap: Val::Px(8.0),
                         padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
                         border: UiRect::all(Val::Px(1.0)),
-                        border_radius: BorderRadius::all(Val::Px(14.0)),
+                        border_radius: BorderRadius::all(Val::Px(panel_radius_for_breakpoint(ui_shell.breakpoint))),
                         ..default()
                     },
-                    BackgroundColor(Color::srgba(0.16, 0.2, 0.28, 0.82)),
-                    BorderColor::all(Color::srgba(0.38, 0.48, 0.58, 0.5)),
+                    BackgroundColor(panel_bg()),
+                    BorderColor::all(panel_border()),
                 ))
                 .id();
 
@@ -1689,7 +1750,7 @@ fn system_sync_outgoing_attack_rows(
                         font_size: 11.5,
                         ..default()
                     },
-                    TextColor(Color::srgba(0.92, 0.94, 0.98, 1.0)),
+                    TextColor(text_primary()),
                     Node {
                         flex_grow: 1.0,
                         ..default()
@@ -1703,15 +1764,15 @@ fn system_sync_outgoing_attack_rows(
                     Button,
                     CancelAttackButton(exec_id),
                     Node {
-                        width: Val::Px(32.0),
-                        height: Val::Px(28.0),
+                        width: Val::Px(cancel_w),
+                        height: Val::Px(cancel_h),
                         justify_content: JustifyContent::Center,
                         align_items: AlignItems::Center,
                         border_radius: BorderRadius::all(Val::Px(8.0)),
                         ..default()
                     },
-                    BackgroundColor(Color::srgba(0.52, 0.2, 0.18, 0.88)),
-                    BorderColor::all(Color::srgba(0.95, 0.5, 0.45, 0.85)),
+                    BackgroundColor(accent_danger()),
+                    BorderColor::all(accent_danger_border()),
                 ))
                 .with_children(|b| {
                     b.spawn((

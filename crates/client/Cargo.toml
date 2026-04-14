@@ -15,4 +15,5 @@ aeronet_io = { workspace = true }
 aeronet_websocket = { workspace = true }
 ron = "0.8.1"
 bevy_enoki = "0.6.0"
+bevy_lunex = "0.6"
 
