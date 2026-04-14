@@ -10,12 +10,14 @@
 //!   7. Tile visuals updated from game.events (event-driven, O(events) not O(map))
 
 use bevy::prelude::*;
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::text::FontWeight;
 use bevy::ui::RelativeCursorPosition;
 use bevy::mesh::prelude::{Mesh2d, Meshable};
 use bevy::sprite_render::{ColorMaterial, MeshMaterial2d, TileData, TilemapChunk, TilemapChunkTileData};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::post_process::bloom::{Bloom, BloomCompositeMode};
+use bevy_enoki::prelude::*;
 use std::collections::{HashMap, HashSet};
 use bevy::image::{ImageArrayLayout, ImageLoaderSettings};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
@@ -27,6 +29,7 @@ use lightyear::netcode::auth::Authentication;
 use lightyear::websocket::client::{WebSocketClientIo, WebSocketScheme};
 use aeronet_io::connection::PeerAddr;
 use std::net::SocketAddr;
+use std::time::{Duration, Instant};
 use clap::Parser;
 
 use dark_rift_shared::config;
@@ -44,6 +47,15 @@ use settings::*;
 
 const TILE_SIZE: f32 = 8.0;
 const SERVER_ADDR: &str = "127.0.0.1:5005";
+
+/// Perf overlay: refresh FPS readout at most ~4×/s (avoids jittery every-frame text).
+const PERF_OVERLAY_FPS_INTERVAL: Duration = Duration::from_millis(250);
+/// Latency / turn-cadence line: update ~every 1.5s (handshake + EMA are cheap; layout is not).
+const PERF_OVERLAY_NET_INTERVAL: Duration = Duration::from_millis(1600);
+
+/// Simulation ticks applied per Bevy frame while draining `PendingTicks`.
+/// Previously up to 100/frame caused multi‑second stalls and huge `GameEvent` batches.
+const CLIENT_CATCHUP_MAX_TICKS_PER_FRAME: u32 = 8;
 
 // ─── Resources ──────────────────────────────────────────────────────────────
 
@@ -77,6 +89,42 @@ struct HomeButton;
 
 #[derive(Component)]
 struct HudText;
+
+#[derive(Resource)]
+struct OverlayDiagnostics {
+    status_line: String,
+    fps_value: String,
+    ping_value: String,
+}
+
+impl Default for OverlayDiagnostics {
+    fn default() -> Self {
+        Self {
+            status_line: "Connecting to server...".to_string(),
+            fps_value: "…".to_string(),
+            ping_value: "…".to_string(),
+        }
+    }
+}
+
+/// Throttles perf overlay text updates (FPS vs ping lines at different rates).
+#[derive(Default)]
+struct PerfOverlayUiState {
+    last_fps_refresh: Option<Instant>,
+    last_net_refresh: Option<Instant>,
+    cached_fps: String,
+    cached_ping: String,
+}
+
+/// Client-side network timing: handshake (Connect → first `ServerStartMessage`) and EMA spacing
+/// between `ServerTurnMessage` arrivals (rough “server bundle” cadence vs load).
+#[derive(Resource, Default)]
+struct NetTiming {
+    connect_started: Option<Instant>,
+    handshake_ms: Option<f32>,
+    last_turn_at: Option<Instant>,
+    turn_spacing_ema_ms: f32,
+}
 
 #[derive(Component)]
 struct PlayerLabel(u16);
@@ -113,6 +161,16 @@ impl Default for AttackRatio {
 
 #[derive(Component)]
 struct BottomHudRoot;
+
+#[derive(Resource, Default)]
+struct CombatVfxCache(Handle<Particle2dEffect>);
+
+/// An independent entity that tracks an attack and emits Enoki particles
+#[derive(Component)]
+struct CombatVfx {
+    target_exec: Entity,
+    exec_id: u64,
+}
 
 /// Multiline panel: incoming (↓) / outgoing (↑) like `AttacksDisplay.ts`.
 #[derive(Component)]
@@ -177,6 +235,7 @@ fn main() {
         }),
         ..default()
     }).disable::<bevy::audio::AudioPlugin>())
+    .add_plugins(FrameTimeDiagnosticsPlugin::default())
     .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.04)))
     .add_systems(Startup, setup_attack_ring_mesh)
     .insert_resource(cli)
@@ -189,7 +248,9 @@ fn main() {
     .init_resource::<CameraDragState>()
     .init_resource::<FreshlyPaintedTiles>()
     .init_resource::<AttackRatio>()
-    .init_resource::<OutgoingAttackRowMap>();
+    .init_resource::<OutgoingAttackRowMap>()
+    .init_resource::<NetTiming>()
+    .init_resource::<OverlayDiagnostics>();
 
     if let Some(path) = is_replay {
         let file = std::fs::read_to_string(&path)
@@ -204,18 +265,26 @@ fn main() {
 
         app.add_systems(
             Startup,
-            (load_client_settings, init_attack_ratio_from_ui_settings, setup_offline).chain(),
+            (
+                load_client_settings,
+                init_attack_ratio_from_ui_settings,
+                setup_offline,
+            )
+                .chain(),
         )
            .add_systems(Update, system_replay_pulse);
     } else {
         app.add_plugins(SharedProtocolPlugin)
            .add_plugins(ClientPlugins::default())
+           .add_plugins(EnokiPlugin)
+           .init_resource::<CombatVfxCache>()
             .add_systems(
                 Startup,
                 (
                     load_client_settings,
                     init_attack_ratio_from_ui_settings,
                     setup_live,
+                    setup_combat_vfx,
                 )
                     .chain(),
             )
@@ -225,6 +294,8 @@ fn main() {
                handle_connection,
            ).chain());
     }
+
+    app.add_systems(Update, system_update_perf_overlay);
 
     app.add_systems(Update, (
         hover_system,
@@ -248,6 +319,8 @@ fn main() {
     
     app.add_systems(Update, (
         camera_movement_and_zoom,
+        system_spawn_attack_vfx.run_if(|settings: Res<ClientSettings>| settings.config.visuals.enable_combat_particles),
+        system_sync_attack_vfx_position.run_if(|settings: Res<ClientSettings>| settings.config.visuals.enable_combat_particles),
         system_sync_player_labels.run_if(|settings: Res<ClientSettings>| settings.config.visuals.enable_floating_labels),
     ).run_if(game_is_ready));
 
@@ -279,7 +352,9 @@ fn catchup_fast_forward(world: &mut World) {
     let pending = world.resource::<PendingTicks>().0;
     if pending == 0 { return; }
     
-    let process_count = if pending > 5 { 100.min(pending) } else { 1 };
+    let process_count = pending
+        .min(CLIENT_CATCHUP_MAX_TICKS_PER_FRAME)
+        .max(1) as usize;
     
     for _ in 0..process_count {
         if world.resource::<PendingTicks>().0 == 0 { break; }
@@ -566,6 +641,11 @@ fn setup_live(mut commands: Commands, cli: Res<Cli>, settings: Res<ClientSetting
         ),
     )).id();
 
+    commands.insert_resource(NetTiming {
+        connect_started: Some(Instant::now()),
+        ..default()
+    });
+
     // Trigger Netcode connection (which internally initiates LinkStart)
     commands.trigger(lightyear::prelude::client::Connect { entity: client_entity });
 
@@ -609,6 +689,81 @@ fn system_replay_pulse(
 
 fn init_attack_ratio_from_ui_settings(ui: Res<ClientSettings>, mut ratio: ResMut<AttackRatio>) {
     ratio.0 = ui.config.ui.attack_ratio.clamp(0.01, 1.0);
+}
+
+fn spawn_perf_overlay(mut commands: Commands, settings: Res<ClientSettings>) {
+    commands.spawn((
+        PerfOverlayText,
+        Text::new("FPS: …\nPing: …"),
+        TextFont {
+            font: settings.font.clone(),
+            font_size: 13.0,
+            ..default()
+        },
+        TextColor(Color::srgba(0.72, 0.82, 0.94, 0.92)),
+        Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(12.0),
+            top: Val::Px(10.0),
+            ..default()
+        },
+    ));
+}
+
+fn system_update_perf_overlay(
+    diagnostics: Res<DiagnosticsStore>,
+    net: Res<NetTiming>,
+    cli: Res<Cli>,
+    mut q: Query<&mut Text, With<PerfOverlayText>>,
+    mut throttle: Local<PerfOverlayUiState>,
+) {
+    let now = Instant::now();
+
+    let refresh_fps = throttle
+        .last_fps_refresh
+        .map(|t| now.duration_since(t) >= PERF_OVERLAY_FPS_INTERVAL)
+        .unwrap_or(true);
+    let refresh_net = throttle
+        .last_net_refresh
+        .map(|t| now.duration_since(t) >= PERF_OVERLAY_NET_INTERVAL)
+        .unwrap_or(true);
+
+    if refresh_fps {
+        throttle.last_fps_refresh = Some(now);
+        throttle.cached_fps = diagnostics
+            .get(&FrameTimeDiagnosticsPlugin::FPS)
+            .and_then(|v| v.value())
+            .map(|f| format!("{f:.1}"))
+            .unwrap_or_else(|| "—".to_string());
+    }
+
+    if refresh_net {
+        throttle.last_net_refresh = Some(now);
+        throttle.cached_ping = if cli.replay.is_some() {
+            "offline".to_string()
+        } else if net.handshake_ms.is_none() && net.connect_started.is_some() {
+            "connecting…".to_string()
+        } else if let Some(hs) = net.handshake_ms {
+            if net.turn_spacing_ema_ms > 1.0 {
+                format!("{hs:.0} ms hs · ~{:.0} ms/turn", net.turn_spacing_ema_ms)
+            } else {
+                format!("{hs:.0} ms hs")
+            }
+        } else {
+            "…".to_string()
+        };
+    }
+
+    if !(refresh_fps || refresh_net) {
+        return;
+    }
+
+    let body = format!("FPS: {}\nPing: {}", throttle.cached_fps, throttle.cached_ping);
+    if let Ok(mut text) = q.single_mut() {
+        if **text != body {
+            **text = body;
+        }
+    }
 }
 
 /// Bottom-center stack: attack summary (OpenFront `AttacksDisplay`) + ratio slider row (`ControlPanel` row 2).
@@ -750,11 +905,18 @@ fn handle_server_start(
     mut queue:     ResMut<TurnQueue>,
     mut pending:   ResMut<PendingTicks>,
     mut highest:   ResMut<HighestReceivedTurn>,
+    mut net:       ResMut<NetTiming>,
     asset_server:  Res<AssetServer>,
 ) {
     for mut receiver in receivers.iter_mut() {
         for msg in receiver.receive() {
             if ready.0 { continue; }
+
+            if net.handshake_ms.is_none() {
+                if let Some(t0) = net.connect_started.take() {
+                    net.handshake_ms = Some(t0.elapsed().as_secs_f32() * 1000.0);
+                }
+            }
 
             if let Some(pid) = msg.my_player_id {
                 info!("🎮 Game starting! I am player {}", pid);
@@ -891,6 +1053,7 @@ struct HighestReceivedTurn(Option<u64>);
 fn handle_server_turns(
     mut receivers: Query<&mut MessageReceiver<ServerTurnMessage>>,
     ready:         Res<GameReady>,
+    mut net:       ResMut<NetTiming>,
     mut queue:     ResMut<TurnQueue>,
     mut pending:   ResMut<PendingTicks>,
     mut highest:   ResMut<HighestReceivedTurn>,
@@ -905,6 +1068,17 @@ fn handle_server_turns(
                 }
             }
             highest.0 = Some(msg.turn.turn_number);
+
+            let now = Instant::now();
+            if let Some(prev) = net.last_turn_at {
+                let dt_ms = now.duration_since(prev).as_secs_f32() * 1000.0;
+                if net.turn_spacing_ema_ms <= 0.0 {
+                    net.turn_spacing_ema_ms = dt_ms;
+                } else {
+                    net.turn_spacing_ema_ms = net.turn_spacing_ema_ms * 0.92 + dt_ms * 0.08;
+                }
+            }
+            net.last_turn_at = Some(now);
 
             queue.0.push_back(msg.turn);
             pending.0 += 1;
@@ -1741,6 +1915,90 @@ fn system_sync_player_labels(
                 p_font.font_size = font_px;
                 p_font.weight = FontWeight::SEMIBOLD;
             }
+        }
+    }
+}
+
+// ─── Enoki Combat VFX ────────────────────────────────────────────────────────
+
+fn setup_combat_vfx(mut commands: Commands, asset_server: Res<AssetServer>) {
+    let effect = asset_server.load("enoki_impact.ron");
+    commands.insert_resource(CombatVfxCache(effect));
+}
+
+fn system_spawn_attack_vfx(
+    mut commands: Commands,
+    q_attacks: Query<(Entity, &AttackExecution)>,
+    q_vfx: Query<&CombatVfx>,
+    vfx_cache: Res<CombatVfxCache>,
+    game_opt: Option<Res<GameState>>,
+) {
+    let Some(game) = game_opt else { return };
+    // Track ones that already have VFX
+    let mut tracked = HashSet::new();
+    for vfx in &q_vfx {
+        tracked.insert(vfx.target_exec);
+    }
+
+    for (attack_ent, attack) in &q_attacks {
+        if tracked.contains(&attack_ent) { continue; }
+        if attack.retreating { continue; }
+
+        let active_target = match attack.to_conquer.peek() {
+            Some(t) => t,
+            None => continue,
+        };
+
+        // Determine target world position
+        let wx = (active_target.x as f32 + 0.5) * TILE_SIZE;
+        let wy = (active_target.y as f32 + 0.5) * TILE_SIZE;
+
+        let spawn_pos = Vec2::new(wx, wy);
+
+        // Fetch attacker's color
+        let actor_color = if let Some(player) = game.players.iter().find(|p| p.id == attack.owner_id) {
+            Color::srgba(player.color[0], player.color[1], player.color[2], 1.0)
+        } else {
+            Color::WHITE
+        };
+
+        commands.spawn((
+            CombatVfx {
+                target_exec: attack_ent,
+                exec_id: attack.id,
+            },
+            Transform::from_xyz(spawn_pos.x, spawn_pos.y, 110.0),
+            ParticleSpawner::<ColorParticle2dMaterial>::default(),
+            ParticleEffectHandle(vfx_cache.0.clone()),
+        ));
+    }
+}
+
+fn system_sync_attack_vfx_position(
+    mut commands: Commands,
+    q_attacks: Query<&AttackExecution>,
+    mut q_vfx: Query<(Entity, &CombatVfx, &mut Transform)>,
+) {
+    for (vfx_ent, vfx, mut target_t) in &mut q_vfx {
+        if let Ok(attack) = q_attacks.get(vfx.target_exec) {
+            // Despawn if attack is retreating or queue is empty
+            if attack.retreating || attack.to_conquer.is_empty() {
+                commands.entity(vfx_ent).despawn();
+                continue;
+            }
+
+            // Sync visual position continuously to current target tile logic
+            if let Some(front) = attack.to_conquer.peek() {
+                let wx = (front.x as f32 + 0.5) * TILE_SIZE;
+                let wy = (front.y as f32 + 0.5) * TILE_SIZE;
+                
+                // Exponential decay interpolation for smooth VFX gliding
+                let target_pos = Vec3::new(wx, wy, 110.0);
+                target_t.translation = target_t.translation.lerp(target_pos, 0.4);
+            }
+        } else {
+            // Target AttackExecution died/merged/resolved, clean up VFX independent shadow
+            commands.entity(vfx_ent).despawn();
         }
     }
 }

@@ -1,6 +1,6 @@
 (
     visuals: (
-        enable_combat_particles: false,
+        enable_combat_particles: true,
         enable_hdr_bloom: true,
         enable_territory_expansion_animations: true,
         enable_floating_labels: true,
