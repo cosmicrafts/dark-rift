@@ -26,3 +26,33 @@ To organically tie-break priorities without resorting to Floating Point Math (`f
 ---
 ### 🤖 OpenClaw Integration Test
 This repository is currently being orchestrated and optimized via OpenClaw AI. Automated deployments, config management, and stress-testing logic have been validated.
+
+## Deployment & Orchestration
+
+The `run_cluster.py` script has been supercharged to act as an all-in-one orchestrator for local development, cloud deployment, web (WASM) building, and stress testing.
+
+### Usage Modes
+
+**1. Default (Local Dev)**
+```bash
+./run_cluster.py
+```
+*Builds and runs 1 local server and 2 local clients connecting to it (127.0.0.1:5005).*
+
+**2. Cloud Deploy (Server)**
+```bash
+./run_cluster.py --deploy <VPS_IP>
+```
+*Compiles the server locally in release mode, rsyncs the binary and assets to the target VPS, configures a `darkrift-server` systemd service, and restarts it automatically.*
+
+**3. Web Deploy (WASM)**
+```bash
+./run_cluster.py --deploy <VPS_IP> --web
+```
+*After deploying the server, compiles the client to WebAssembly, binds it, and rsyncs the bundled web version directly to the VPS Nginx directory (`/var/www/worldofunreal.com/darkrift`).*
+
+**4. Stress Test**
+```bash
+./run_cluster.py --stress 120 --server <VPS_IP:5005>
+```
+*Spawns 120 local instances of the client pointing to the given cloud server IP to test its limits.*

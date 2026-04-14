@@ -11,9 +11,13 @@
 
 use bevy::prelude::*;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
+use bevy::input::touch::Touches;
+use bevy::picking::hover::HoverMap;
+use bevy::picking::pointer::PointerId;
 use bevy::text::FontWeight;
-use bevy::ui::RelativeCursorPosition;
 use bevy::mesh::prelude::{Mesh2d, Meshable};
+use bevy_lunex::prelude::*;
+use bevy_lunex::{NoLunexPicking, RecomputeUiLayout};
 use bevy::sprite_render::{ColorMaterial, MeshMaterial2d, TileData, TilemapChunk, TilemapChunkTileData};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::post_process::bloom::{Bloom, BloomCompositeMode};
@@ -43,14 +47,13 @@ use dark_rift_shared::protocol::*;
 use dark_rift_shared::pseudo_random::PseudoRandom;
 
 mod settings;
-mod ui_shell;
+mod ui_lunex_hud;
 mod ui_theme;
 use settings::*;
-use ui_shell::*;
+use ui_lunex_hud::*;
 use ui_theme::*;
 
 const TILE_SIZE: f32 = 8.0;
-const SERVER_ADDR: &str = "127.0.0.1:5005";
 
 /// Perf overlay: refresh FPS readout at most ~4×/s (avoids jittery every-frame text).
 const PERF_OVERLAY_FPS_INTERVAL: Duration = Duration::from_millis(250);
@@ -67,10 +70,10 @@ const CLIENT_CATCHUP_MAX_TICKS_PER_FRAME: u32 = 8;
 struct GameReady(bool);
 
 #[derive(Resource, Default)]
-pub struct MyPlayerId(pub u16);
+pub(crate) struct MyPlayerId(pub u16);
 
 #[derive(Resource, Default)]
-pub struct CameraDragState {
+pub(crate) struct CameraDragState {
     pub accumulated_drag: f32,
     pub is_dragging: bool,
 }
@@ -87,12 +90,6 @@ struct TurnQueue(std::collections::VecDeque<Turn>);
 // ─── Components ─────────────────────────────────────────────────────────────
 
 // Custom grid hashmap component track mapping Entity ID to spatial location.
-
-#[derive(Component)]
-struct HomeButton;
-
-#[derive(Component)]
-struct HudText;
 
 #[derive(Resource)]
 struct OverlayDiagnostics {
@@ -129,7 +126,7 @@ struct NetTiming {
 }
 
 #[derive(Component)]
-struct PlayerLabel(u16);
+pub(crate) struct PlayerLabel(pub u16);
 
 /// Last applied `TextFont.font_size` for this label; avoids redundant layout when unchanged.
 #[derive(Component)]
@@ -161,9 +158,6 @@ impl Default for AttackRatio {
     }
 }
 
-#[derive(Component)]
-struct BottomHudRoot;
-
 #[derive(Resource, Default)]
 struct CombatVfxCache(Handle<Particle2dEffect>);
 
@@ -172,34 +166,6 @@ struct CombatVfxCache(Handle<Particle2dEffect>);
 struct CombatVfx {
     target_exec: Entity,
 }
-
-/// Multiline panel: incoming (↓) / outgoing (↑) like `AttacksDisplay.ts`.
-#[derive(Component)]
-struct AttackSummaryText;
-
-/// "⚔ NN% (MMM trp)" readout next to the slider rail.
-#[derive(Component)]
-struct AttackRatioReadout;
-
-#[derive(Component)]
-struct AttackRatioTrack;
-
-#[derive(Component)]
-struct AttackRatioFill;
-
-/// Parent node for dynamically rebuilt outgoing attack rows (cancel buttons).
-#[derive(Component)]
-struct OutgoingRowsContainer;
-
-/// Root UI row for one outgoing attack (stable across frames for click handling).
-#[derive(Component)]
-struct OutgoingAttackRowRoot;
-
-#[derive(Component)]
-struct OutgoingAttackLineText;
-
-#[derive(Component)]
-struct CancelAttackButton(u64);
 
 #[derive(Resource, Default)]
 struct OutgoingAttackRowMap(std::collections::HashMap<u64, (Entity, Entity)>);
@@ -214,6 +180,10 @@ struct Cli {
     /// Play a replay file locally
     #[arg(short, long)]
     replay: Option<String>,
+
+    /// Server address
+    #[arg(short, long, default_value = "127.0.0.1:5005")]
+    server: String,
 }
 
 struct ReplayDirector {
@@ -236,6 +206,7 @@ fn main() {
         }),
         ..default()
     }).disable::<bevy::audio::AudioPlugin>())
+    .add_plugins(UiLunexPlugins)
     .add_plugins(FrameTimeDiagnosticsPlugin::default())
     .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.04)))
     .add_systems(Startup, setup_attack_ring_mesh)
@@ -270,7 +241,6 @@ fn main() {
             (
                 load_client_settings,
                 init_attack_ratio_from_ui_settings,
-                setup_hud_shell,
                 setup_offline,
             )
                 .chain(),
@@ -286,7 +256,6 @@ fn main() {
                 (
                     load_client_settings,
                     init_attack_ratio_from_ui_settings,
-                    setup_hud_shell,
                     setup_live,
                     setup_combat_vfx,
                 )
@@ -299,21 +268,19 @@ fn main() {
            ).chain());
     }
 
-    app.add_systems(Update, (system_update_ui_shell_state, system_apply_ui_shell_layout, system_update_perf_overlay));
+    app.add_systems(Update, (system_update_ui_shell_state, system_update_perf_overlay));
 
     app.add_systems(Update, (
         hover_system,
         system_attack_ratio_keyboard,
         system_attack_ratio_slider_drag,
         player_click,
-        system_home_button,
         handle_tile_change,
         system_animate_tile_colors,
         update_hud,
-        system_apply_responsive_hud_layout,
+        system_apply_responsive_lunex_hud,
         system_sync_bottom_combat_hud,
         system_sync_outgoing_attack_rows,
-        system_handle_cancel_click,
     ).run_if(game_is_ready))
     .add_systems(
         Update,
@@ -401,11 +368,22 @@ fn camera_movement_and_zoom(
     keyboard_input: Res<ButtonInput<KeyCode>>,
     mouse_input: Res<ButtonInput<MouseButton>>,
     touches: Res<Touches>,
+    hover_map: Res<HoverMap>,
+    hud_block: Query<(), With<HudBlocksMapClicks>>,
     mut scroll_evr: MessageReader<MouseWheel>,
     mut motion_evr: MessageReader<bevy::input::mouse::MouseMotion>,
     mut drag_state: ResMut<CameraDragState>,
 ) {
-    if mouse_input.just_pressed(MouseButton::Left) || touches.any_just_pressed() {
+    let press_on_hud = mouse_input.just_pressed(MouseButton::Left)
+        && hover_map_has_blocker(&hover_map, PointerId::Mouse, &hud_block);
+    let touch_on_hud = touches.iter().any(|t| {
+        touches.just_pressed(t.id())
+            && hover_map_has_blocker(&hover_map, PointerId::Touch(t.id()), &hud_block)
+    });
+    if (mouse_input.just_pressed(MouseButton::Left) || touches.any_just_pressed())
+        && !press_on_hud
+        && !touch_on_hud
+    {
         drag_state.is_dragging = true;
         drag_state.accumulated_drag = 0.0;
     }
@@ -496,52 +474,36 @@ fn setup_offline(
     asset_server: Res<AssetServer>,
     settings: Res<ClientSettings>,
     mut overlay: ResMut<OverlayDiagnostics>,
-    shell: Res<HudShellRegions>,
 ) {
-    commands.spawn((
-        Camera2d,
-        Tonemapping::TonyMcMapface,
-        Bloom {
-            intensity: 0.15,
-            composite_mode: BloomCompositeMode::Additive,
-            ..default()
-        },
-        Transform::from_xyz(
-            config::MAP_WIDTH  as f32 * TILE_SIZE / 2.0,
-            config::MAP_HEIGHT as f32 * TILE_SIZE / 2.0,
-            999.0
-        ),
-    ));
+    let cam = commands
+        .spawn((
+            Camera2d,
+            Tonemapping::TonyMcMapface,
+            Bloom {
+                intensity: 0.15,
+                composite_mode: BloomCompositeMode::Additive,
+                ..default()
+            },
+            UiSourceCamera::<0>,
+            Transform::from_xyz(
+                config::MAP_WIDTH as f32 * TILE_SIZE / 2.0,
+                config::MAP_HEIGHT as f32 * TILE_SIZE / 2.0,
+                999.0,
+            ),
+        ))
+        .id();
 
     overlay.status_line = "Replay Mode".to_string();
     overlay.ping_value = "offline".to_string();
 
-    commands
-        .spawn((
-            ChildOf(shell.top_bar),
-            Node {
-                width: Val::Auto,
-                min_width: Val::Px(228.0),
-                padding: UiRect::all(Val::Px(8.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(8.0)),
-                ..default()
-            },
-            BackgroundColor(panel_bg()),
-            BorderColor::all(panel_border()),
-        ))
-        .with_children(|p| {
-            p.spawn((
-                HudText,
-                Text::new("Replay Mode\nTick: 0\nFPS: …\nPing: offline"),
-                TextFont {
-                    font: settings.font.clone(),
-                    font_size: 13.0,
-                    ..default()
-                },
-                TextColor(text_secondary()),
-            ));
-        });
+    let hud = spawn_lunex_hud_offline(
+        &mut commands,
+        cam,
+        &asset_server,
+        settings.font.clone(),
+        "Replay Mode\nTick: 0\nFPS: …\nPing: offline",
+    );
+    commands.insert_resource(hud);
 
     let mut game = GameState::new(director.record.seed);
     for info in &director.record.players {
@@ -590,78 +552,38 @@ fn setup_live(
     mut commands: Commands,
     cli: Res<Cli>,
     settings: Res<ClientSettings>,
+    asset_server: Res<AssetServer>,
     mut overlay: ResMut<OverlayDiagnostics>,
-    shell: Res<HudShellRegions>,
 ) {
-    let mut cmd = commands.spawn((
+    let mut cam_ec = commands.spawn((
         Camera2d,
         Tonemapping::TonyMcMapface,
+        UiSourceCamera::<0>,
         Transform::from_xyz(0.0, 0.0, 999.0),
     ));
-    
+
     if settings.config.visuals.hdr_bloom_enabled() {
-        cmd.insert(Bloom {
+        cam_ec.insert(Bloom {
             intensity: 0.15,
             composite_mode: BloomCompositeMode::Additive,
             ..default()
         });
     }
+    let cam = cam_ec.id();
 
     overlay.status_line = "Connecting to server...".to_string();
     overlay.ping_value = "connecting…".to_string();
 
-    commands
-        .spawn((
-            ChildOf(shell.top_bar),
-            Node {
-                width: Val::Auto,
-                min_width: Val::Px(228.0),
-                padding: UiRect::all(Val::Px(8.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(8.0)),
-                ..default()
-            },
-            BackgroundColor(panel_bg()),
-            BorderColor::all(panel_border()),
-        ))
-        .with_children(|p| {
-            p.spawn((
-                HudText,
-                Text::new("Connecting to server...\nTick: 0\nFPS: …\nPing: connecting…"),
-                TextFont {
-                    font: settings.font.clone(),
-                    font_size: 13.0,
-                    ..default()
-                },
-                TextColor(text_secondary()),
-            ));
-        });
+    let hud = spawn_lunex_hud_live(
+        &mut commands,
+        cam,
+        &asset_server,
+        settings.font.clone(),
+        "Connecting to server...\nTick: 0\nFPS: …\nPing: connecting…",
+    );
+    commands.insert_resource(hud);
 
-    // Home Button
-    commands.spawn((
-        ChildOf(shell.action_dock),
-        Node {
-            width: Val::Px(100.0),
-            height: Val::Px(60.0),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            border: UiRect::all(Val::Px(4.0)),
-            border_radius: BorderRadius::all(Val::Px(12.0)),
-            ..default()
-        },
-        Button,
-        HomeButton,
-        BackgroundColor(accent_home()),
-        BorderColor::all(Color::WHITE),
-    )).with_children(|b| {
-        b.spawn((
-            Text::new("HOME"),
-            TextFont { font_size: 24.0, ..default() },
-            TextColor(Color::WHITE),
-        ));
-    });
-
-    let server_addr: SocketAddr = SERVER_ADDR.parse().unwrap();
+    let server_addr: SocketAddr = cli.server.parse().expect("Invalid server address format");
     let client_id = rand_client_id();
 
     let mut netcode_cfg = NetcodeConfig::default();
@@ -695,7 +617,7 @@ fn setup_live(
     // Trigger Netcode connection (which internally initiates LinkStart)
     commands.trigger(lightyear::prelude::client::Connect { entity: client_entity });
 
-    info!("🔌 Connecting to ws://{}... (client_id={}), observer={}", SERVER_ADDR, client_id, cli.observer);
+    info!("🔌 Connecting to ws://{}... (client_id={}), observer={}", cli.server, client_id, cli.observer);
 }
 
 fn handle_connection(
@@ -786,137 +708,6 @@ fn system_update_perf_overlay(
     }
 }
 
-/// Bottom-center stack: attack summary (OpenFront `AttacksDisplay`) + ratio slider row (`ControlPanel` row 2).
-fn spawn_bottom_combat_hud(commands: &mut Commands, shell: &HudShellRegions, observer: bool) {
-    let vis = if observer {
-        Visibility::Hidden
-    } else {
-        Visibility::Visible
-    };
-    commands
-        .spawn((
-            ChildOf(shell.bottom_sheet),
-            BottomHudRoot,
-            RelativeCursorPosition::default(),
-            vis,
-            Node {
-                width: Val::Percent(100.0),
-                align_items: AlignItems::Center,
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(6.0),
-                ..default()
-            },
-        ))
-        .with_children(|root| {
-            root.spawn((
-                Node {
-                    width: Val::Percent(92.0),
-                    min_width: Val::Px(220.0),
-                    max_width: Val::Px(620.0),
-                    padding: UiRect::all(Val::Px(8.0)),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(4.0),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(8.0)),
-                    ..default()
-                },
-                BackgroundColor(panel_bg()),
-                BorderColor::all(panel_border()),
-                AttackSummaryText,
-                Text::new(""),
-                TextFont {
-                    font_size: 12.0,
-                    ..default()
-                },
-                TextColor(text_primary()),
-            ));
-
-            root.spawn((
-                OutgoingRowsContainer,
-                Node {
-                    width: Val::Percent(92.0),
-                    min_width: Val::Px(220.0),
-                    max_width: Val::Px(620.0),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(4.0),
-                    max_height: Val::Px(220.0),
-                    overflow: Overflow::scroll_y(),
-                    ..default()
-                },
-            ));
-
-            root.spawn(Node {
-                width: Val::Percent(92.0),
-                max_width: Val::Px(620.0),
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(10.0),
-                flex_wrap: FlexWrap::Wrap,
-                ..default()
-            })
-            .with_children(|row| {
-                row.spawn((
-                    AttackRatioReadout,
-                    Text::new(""),
-                    TextFont {
-                        font_size: 13.0,
-                        ..default()
-                    },
-                    TextColor(Color::WHITE),
-                    Node {
-                        width: Val::Px(158.0),
-                        ..default()
-                    },
-                ));
-
-                row.spawn((
-                    Button,
-                    AttackRatioTrack,
-                    RelativeCursorPosition::default(),
-                    Node {
-                        flex_grow: 1.0,
-                        height: Val::Px(12.0),
-                        align_items: AlignItems::Center,
-                        justify_content: JustifyContent::Stretch,
-                        ..default()
-                    },
-                ))
-                .with_children(|track| {
-                    track
-                        .spawn((
-                            Node {
-                                width: Val::Percent(100.0),
-                                height: Val::Px(8.0),
-                                flex_direction: FlexDirection::Row,
-                                overflow: Overflow::clip(),
-                                border_radius: BorderRadius::all(Val::Px(4.0)),
-                                ..default()
-                            },
-                        ))
-                        .with_children(|bar| {
-                            bar.spawn((
-                                AttackRatioFill,
-                                Node {
-                                    width: Val::Percent(20.0),
-                                    height: Val::Percent(100.0),
-                                    ..default()
-                                },
-                                BackgroundColor(accent_primary()),
-                            ));
-                            bar.spawn((
-                                Node {
-                                    flex_grow: 1.0,
-                                    height: Val::Percent(100.0),
-                                    ..default()
-                                },
-                                BackgroundColor(Color::srgb(0.11, 0.11, 0.13)),
-                            ));
-                        });
-                });
-            });
-        });
-}
-
 /// Receive ServerStartMessage → build GameState and spawn tile grid.
 /// Mirrors OpenFront's message.type === "start" handler in ClientGameRunner.
 fn handle_server_start(
@@ -930,8 +721,9 @@ fn handle_server_start(
     mut highest:   ResMut<HighestReceivedTurn>,
     mut net:       ResMut<NetTiming>,
     mut overlay:   ResMut<OverlayDiagnostics>,
-    shell:         Res<HudShellRegions>,
+    lunex_root:    Res<LunexHudRoot>,
     asset_server:  Res<AssetServer>,
+    settings:      Res<ClientSettings>,
 ) {
     for mut receiver in receivers.iter_mut() {
         for msg in receiver.receive() {
@@ -1056,7 +848,13 @@ fn handle_server_start(
             commands.insert_resource(game);
             ready.0 = true;
 
-            spawn_bottom_combat_hud(&mut commands, &shell, msg.my_player_id.is_none());
+            spawn_lunex_combat_hud(
+                &mut commands,
+                lunex_root.0,
+                &asset_server,
+                settings.font.clone(),
+                msg.my_player_id.is_none(),
+            );
 
             if msg.my_player_id.is_some() {
                 overlay.status_line = format!("Connected — Player {:?}", msg.my_player_id);
@@ -1164,23 +962,36 @@ fn player_click(
     mut commands: Commands,
     ring_mesh: Res<AttackRingMesh>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    mouse:       Res<ButtonInput<MouseButton>>,
-    touches:     Res<Touches>,
-    drag_state:  Res<CameraDragState>,
-    hovered:     Res<HoveredTile>,
-    game_opt:    Option<Res<GameState>>,
-    my_id:       Res<MyPlayerId>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    touches: Res<Touches>,
+    drag_state: Res<CameraDragState>,
+    hovered: Res<HoveredTile>,
+    game_opt: Option<Res<GameState>>,
+    my_id: Res<MyPlayerId>,
     attack_ratio: Res<AttackRatio>,
-    bottom_hud_hit: Query<&RelativeCursorPosition, With<BottomHudRoot>>,
+    hover_map: Res<HoverMap>,
+    hud_block: Query<(), With<HudBlocksMapClicks>>,
     mut senders: Query<&mut MessageSender<ClientGameplayMessage>>,
 ) {
     // We trigger ONLY on release to support dragging.
     // Additionally, if the user accumulated too much drag, we abort the intent payload.
-    if !mouse.just_released(MouseButton::Left) && !touches.any_just_released() { return; }
-    if drag_state.accumulated_drag > 10.0 { return; } // It was a drag, not a click
+    if !mouse.just_released(MouseButton::Left) && !touches.any_just_released() {
+        return;
+    }
+    if drag_state.accumulated_drag > 10.0 {
+        return;
+    } // It was a drag, not a click
 
-    // Clicks/releases over the combat HUD must not issue map attacks (OpenFront: UI eats pointer).
-    if bottom_hud_hit.iter().any(|rcp| rcp.cursor_over) {
+    // Clicks/releases over the Lunex HUD must not issue map attacks (OpenFront: UI eats pointer).
+    if mouse.just_released(MouseButton::Left) {
+        if hover_map_has_blocker(&hover_map, PointerId::Mouse, &hud_block) {
+            return;
+        }
+    } else if touches.any_just_released()
+        && touches.iter_just_released().any(|t| {
+            hover_map_has_blocker(&hover_map, PointerId::Touch(t.id()), &hud_block)
+        })
+    {
         return;
     }
 
@@ -1262,44 +1073,6 @@ fn system_animate_attack_command_rings(
         let [r, g, b] = ring.rgb;
         if let Some(mat) = materials.get_mut(&mat_h.0) {
             mat.color = Color::srgba(r, g, b, 0.97 * fade);
-        }
-    }
-}
-
-fn system_home_button(
-    mut interaction_q: Query<
-        (&Interaction, &mut BackgroundColor),
-        (Changed<Interaction>, With<HomeButton>),
-    >,
-    mut cam_q: Query<&mut Transform, With<Camera2d>>,
-    labels_q: Query<(&Transform, &PlayerLabel), Without<Camera2d>>,
-    my_id: Res<MyPlayerId>,
-) {
-    for (interaction, mut color) in interaction_q.iter_mut() {
-        match *interaction {
-            Interaction::Pressed => {
-                *color = accent_home_pressed().into();
-                // Home the camera
-                let mut target_pos = None;
-                for (lbl_trans, lbl) in labels_q.iter() {
-                    if lbl.0 == my_id.0 {
-                        target_pos = Some(lbl_trans.translation.xy());
-                        break;
-                    }
-                }
-                if let Some(pos) = target_pos {
-                    for mut cam_t in cam_q.iter_mut() {
-                        cam_t.translation.x = pos.x;
-                        cam_t.translation.y = pos.y;
-                    }
-                }
-            }
-            Interaction::Hovered => {
-                *color = accent_home_hover().into();
-            }
-            Interaction::None => {
-                *color = accent_home().into();
-            }
         }
     }
 }
@@ -1434,68 +1207,22 @@ fn system_animate_tile_colors(
 }
 
 fn update_hud(
-    game_opt:  Option<Res<GameState>>,
+    game_opt: Option<Res<GameState>>,
     overlay: Res<OverlayDiagnostics>,
-    mut hud_q: Query<&mut Text, With<HudText>>,
+    mut hud_q: Query<&mut Text2d, With<HudText>>,
 ) {
     let tick = game_opt.map(|g| g.tick).unwrap_or(0);
-    let Ok(mut text) = hud_q.single_mut() else { return };
+    let Ok(mut text) = hud_q.single_mut() else {
+        return;
+    };
 
     let final_str = format!(
         "{}\nTick: {}\nFPS: {}\nPing: {}",
         overlay.status_line, tick, overlay.fps_value, overlay.ping_value
     );
-    
-    if **text != final_str {
-        **text = final_str;
-    }
-}
 
-fn system_apply_responsive_hud_layout(
-    ui_shell: Res<UiShellState>,
-    mut nodes: ParamSet<(
-        Query<&mut Node, With<BottomHudRoot>>,
-        Query<&mut Node, With<AttackRatioTrack>>,
-        Query<&mut Node, With<OutgoingRowsContainer>>,
-        Query<&mut Node, (With<HomeButton>, With<Button>)>,
-    )>,
-) {
-    let compact = matches!(ui_shell.breakpoint, UiBreakpoint::Compact);
-
-    {
-        let mut root_q = nodes.p0();
-        let Ok(mut root_node) = root_q.single_mut() else {
-            return;
-        };
-        root_node.row_gap = Val::Px(if compact { 8.0 } else { 6.0 });
-    }
-
-    {
-        let mut track_q = nodes.p1();
-        let Ok(mut track_node) = track_q.single_mut() else {
-            return;
-        };
-        track_node.height = Val::Px(if compact { 18.0 } else { 12.0 });
-    }
-
-    {
-        let mut outgoing_q = nodes.p2();
-        let Ok(mut outgoing_node) = outgoing_q.single_mut() else {
-            return;
-        };
-        outgoing_node.max_height = Val::Px(if compact { 180.0 } else { 220.0 });
-    }
-
-    let mut home_q = nodes.p3();
-    if let Ok(mut home_node) = home_q.single_mut() {
-        let size = match ui_shell.breakpoint {
-            UiBreakpoint::Compact => 44.0,
-            UiBreakpoint::Medium => 52.0,
-            UiBreakpoint::Wide => 60.0,
-        };
-        home_node.width = Val::Px(size * 1.6);
-        home_node.height = Val::Px(size);
-        home_node.border_radius = BorderRadius::all(Val::Px(if compact { 10.0 } else { 12.0 }));
+    if text.0 != final_str {
+        text.0 = final_str;
     }
 }
 
@@ -1522,12 +1249,27 @@ fn system_attack_ratio_keyboard(
 ///
 /// Updates while the pointer is held, and **once on release** while over the track so the final
 /// position applies even though `pressed` is false that frame (and so `player_click` sees the new ratio).
+fn slider_cursor_to_ratio(cursor_world: Vec2, track_gt: &GlobalTransform, dim: &Dimension) -> Option<f32> {
+    let inv = track_gt.affine().inverse();
+    let local = inv.transform_point3(cursor_world.extend(0.0)).xy();
+    let rect = Rect::from_center_size(Vec2::ZERO, **dim);
+    if !rect.contains(local) {
+        return None;
+    }
+    let w = dim.x.max(1.0);
+    let t = (local.x / w + 0.5).clamp(0.0, 1.0);
+    Some((0.01 + t * 0.99).clamp(0.01, 1.0))
+}
+
 fn system_attack_ratio_slider_drag(
     mouse: Res<ButtonInput<MouseButton>>,
     touches: Res<Touches>,
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
     mut ratio: ResMut<AttackRatio>,
     my_id: Res<MyPlayerId>,
-    q_track: Query<&RelativeCursorPosition, With<AttackRatioTrack>>,
+    q_track: Query<(&GlobalTransform, &Dimension), With<AttackRatioTrackHit>>,
+    mut commands: Commands,
 ) {
     if my_id.0 == 0 {
         return;
@@ -1539,23 +1281,40 @@ fn system_attack_ratio_slider_drag(
         return;
     }
 
-    let apply = |out: &mut f32| {
-        for rcp in &q_track {
-            if !rcp.cursor_over {
-                continue;
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Ok((cam, cam_gt)) = camera_q.single() else {
+        return;
+    };
+    let Ok((track_gt, dim)) = q_track.single() else {
+        return;
+    };
+
+    let mut changed = false;
+    let mut apply_screen = |screen: Vec2| {
+        if let Ok(world) = cam.viewport_to_world_2d(cam_gt, screen) {
+            if let Some(r) = slider_cursor_to_ratio(world, track_gt, dim) {
+                ratio.0 = r;
+                changed = true;
             }
-            let Some(n) = rcp.normalized else { continue };
-            let t = (n.x + 0.5).clamp(0.0, 1.0);
-            *out = (0.01 + t * 0.99).clamp(0.01, 1.0);
-            break;
         }
     };
 
-    if dragging {
-        apply(&mut ratio.0);
-    } else if released {
-        // Release frame: `pressed` is false — still snap ratio if the cursor is on the rail.
-        apply(&mut ratio.0);
+    if mouse.pressed(MouseButton::Left) || mouse.just_released(MouseButton::Left) {
+        if let Some(p) = window.cursor_position() {
+            apply_screen(p);
+        }
+    }
+    for finger in touches.iter() {
+        apply_screen(finger.position());
+    }
+    for finger in touches.iter_just_released() {
+        apply_screen(finger.position());
+    }
+
+    if changed {
+        commands.trigger(RecomputeUiLayout);
     }
 }
 
@@ -1574,9 +1333,11 @@ fn system_sync_bottom_combat_hud(
     my_id: Res<MyPlayerId>,
     attack_ratio: Res<AttackRatio>,
     q_exec: Query<&AttackExecution>,
-    mut q_summary: Query<&mut Text, (With<AttackSummaryText>, Without<AttackRatioReadout>)>,
-    mut q_readout: Query<&mut Text, (With<AttackRatioReadout>, Without<AttackSummaryText>)>,
-    mut q_fill: Query<&mut Node, With<AttackRatioFill>>,
+    mut q_summary: Query<&mut Text2d, (With<AttackSummaryText>, Without<AttackRatioReadout>)>,
+    mut q_readout: Query<&mut Text2d, (With<AttackRatioReadout>, Without<AttackSummaryText>)>,
+    mut q_fill: Query<&mut UiLayout, With<AttackRatioFill>>,
+    mut commands: Commands,
+    mut last_fill_ratio: Local<Option<f32>>,
 ) {
     let Some(game) = game_opt else { return };
     let (Ok(mut summary), Ok(mut readout), Ok(mut fill)) = (
@@ -1588,11 +1349,20 @@ fn system_sync_bottom_combat_hud(
     };
 
     let r = attack_ratio.0.clamp(0.01, 1.0);
-    fill.width = Val::Percent(r * 100.0);
+    let fill_changed = last_fill_ratio.map(|p| (p - r).abs() > 1e-5).unwrap_or(true);
+    if fill_changed {
+        *last_fill_ratio = Some(r);
+        if let Some(w) = fill.get_mut_window(UiBase::id()) {
+            w.set_width(Rl(r * 100.0));
+        }
+    }
 
     if my_id.0 == 0 {
-        **summary = String::new();
-        **readout = String::new();
+        summary.0.clear();
+        readout.0.clear();
+        if fill_changed {
+            commands.trigger(RecomputeUiLayout);
+        }
         return;
     }
 
@@ -1601,8 +1371,8 @@ fn system_sync_bottom_combat_hud(
         .map(|p| (p.troops * r as f64).floor().max(0.0))
         .unwrap_or(0.0);
     let readout_str = format!("⚔ {:.0}% ({:.0})", r * 100.0, preview_troops);
-    if **readout != readout_str {
-        **readout = readout_str;
+    if readout.0 != readout_str {
+        readout.0 = readout_str;
     }
 
     let mut incoming: Vec<&AttackExecution> = q_exec
@@ -1644,21 +1414,27 @@ fn system_sync_bottom_combat_hud(
     lines.push("T/Y — subir/bajar %.".to_string());
     let body = lines.join("\n");
 
-    if **summary != body {
-        **summary = body;
+    if summary.0 != body {
+        summary.0 = body;
+    }
+
+    if fill_changed {
+        commands.trigger(RecomputeUiLayout);
     }
 }
 
 fn system_sync_outgoing_attack_rows(
     mut commands: Commands,
+    asset_server: Res<AssetServer>,
     game_opt: Option<Res<GameState>>,
     slot_q: Query<Entity, With<OutgoingRowsContainer>>,
     q_exec: Query<&AttackExecution>,
     my_id: Res<MyPlayerId>,
     settings: Res<ClientSettings>,
-    ui_shell: Res<UiShellState>,
     mut row_map: ResMut<OutgoingAttackRowMap>,
-    mut q_line: Query<&mut Text, With<OutgoingAttackLineText>>,
+    mut q_line: Query<&mut Text2d, With<OutgoingAttackLineText>>,
+    mut q_row_layout: Query<&mut UiLayout, With<OutgoingAttackRowRoot>>,
+    mut last_row_sig: Local<Option<u64>>,
 ) {
     let Ok(slot) = slot_q.single() else {
         return;
@@ -1682,6 +1458,8 @@ fn system_sync_outgoing_attack_rows(
 
     let desired: HashSet<u64> = outgoing.iter().map(|e| e.id).collect();
 
+    let mut need_recompute = false;
+
     let stale: Vec<u64> = row_map
         .0
         .keys()
@@ -1691,11 +1469,15 @@ fn system_sync_outgoing_attack_rows(
     for id in stale {
         if let Some((row_e, _)) = row_map.0.remove(&id) {
             commands.entity(row_e).despawn();
+            need_recompute = true;
         }
     }
 
-    for exec in outgoing {
-        let (cancel_w, cancel_h) = touch_target_for_breakpoint(ui_shell.breakpoint);
+    let row_panel = asset_server.load::<Image>(UI_ASSET_PANEL_MENU);
+    let cancel_img = asset_server.load::<Image>(UI_ASSET_BUTTON_SLICED);
+    let font = settings.font.clone();
+
+    for exec in &outgoing {
         let who = if exec.target_owner == 0 {
             "Neutral".to_string()
         } else {
@@ -1713,30 +1495,26 @@ fn system_sync_outgoing_attack_rows(
 
         if let Some((_, text_e)) = row_map.0.get(&exec.id).copied() {
             if let Ok(mut t) = q_line.get_mut(text_e) {
-                if **t != line {
-                    **t = line;
+                if t.0 != line {
+                    t.0 = line;
                 }
             }
         } else {
-            let font = settings.font.clone();
             let exec_id = exec.id;
             let row_e = commands
                 .spawn((
                     ChildOf(slot),
                     OutgoingAttackRowRoot,
-                    Node {
-                        width: Val::Percent(100.0),
-                        flex_direction: FlexDirection::Row,
-                        align_items: AlignItems::Center,
-                        justify_content: JustifyContent::SpaceBetween,
-                        column_gap: Val::Px(8.0),
-                        padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                        border: UiRect::all(Val::Px(1.0)),
-                        border_radius: BorderRadius::all(Val::Px(panel_radius_for_breakpoint(ui_shell.breakpoint))),
-                        ..default()
-                    },
-                    BackgroundColor(panel_bg()),
-                    BorderColor::all(panel_border()),
+                    UiLayout::window()
+                        .anchor(Anchor::TopLeft)
+                        .pos(Ab((8.0, 4.0)))
+                        .size(Rl((98.0, 16.0)))
+                        .pack(),
+                    lunex_slice_sprite(row_panel.clone()),
+                    UiColor::from(panel_bg().with_alpha(0.9)),
+                    Pickable::default(),
+                    HudBlocksMapClicks,
+                    UiDepth::Add(1.0),
                 ))
                 .id();
 
@@ -1744,70 +1522,108 @@ fn system_sync_outgoing_attack_rows(
                 .spawn((
                     ChildOf(row_e),
                     OutgoingAttackLineText,
-                    Text::new(line),
+                    UiLayout::window()
+                        .anchor(Anchor::CenterLeft)
+                        .pos(Rl((4.0, 50.0)))
+                        .size(Rl((78.0, 75.0)))
+                        .pack(),
+                    UiTextSize::from(Rh(36.0)),
+                    Text2d::new(line.clone()),
                     TextFont {
                         font: font.clone(),
-                        font_size: 11.5,
+                        font_size: 48.0,
+                        weight: FontWeight::MEDIUM,
                         ..default()
                     },
                     TextColor(text_primary()),
-                    Node {
-                        flex_grow: 1.0,
-                        ..default()
-                    },
+                    NoLunexPicking,
+                    UiDepth::Add(2.0),
                 ))
                 .id();
 
             commands
                 .spawn((
                     ChildOf(row_e),
-                    Button,
                     CancelAttackButton(exec_id),
-                    Node {
-                        width: Val::Px(cancel_w),
-                        height: Val::Px(cancel_h),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        border_radius: BorderRadius::all(Val::Px(8.0)),
-                        ..default()
-                    },
-                    BackgroundColor(accent_danger()),
-                    BorderColor::all(accent_danger_border()),
+                    UiLayout::window()
+                        .anchor(Anchor::CenterRight)
+                        .pos(Rl((97.0, 50.0)))
+                        .size(Rw(7.5))
+                        .pack(),
+                    UiLayout::new(vec![
+                        (
+                            UiBase::id(),
+                            UiLayout::window().anchor(Anchor::Center).full().pack(),
+                        ),
+                        (
+                            UiHover::id(),
+                            UiLayout::window()
+                                .anchor(Anchor::Center)
+                                .size(Rl((112.0, 112.0)))
+                                .pack(),
+                        ),
+                    ]),
+                    UiHover::new().forward_speed(18.0).backward_speed(14.0),
+                    UiColor::new(vec![
+                        (UiBase::id(), accent_danger()),
+                        (UiHover::id(), accent_danger_border()),
+                    ]),
+                    lunex_slice_sprite(cancel_img.clone()),
+                    Pickable::default(),
+                    HudBlocksMapClicks,
+                    UiDepth::Add(3.0),
                 ))
-                .with_children(|b| {
-                    b.spawn((
-                        Text::new("✕"),
+                .observe(hover_set::<Pointer<Over>, true>)
+                .observe(hover_set::<Pointer<Out>, false>)
+                .observe(observe_cancel_attack)
+                .with_children(|x| {
+                    x.spawn((
+                        UiLayout::window()
+                            .anchor(Anchor::Center)
+                            .size(Rh(40.0))
+                            .pack(),
+                        UiTextSize::from(Rh(36.0)),
+                        Text2d::new("✕"),
                         TextFont {
                             font,
-                            font_size: 14.0,
+                            font_size: 56.0,
+                            weight: FontWeight::BOLD,
                             ..default()
                         },
                         TextColor(Color::WHITE),
+                        NoLunexPicking,
+                        UiDepth::Add(2.0),
                     ));
                 });
 
             row_map.0.insert(exec_id, (row_e, text_e));
+            need_recompute = true;
         }
     }
-}
 
-fn system_handle_cancel_click(
-    interaction_q: Query<
-        (&Interaction, &CancelAttackButton),
-        (Changed<Interaction>, With<Button>),
-    >,
-    mut senders: Query<&mut MessageSender<ClientGameplayMessage>>,
-) {
-    for (interaction, btn) in &interaction_q {
-        if *interaction != Interaction::Pressed {
-            continue;
+    let mut ordered: Vec<u64> = outgoing.iter().map(|e| e.id).collect();
+    ordered.sort_unstable();
+    let sig = ordered.iter().fold(ordered.len() as u64, |acc, &id| {
+        acc.wrapping_mul(31).wrapping_add(id)
+    });
+    if *last_row_sig != Some(sig) {
+        *last_row_sig = Some(sig);
+        let row_step = 17.0_f32;
+        for (i, id) in ordered.iter().enumerate() {
+            let Some((row_e, _)) = row_map.0.get(id) else {
+                continue;
+            };
+            if let Ok(mut lay) = q_row_layout.get_mut(*row_e) {
+                if let Some(w) = lay.get_mut_window(UiBase::id()) {
+                    w.set_y(Ab(4.0 + i as f32 * row_step));
+                }
+            }
         }
-        let attack_id = btn.0;
-        for mut sender in senders.iter_mut() {
-            let _ = sender.send::<ReliableChannel>(ClientGameplayMessage {
-                intent: GameplayIntent::CancelAttack { attack_id },
-            });
-        }
+        need_recompute = true;
+    }
+
+    if need_recompute {
+        commands.trigger(RecomputeUiLayout);
     }
 }
 
