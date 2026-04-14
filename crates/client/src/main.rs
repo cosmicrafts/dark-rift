@@ -4,17 +4,19 @@
 //!   1. Spawn a Client entity: NetcodeClient + WebSocketClientIo → ws://127.0.0.1:5000
 //!   2. Trigger Connect to start handshake
 //!   3. MessageReceiver<ServerStartMessage>: init local GameState, spawn tile grid
-//!   4. On player click: send ClientIntentMessage via MessageSender
+//!   4. On player click: send ClientGameplayMessage via MessageSender
 //!   5. MessageReceiver<ServerTurnMessage>: apply intents via apply_stamped_intent()
 //!   6. Shared ECS systems run locally (system_player_income, system_attack_execution)
 //!   7. Tile visuals updated from game.events (event-driven, O(events) not O(map))
 
 use bevy::prelude::*;
-use bevy::sprite_render::{TileData, TilemapChunk, TilemapChunkTileData};
+use bevy::text::FontWeight;
+use bevy::ui::RelativeCursorPosition;
+use bevy::mesh::prelude::{Mesh2d, Meshable};
+use bevy::sprite_render::{ColorMaterial, MeshMaterial2d, TileData, TilemapChunk, TilemapChunkTileData};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::post_process::bloom::{Bloom, BloomCompositeMode};
-use bevy_enoki::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use bevy::image::{ImageArrayLayout, ImageLoaderSettings};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use lightyear::prelude::*;
@@ -30,13 +32,15 @@ use clap::Parser;
 use dark_rift_shared::config;
 use dark_rift_shared::game::{GameState, GameEvent};
 use dark_rift_shared::player::{bot_territory_color, Player};
-use dark_rift_shared::execution::{system_attack_execution, system_player_income, system_game_tick};
+use dark_rift_shared::execution::{
+    system_attack_execution, system_player_income, system_game_tick, AttackExecution,
+};
 use dark_rift_shared::intent::{apply_stamped_intent, system_bot_think};
 use dark_rift_shared::protocol::*;
 use dark_rift_shared::pseudo_random::PseudoRandom;
 
-mod ui_config;
-use ui_config::*;
+mod settings;
+use settings::*;
 
 const TILE_SIZE: f32 = 8.0;
 const SERVER_ADDR: &str = "127.0.0.1:5005";
@@ -77,10 +81,69 @@ struct HudText;
 #[derive(Component)]
 struct PlayerLabel(u16);
 
+/// Last applied `TextFont.font_size` for this label; avoids redundant layout when unchanged.
+#[derive(Component)]
+struct PlayerLabelRenderCache(f32);
+
+/// Ephemeral “command ping” mesh when issuing an attack (player-colored, pop-in scale).
+#[derive(Component)]
+struct AttackCommandRing {
+    elapsed: f32,
+    /// Territory RGB for the ring tint (matches `Player::color`).
+    rgb: [f32; 3],
+}
+
+#[derive(Resource)]
+struct AttackRingMesh(Handle<Mesh>);
+
 #[derive(Resource, Default)]
 struct FreshlyPaintedTiles {
     tiles: HashMap<(u32, u32), f32>,
 }
+
+/// Troop fraction committed on each attack click (OpenFront `uiState.attackRatio` + ControlPanel slider 1–100%).
+#[derive(Resource)]
+struct AttackRatio(f32);
+
+impl Default for AttackRatio {
+    fn default() -> Self {
+        Self(0.2)
+    }
+}
+
+#[derive(Component)]
+struct BottomHudRoot;
+
+/// Multiline panel: incoming (↓) / outgoing (↑) like `AttacksDisplay.ts`.
+#[derive(Component)]
+struct AttackSummaryText;
+
+/// "⚔ NN% (MMM trp)" readout next to the slider rail.
+#[derive(Component)]
+struct AttackRatioReadout;
+
+#[derive(Component)]
+struct AttackRatioTrack;
+
+#[derive(Component)]
+struct AttackRatioFill;
+
+/// Parent node for dynamically rebuilt outgoing attack rows (cancel buttons).
+#[derive(Component)]
+struct OutgoingRowsContainer;
+
+/// Root UI row for one outgoing attack (stable across frames for click handling).
+#[derive(Component)]
+struct OutgoingAttackRowRoot;
+
+#[derive(Component)]
+struct OutgoingAttackLineText;
+
+#[derive(Component)]
+struct CancelAttackButton(u64);
+
+#[derive(Resource, Default)]
+struct OutgoingAttackRowMap(std::collections::HashMap<u64, (Entity, Entity)>);
 
 #[derive(Parser, Resource)]
 #[command(author, version, about, long_about = None)]
@@ -115,6 +178,7 @@ fn main() {
         ..default()
     }).disable::<bevy::audio::AudioPlugin>())
     .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.04)))
+    .add_systems(Startup, setup_attack_ring_mesh)
     .insert_resource(cli)
     .init_resource::<GameReady>()
     .init_resource::<MyPlayerId>()
@@ -123,7 +187,9 @@ fn main() {
     .init_resource::<TurnQueue>()
     .init_resource::<HighestReceivedTurn>()
     .init_resource::<CameraDragState>()
-    .init_resource::<FreshlyPaintedTiles>();
+    .init_resource::<FreshlyPaintedTiles>()
+    .init_resource::<AttackRatio>()
+    .init_resource::<OutgoingAttackRowMap>();
 
     if let Some(path) = is_replay {
         let file = std::fs::read_to_string(&path)
@@ -136,13 +202,23 @@ fn main() {
             turn_index: 0,
         });
 
-        app.add_systems(Startup, (load_ui_settings, setup_offline))
+        app.add_systems(
+            Startup,
+            (load_client_settings, init_attack_ratio_from_ui_settings, setup_offline).chain(),
+        )
            .add_systems(Update, system_replay_pulse);
     } else {
         app.add_plugins(SharedProtocolPlugin)
            .add_plugins(ClientPlugins::default())
-           .add_plugins(EnokiPlugin)
-           .add_systems(Startup, (setup_live, load_ui_settings))
+            .add_systems(
+                Startup,
+                (
+                    load_client_settings,
+                    init_attack_ratio_from_ui_settings,
+                    setup_live,
+                )
+                    .chain(),
+            )
            .add_systems(Update, (
                handle_server_start,
                handle_server_turns,
@@ -152,18 +228,27 @@ fn main() {
 
     app.add_systems(Update, (
         hover_system,
+        system_attack_ratio_keyboard,
+        system_attack_ratio_slider_drag,
         player_click,
         system_home_button,
         handle_tile_change,
         system_animate_tile_colors,
         update_hud,
-    ).run_if(game_is_ready));
+        system_sync_bottom_combat_hud,
+        system_sync_outgoing_attack_rows,
+        system_handle_cancel_click,
+    ).run_if(game_is_ready))
+    .add_systems(
+        Update,
+        system_animate_attack_command_rings
+            .after(player_click)
+            .run_if(game_is_ready),
+    );
     
     app.add_systems(Update, (
         camera_movement_and_zoom,
-        system_track_new_attacks,
-        system_sync_attack_particles,
-        system_sync_player_labels,
+        system_sync_player_labels.run_if(|settings: Res<ClientSettings>| settings.config.visuals.enable_floating_labels),
     ).run_if(game_is_ready));
 
     app.add_systems(Update, clear_inputs_on_focus_loss);
@@ -208,13 +293,19 @@ fn game_is_ready(ready: Res<GameReady>) -> bool { ready.0 }
 
 fn pop_turn(
     mut commands: Commands,
-    game_opt: Option<Res<GameState>>,
+    mut game: ResMut<GameState>,
     mut queue: ResMut<TurnQueue>,
+    mut q_exec: Query<(Entity, &mut AttackExecution)>,
 ) {
-    let Some(game) = game_opt else { return };
     if let Some(turn) = queue.0.pop_front() {
         for (i, stamped) in turn.intents.iter().enumerate() {
-            apply_stamped_intent(&mut commands, &game, stamped, i as u32);
+            apply_stamped_intent(
+                &mut commands,
+                &mut *game,
+                &mut q_exec,
+                stamped,
+                i as u32,
+            );
         }
     }
 }
@@ -395,17 +486,20 @@ fn setup_offline(
     ready.0 = true;
 }
 
-fn setup_live(mut commands: Commands, cli: Res<Cli>) {
-    commands.spawn((
+fn setup_live(mut commands: Commands, cli: Res<Cli>, settings: Res<ClientSettings>) {
+    let mut cmd = commands.spawn((
         Camera2d,
         Tonemapping::TonyMcMapface,
-        Bloom {
+        Transform::from_xyz(0.0, 0.0, 999.0),
+    ));
+    
+    if settings.config.visuals.hdr_bloom_enabled() {
+        cmd.insert(Bloom {
             intensity: 0.15,
             composite_mode: BloomCompositeMode::Additive,
             ..default()
-        },
-        Transform::from_xyz(0.0, 0.0, 999.0),
-    ));
+        });
+    }
 
     commands.spawn((
         Text::new("Connecting to server..."),
@@ -512,6 +606,137 @@ fn system_replay_pulse(
 }
 
 // ─── Network Handlers ────────────────────────────────────────────────────────
+
+fn init_attack_ratio_from_ui_settings(ui: Res<ClientSettings>, mut ratio: ResMut<AttackRatio>) {
+    ratio.0 = ui.config.ui.attack_ratio.clamp(0.01, 1.0);
+}
+
+/// Bottom-center stack: attack summary (OpenFront `AttacksDisplay`) + ratio slider row (`ControlPanel` row 2).
+fn spawn_bottom_combat_hud(commands: &mut Commands, observer: bool) {
+    let vis = if observer {
+        Visibility::Hidden
+    } else {
+        Visibility::Visible
+    };
+    commands
+        .spawn((
+            BottomHudRoot,
+            RelativeCursorPosition::default(),
+            vis,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                bottom: Val::Px(86.0),
+                align_items: AlignItems::Center,
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(6.0),
+                ..default()
+            },
+        ))
+        .with_children(|root| {
+            root.spawn((
+                Node {
+                    min_width: Val::Px(260.0),
+                    max_width: Val::Px(520.0),
+                    padding: UiRect::all(Val::Px(8.0)),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(4.0),
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(8.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.1, 0.11, 0.14, 0.92)),
+                BorderColor::all(Color::srgba(0.32, 0.34, 0.4, 0.95)),
+                AttackSummaryText,
+                Text::new(""),
+                TextFont {
+                    font_size: 12.0,
+                    ..default()
+                },
+                TextColor(Color::srgba(0.9, 0.92, 0.96, 1.0)),
+            ));
+
+            root.spawn((
+                OutgoingRowsContainer,
+                Node {
+                    min_width: Val::Px(260.0),
+                    max_width: Val::Px(520.0),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(4.0),
+                    ..default()
+                },
+            ));
+
+            root.spawn(Node {
+                width: Val::Px(400.0),
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(10.0),
+                ..default()
+            })
+            .with_children(|row| {
+                row.spawn((
+                    AttackRatioReadout,
+                    Text::new(""),
+                    TextFont {
+                        font_size: 13.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                    Node {
+                        width: Val::Px(158.0),
+                        ..default()
+                    },
+                ));
+
+                row.spawn((
+                    Button,
+                    AttackRatioTrack,
+                    RelativeCursorPosition::default(),
+                    Node {
+                        flex_grow: 1.0,
+                        height: Val::Px(12.0),
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Stretch,
+                        ..default()
+                    },
+                ))
+                .with_children(|track| {
+                    track
+                        .spawn((
+                            Node {
+                                width: Val::Percent(100.0),
+                                height: Val::Px(8.0),
+                                flex_direction: FlexDirection::Row,
+                                overflow: Overflow::clip(),
+                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                ..default()
+                            },
+                        ))
+                        .with_children(|bar| {
+                            bar.spawn((
+                                AttackRatioFill,
+                                Node {
+                                    width: Val::Percent(20.0),
+                                    height: Val::Percent(100.0),
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgb(0.32, 0.52, 0.92)),
+                            ));
+                            bar.spawn((
+                                Node {
+                                    flex_grow: 1.0,
+                                    height: Val::Percent(100.0),
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgb(0.11, 0.11, 0.13)),
+                            ));
+                        });
+                });
+            });
+        });
+}
 
 /// Receive ServerStartMessage → build GameState and spawn tile grid.
 /// Mirrors OpenFront's message.type === "start" handler in ClientGameRunner.
@@ -644,6 +869,8 @@ fn handle_server_start(
             commands.insert_resource(game);
             ready.0 = true;
 
+            spawn_bottom_combat_hud(&mut commands, msg.my_player_id.is_none());
+
             if let Ok(mut text) = hud_q.single_mut() {
                 if msg.my_player_id.is_some() {
                     **text = format!("Connected — Player {:?}", msg.my_player_id);
@@ -687,6 +914,22 @@ fn handle_server_turns(
 
 // ─── Input ────────────────────────────────────────────────────────────────────
 
+fn setup_attack_ring_mesh(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
+    let mesh = Annulus::new(5.0, 8.8)
+        .mesh()
+        .resolution(56)
+        .build();
+    commands.insert_resource(AttackRingMesh(meshes.add(mesh)));
+}
+
+/// Overshoot ease 0→1 in `t ∈ [0,1]` (landing exactly at 1).
+fn ease_out_back_scaled(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    let c1 = 1.701_58_f32;
+    let c3 = c1 + 1.0;
+    1.0 + c3 * (t - 1.0).powi(3) + c1 * (t - 1.0).powi(2)
+}
+
 fn clear_inputs_on_focus_loss(
     mut events: MessageReader<bevy::window::WindowFocused>,
     mut kb:     ResMut<ButtonInput<KeyCode>>,
@@ -721,18 +964,28 @@ fn hover_system(
 /// On click: send intent to server via MessageSender.
 /// Server stamps player_id → bundles into next Turn → broadcasts → we apply next frame.
 fn player_click(
+    mut commands: Commands,
+    ring_mesh: Res<AttackRingMesh>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
     mouse:       Res<ButtonInput<MouseButton>>,
     touches:     Res<Touches>,
     drag_state:  Res<CameraDragState>,
     hovered:     Res<HoveredTile>,
     game_opt:    Option<Res<GameState>>,
     my_id:       Res<MyPlayerId>,
-    mut senders: Query<&mut MessageSender<ClientIntentMessage>>,
+    attack_ratio: Res<AttackRatio>,
+    bottom_hud_hit: Query<&RelativeCursorPosition, With<BottomHudRoot>>,
+    mut senders: Query<&mut MessageSender<ClientGameplayMessage>>,
 ) {
     // We trigger ONLY on release to support dragging.
     // Additionally, if the user accumulated too much drag, we abort the intent payload.
     if !mouse.just_released(MouseButton::Left) && !touches.any_just_released() { return; }
     if drag_state.accumulated_drag > 10.0 { return; } // It was a drag, not a click
+
+    // Clicks/releases over the combat HUD must not issue map attacks (OpenFront: UI eats pointer).
+    if bottom_hud_hit.iter().any(|rcp| rcp.cursor_over) {
+        return;
+    }
 
     let Some((x, y)) = hovered.0 else { return };
     let Some(game) = game_opt else { return };
@@ -744,10 +997,75 @@ fn player_click(
     let target_owner = game.map.owner_id(x, y);
     if target_owner == pid { return; }
 
+    let wx = (x as f32 + 0.5) * TILE_SIZE;
+    let wy = (y as f32 + 0.5) * TILE_SIZE;
+    let [r, g, b] = player.color;
+    let mat = materials.add(ColorMaterial::from_color(Color::srgba(r, g, b, 0.97)));
+    commands.spawn((
+        AttackCommandRing {
+            elapsed: 0.0,
+            rgb: player.color,
+        },
+        Mesh2d(ring_mesh.0.clone()),
+        MeshMaterial2d(mat),
+        Transform::from_xyz(wx, wy, 260.0).with_scale(Vec3::ZERO),
+    ));
+
+    let ratio = attack_ratio.0.clamp(0.01, 1.0) as f64;
+    let send_floor = (player.troops * ratio).floor();
+    let send = send_floor.max(0.0).min(player.troops);
+    if send < config::EXPAND_COST {
+        return;
+    }
+
     for mut sender in senders.iter_mut() {
-        let _ = sender.send::<ReliableChannel>(ClientIntentMessage {
-            intent: AttackIntent { target_owner, troops: None },
+        let _ = sender.send::<ReliableChannel>(ClientGameplayMessage {
+            intent: GameplayIntent::Attack(AttackIntent {
+                target_owner,
+                troops: Some(send),
+            }),
         });
+    }
+}
+
+/// Quick 0→full scale pop (rest of lifetime = settle + fade).
+const ATTACK_RING_POP_SECS: f32 = 0.1;
+const ATTACK_COMMAND_RING_LIFETIME: f32 = 0.38;
+
+fn system_animate_attack_command_rings(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut q: Query<(
+        Entity,
+        &mut AttackCommandRing,
+        &mut Transform,
+        &MeshMaterial2d<ColorMaterial>,
+    )>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    let dt = time.delta_secs();
+    for (entity, mut ring, mut transform, mat_h) in &mut q {
+        ring.elapsed += dt;
+        let t = ring.elapsed;
+        if t >= ATTACK_COMMAND_RING_LIFETIME {
+            commands.entity(entity).despawn();
+            continue;
+        }
+
+        let life = t / ATTACK_COMMAND_RING_LIFETIME;
+        let damp = (1.0 - life).clamp(0.0, 1.0);
+
+        let pop_u = (t / ATTACK_RING_POP_SECS).min(1.0);
+        let pop = ease_out_back_scaled(pop_u);
+
+        let wobble = 1.0 + 0.055 * damp * (t * std::f32::consts::TAU * 4.0).sin();
+        transform.scale = Vec3::splat(pop * wobble);
+
+        let fade = damp.powf(1.15);
+        let [r, g, b] = ring.rgb;
+        if let Some(mat) = materials.get_mut(&mat_h.0) {
+            mat.color = Color::srgba(r, g, b, 0.97 * fade);
+        }
     }
 }
 
@@ -859,7 +1177,12 @@ fn system_animate_tile_colors(
     game_opt: Option<Res<GameState>>,
     mut fresh_tiles: ResMut<FreshlyPaintedTiles>,
     mut chunks: Query<&mut TilemapChunkTileData>,
+    settings: Res<ClientSettings>,
 ) {
+    if !settings.config.visuals.territory_expansion_animations_enabled() {
+        fresh_tiles.tiles.clear();
+        return;
+    }
     if fresh_tiles.tiles.is_empty() { return; }
     let Some(game) = game_opt else { return };
     
@@ -928,6 +1251,316 @@ fn update_hud(
     }
 }
 
+/// OpenFront `InputHandler` KeyT / KeyY with `attackRatioIncrement` default 10 → ±0.10.
+const ATTACK_RATIO_KEYSTEP: f32 = 0.10;
+
+fn system_attack_ratio_keyboard(
+    kb: Res<ButtonInput<KeyCode>>,
+    my_id: Res<MyPlayerId>,
+    mut ratio: ResMut<AttackRatio>,
+) {
+    if my_id.0 == 0 {
+        return;
+    }
+    if kb.just_pressed(KeyCode::KeyT) {
+        ratio.0 = (ratio.0 - ATTACK_RATIO_KEYSTEP).max(0.01);
+    }
+    if kb.just_pressed(KeyCode::KeyY) {
+        ratio.0 = (ratio.0 + ATTACK_RATIO_KEYSTEP).min(1.0);
+    }
+}
+
+/// OpenFront `ControlPanel.handleRatioSliderInput`: map pointer X along rail to 1–100 %.
+///
+/// Updates while the pointer is held, and **once on release** while over the track so the final
+/// position applies even though `pressed` is false that frame (and so `player_click` sees the new ratio).
+fn system_attack_ratio_slider_drag(
+    mouse: Res<ButtonInput<MouseButton>>,
+    touches: Res<Touches>,
+    mut ratio: ResMut<AttackRatio>,
+    my_id: Res<MyPlayerId>,
+    q_track: Query<&RelativeCursorPosition, With<AttackRatioTrack>>,
+) {
+    if my_id.0 == 0 {
+        return;
+    }
+    let dragging =
+        mouse.pressed(MouseButton::Left) || touches.iter().next().is_some();
+    let released = mouse.just_released(MouseButton::Left) || touches.any_just_released();
+    if !dragging && !released {
+        return;
+    }
+
+    let apply = |out: &mut f32| {
+        for rcp in &q_track {
+            if !rcp.cursor_over {
+                continue;
+            }
+            let Some(n) = rcp.normalized else { continue };
+            let t = (n.x + 0.5).clamp(0.0, 1.0);
+            *out = (0.01 + t * 0.99).clamp(0.01, 1.0);
+            break;
+        }
+    };
+
+    if dragging {
+        apply(&mut ratio.0);
+    } else if released {
+        // Release frame: `pressed` is false — still snap ratio if the cursor is on the rail.
+        apply(&mut ratio.0);
+    }
+}
+
+fn hud_trunc_name(s: &str, max_ch: usize) -> String {
+    let count = s.chars().count();
+    if count <= max_ch {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(max_ch).collect::<String>())
+    }
+}
+
+/// Incoming attacks + tips. Outgoing rows live in [`OutgoingRowsContainer`] (cápsulas + cancel).
+fn system_sync_bottom_combat_hud(
+    game_opt: Option<Res<GameState>>,
+    my_id: Res<MyPlayerId>,
+    attack_ratio: Res<AttackRatio>,
+    q_exec: Query<&AttackExecution>,
+    mut q_summary: Query<&mut Text, (With<AttackSummaryText>, Without<AttackRatioReadout>)>,
+    mut q_readout: Query<&mut Text, (With<AttackRatioReadout>, Without<AttackSummaryText>)>,
+    mut q_fill: Query<&mut Node, With<AttackRatioFill>>,
+) {
+    let Some(game) = game_opt else { return };
+    let (Ok(mut summary), Ok(mut readout), Ok(mut fill)) = (
+        q_summary.single_mut(),
+        q_readout.single_mut(),
+        q_fill.single_mut(),
+    ) else {
+        return;
+    };
+
+    let r = attack_ratio.0.clamp(0.01, 1.0);
+    fill.width = Val::Percent(r * 100.0);
+
+    if my_id.0 == 0 {
+        **summary = String::new();
+        **readout = String::new();
+        return;
+    }
+
+    let preview_troops = game
+        .player(my_id.0)
+        .map(|p| (p.troops * r as f64).floor().max(0.0))
+        .unwrap_or(0.0);
+    let readout_str = format!("⚔ {:.0}% ({:.0})", r * 100.0, preview_troops);
+    if **readout != readout_str {
+        **readout = readout_str;
+    }
+
+    let mut incoming: Vec<&AttackExecution> = q_exec
+        .iter()
+        .filter(|e| {
+            e.target_owner == my_id.0 && e.owner_id != my_id.0 && !e.retreating
+        })
+        .collect();
+    incoming.sort_by_key(|e| e.id);
+
+    fn target_name(game: &GameState, owner_id: u16) -> String {
+        if owner_id == 0 {
+            "Neutral".to_string()
+        } else {
+            game.player(owner_id)
+                .map(|p| hud_trunc_name(&p.name, 16))
+                .unwrap_or_else(|| format!("{}", owner_id))
+        }
+    }
+
+    let mut lines = Vec::new();
+    if !incoming.is_empty() {
+        lines.push("↓ Te atacan".to_string());
+        for e in &incoming {
+            let who = target_name(&game, e.owner_id);
+            lines.push(format!(
+                "  ▸ {}  {:.0}/{:.0} trp  ·{} cola",
+                who,
+                e.troops.max(0.0),
+                e.initial_troops.max(0.0),
+                e.to_conquer.len()
+            ));
+        }
+    } else {
+        lines.push("Sin ataques entrantes.".to_string());
+    }
+    lines.push(String::new());
+    lines.push("↑ Tus salientes: filas debajo (✕ cancelar).".to_string());
+    lines.push("T/Y — subir/bajar %.".to_string());
+    let body = lines.join("\n");
+
+    if **summary != body {
+        **summary = body;
+    }
+}
+
+fn system_sync_outgoing_attack_rows(
+    mut commands: Commands,
+    game_opt: Option<Res<GameState>>,
+    slot_q: Query<Entity, With<OutgoingRowsContainer>>,
+    q_exec: Query<&AttackExecution>,
+    my_id: Res<MyPlayerId>,
+    settings: Res<ClientSettings>,
+    mut row_map: ResMut<OutgoingAttackRowMap>,
+    mut q_line: Query<&mut Text, With<OutgoingAttackLineText>>,
+) {
+    let Ok(slot) = slot_q.single() else {
+        return;
+    };
+
+    if my_id.0 == 0 {
+        for (_, (row_e, _)) in row_map.0.drain() {
+            commands.entity(row_e).despawn();
+        }
+        return;
+    }
+    let Some(game) = game_opt else {
+        return;
+    };
+
+    let mut outgoing: Vec<&AttackExecution> = q_exec
+        .iter()
+        .filter(|e| e.owner_id == my_id.0 && !e.retreating)
+        .collect();
+    outgoing.sort_by_key(|e| e.id);
+
+    let desired: HashSet<u64> = outgoing.iter().map(|e| e.id).collect();
+
+    let stale: Vec<u64> = row_map
+        .0
+        .keys()
+        .copied()
+        .filter(|id| !desired.contains(id))
+        .collect();
+    for id in stale {
+        if let Some((row_e, _)) = row_map.0.remove(&id) {
+            commands.entity(row_e).despawn();
+        }
+    }
+
+    for exec in outgoing {
+        let who = if exec.target_owner == 0 {
+            "Neutral".to_string()
+        } else {
+            game
+                .player(exec.target_owner)
+                .map(|p| hud_trunc_name(&p.name, 14))
+                .unwrap_or_else(|| format!("{}", exec.target_owner))
+        };
+        let line = format!(
+            "↑ {} — {:.0} / {:.0} trp",
+            who,
+            exec.troops.max(0.0),
+            exec.initial_troops.max(0.0),
+        );
+
+        if let Some((_, text_e)) = row_map.0.get(&exec.id).copied() {
+            if let Ok(mut t) = q_line.get_mut(text_e) {
+                if **t != line {
+                    **t = line;
+                }
+            }
+        } else {
+            let font = settings.font.clone();
+            let exec_id = exec.id;
+            let row_e = commands
+                .spawn((
+                    ChildOf(slot),
+                    OutgoingAttackRowRoot,
+                    Node {
+                        width: Val::Percent(100.0),
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::SpaceBetween,
+                        column_gap: Val::Px(8.0),
+                        padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(14.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.16, 0.2, 0.28, 0.82)),
+                    BorderColor::all(Color::srgba(0.38, 0.48, 0.58, 0.5)),
+                ))
+                .id();
+
+            let text_e = commands
+                .spawn((
+                    ChildOf(row_e),
+                    OutgoingAttackLineText,
+                    Text::new(line),
+                    TextFont {
+                        font: font.clone(),
+                        font_size: 11.5,
+                        ..default()
+                    },
+                    TextColor(Color::srgba(0.92, 0.94, 0.98, 1.0)),
+                    Node {
+                        flex_grow: 1.0,
+                        ..default()
+                    },
+                ))
+                .id();
+
+            commands
+                .spawn((
+                    ChildOf(row_e),
+                    Button,
+                    CancelAttackButton(exec_id),
+                    Node {
+                        width: Val::Px(32.0),
+                        height: Val::Px(28.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border_radius: BorderRadius::all(Val::Px(8.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.52, 0.2, 0.18, 0.88)),
+                    BorderColor::all(Color::srgba(0.95, 0.5, 0.45, 0.85)),
+                ))
+                .with_children(|b| {
+                    b.spawn((
+                        Text::new("✕"),
+                        TextFont {
+                            font,
+                            font_size: 14.0,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                    ));
+                });
+
+            row_map.0.insert(exec_id, (row_e, text_e));
+        }
+    }
+}
+
+fn system_handle_cancel_click(
+    interaction_q: Query<
+        (&Interaction, &CancelAttackButton),
+        (Changed<Interaction>, With<Button>),
+    >,
+    mut senders: Query<&mut MessageSender<ClientGameplayMessage>>,
+) {
+    for (interaction, btn) in &interaction_q {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        let attack_id = btn.0;
+        for mut sender in senders.iter_mut() {
+            let _ = sender.send::<ReliableChannel>(ClientGameplayMessage {
+                intent: GameplayIntent::CancelAttack { attack_id },
+            });
+        }
+    }
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Returns the raw [r, g, b] (0..1) for a player, or dark void for unowned.
@@ -980,100 +1613,35 @@ fn rand_client_id() -> u64 {
 }
 
 // -------------------------------------------------------------
-// VFX: Particles for Attacks 
-// -------------------------------------------------------------
-
-fn system_track_new_attacks(
-    mut commands: Commands,
-    mut effects: ResMut<Assets<Particle2dEffect>>,
-    game_opt: Option<Res<GameState>>,
-    q_new_attacks: Query<(Entity, &dark_rift_shared::execution::AttackExecution), Added<dark_rift_shared::execution::AttackExecution>>,
-) {
-    let Some(game) = game_opt else { return };
-    for (entity, exec) in &q_new_attacks {
-        
-        let mut core_color = [1.0, 1.0, 1.0];
-        
-        // Find who is winning right now mathematically (assuming attacking troops vs remaining troops or similar)
-        if let Some(player) = game.players.iter().find(|p| p.id == exec.owner_id) {
-            core_color = player.color;
-        }
-
-        let is_incoming = exec.target_owner != exec.owner_id;
-        let p_scale = if exec.troops > 10.0 { 4.0 } else { 2.0 }; // Double size heuristic
-        
-        // Boost color heavily to trigger Bloom!
-        let bloom_color = LinearRgba::new(
-            core_color[0] * 8.0, 
-            core_color[1] * 8.0, 
-            core_color[2] * 8.0, 
-            1.0
-        );
-
-        let effect = Particle2dEffect {
-            spawn_rate: 0.05,
-            spawn_amount: 5,
-            emission_shape: EmissionShape::Point,
-            lifetime: Rval::new(0.6, 0.25),
-            linear_speed: Some(Rval::new(70.0, 0.5)),
-            direction: Some(Rval::new(Vec2::new(1.0, 0.0), 1.0)),
-            linear_damp: Some(Rval::new(100.0, 0.0)),
-            scale_curve: Some(MultiCurve::new()
-                .with_point(p_scale, 0.0, None)
-                .with_point(p_scale * 2.5, 0.1, Some(bevy::prelude::EaseFunction::QuarticOut))
-                .with_point(0.0, 1.0, Some(bevy::prelude::EaseFunction::QuarticIn))
-            ),
-            color_curve: Some(MultiCurve::new()
-                .with_point(bloom_color, 0.0, None)
-                .with_point(LinearRgba::new(core_color[0]*2., core_color[1]*2., core_color[2]*2., 0.8), 0.5, None)
-                .with_point(LinearRgba::new(0.0, 0.0, 0.0, 0.0), 1.0, None)
-            ),
-            ..default()
-        };
-
-        commands.entity(entity).insert((
-            ParticleSpawner::<ColorParticle2dMaterial>::default(),
-            ParticleEffectHandle(effects.add(effect)),
-            Transform::from_xyz(0.0, 0.0, 100.0),
-        ));
-    }
-}
-
-fn system_sync_attack_particles(
-    mut q_attacks: Query<(&mut Transform, &dark_rift_shared::execution::AttackExecution), With<ParticleEffectHandle>>,
-) {
-    for (mut transform, exec) in &mut q_attacks {
-        // Peek at the front of the queue to center the vfx exactly on the frontline
-        if let Some(front) = exec.to_conquer.peek() {
-            transform.translation.x = front.x as f32 * TILE_SIZE;
-            transform.translation.y = front.y as f32 * TILE_SIZE;
-        }
-    }
-}
-
-// -------------------------------------------------------------
 // UI: Floating Player Identifiers (Center of mass on map)
 // -------------------------------------------------------------
+
+fn player_label_scale(tiles_owned: u32, ref_tiles: f32, max_scale: f32) -> f32 {
+    let t = tiles_owned.max(1) as f32;
+    let r = ref_tiles.max(1.0);
+    (t / r).sqrt().max(1.0).min(max_scale.max(1.0))
+}
 
 fn system_sync_player_labels(
     mut commands: Commands,
     game_opt: Option<Res<GameState>>,
-    ui_opt: Option<Res<UiSettings>>,
+    ui_opt: Option<Res<ClientSettings>>,
+
     mut q_labels: Query<(
         Entity,
         &mut Text2d,
-        &Children,
+        &mut TextFont,
         &mut Transform,
         &mut TextColor,
         &PlayerLabel,
+        &mut PlayerLabelRenderCache,
     )>,
-    mut q_shadows: Query<&mut Text2d, Without<PlayerLabel>>,
 ) {
     let Some(game) = game_opt else { return };
     let Some(ui) = ui_opt else { return };
 
     // 1. Despawn labels for dead players
-    for (entity, _, _, _, _, label) in &q_labels {
+    for (entity, _, _, _, _, label, _) in &q_labels {
         let alive = game.players.iter().any(|p| p.id == label.0 && p.alive);
         if !alive {
             commands.entity(entity).despawn();
@@ -1082,51 +1650,57 @@ fn system_sync_player_labels(
 
     // 2. Spawn labels for alive players if they don't exist
     for player in game.players.iter().filter(|p| p.alive) {
-        let exists = q_labels.iter().any(|(_, _, _, _, _, label)| label.0 == player.id);
+        let exists = q_labels
+            .iter()
+            .any(|(_, _, _, _, _, label, _)| label.0 == player.id);
         if !exists {
             let color = Color::WHITE;
-            let outline_px = ui.config.outline_thickness;
-            let offsets: [(f32, f32); 8] = [
-                (-outline_px, 0.0), (outline_px, 0.0), (0.0, -outline_px), (0.0, outline_px),
-                (-outline_px, -outline_px), (outline_px, -outline_px), (-outline_px, outline_px), (outline_px, outline_px),
-            ];
-            
+            let base_font = ui.config.ui.font_size;
+            let tiles = game.map.tiles_owned_by(player.id);
+            let mul = player_label_scale(
+                tiles,
+                ui.config.ui.label_size_ref_tiles,
+                ui.config.ui.label_max_scale,
+            );
+            let font_px = (base_font * mul).round().max(1.0);
+
+            let label_text = format!("{}\n[{:.0}]", player.name, player.troops);
             commands.spawn((
                 PlayerLabel(player.id),
-                Text2d::new(format!("{}\n[{:.0}]", player.name, player.troops)),
-                TextFont { font: ui.font.clone(), font_size: ui.config.font_size, ..default() },
+                PlayerLabelRenderCache(font_px),
+                Text2d::new(label_text),
+                TextFont {
+                    font: ui.font.clone(),
+                    font_size: font_px,
+                    // Rajdhani is a vector face: default AA keeps strokes from collapsing to 1px;
+                    // slightly heavier weight reads better on noisy tile colors.
+                    weight: FontWeight::SEMIBOLD,
+                    ..default()
+                },
                 TextColor(color),
                 TextLayout::new_with_justify(Justify::Center),
                 Transform::from_xyz(0.0, 0.0, 150.0),
-            )).with_children(|c| {
-                if outline_px > 0.0 {
-                    for (ox, oy) in offsets {
-                        c.spawn((
-                            Text2d::new(format!("{}\n[{:.0}]", player.name, player.troops)),
-                            TextFont { font: ui.font.clone(), font_size: ui.config.font_size, ..default() },
-                            TextColor(ui.config.get_outline_color()),
-                            TextLayout::new_with_justify(Justify::Center),
-                            Transform::from_xyz(ox, oy, -0.1),
-                        ));
-                    }
-                }
-            });
+            ));
         }
     }
 
     // 3. Update positions and text based on territory center of mass
-    for (_entity, mut text, children, mut transform, mut text_color, label) in q_labels.iter_mut() {
+    for (
+        _entity,
+        mut text,
+        mut p_font,
+        mut transform,
+        mut text_color,
+        label,
+        mut cache,
+    ) in q_labels.iter_mut()
+    {
         *text_color = TextColor(Color::WHITE);
         let Some(player) = game.player(label.0) else { continue };
 
         let new_text = format!("{}\n[{:.0}]", player.name, player.troops);
         if text.0 != new_text {
             text.0 = new_text.clone();
-            for child in children.iter() {
-                if let Ok(mut shadow_text) = q_shadows.get_mut(child) {
-                    shadow_text.0 = new_text.clone();
-                }
-            }
         }
 
         let mut sum_x = 0;
@@ -1146,13 +1720,26 @@ fn system_sync_player_labels(
             let cx = (sum_x as f32 / count as f32) * TILE_SIZE;
             let cy = (sum_y as f32 / count as f32) * TILE_SIZE;
             
-            let target = Vec3::new(cx, cy + ui.config.label_offset_y, 150.0);
+            let target = Vec3::new(cx, cy + ui.config.ui.label_offset_y, 150.0);
             
             // Just jump directly to target if too far, otherwise float smoothly
             if transform.translation.distance(target) > 100.0 {
                 transform.translation = target;
             } else {
                 transform.translation = transform.translation.lerp(target, 0.2);
+            }
+
+            let base_font = ui.config.ui.font_size;
+            let mul = player_label_scale(
+                count,
+                ui.config.ui.label_size_ref_tiles,
+                ui.config.ui.label_max_scale,
+            );
+            let font_px = (base_font * mul).round().max(1.0);
+            if cache.0 != font_px {
+                cache.0 = font_px;
+                p_font.font_size = font_px;
+                p_font.weight = FontWeight::SEMIBOLD;
             }
         }
     }

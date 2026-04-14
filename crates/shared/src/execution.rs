@@ -6,6 +6,9 @@ use crate::game::{GameState, GamePhase, GameEvent};
 use crate::map::TerrainType;
 use crate::pseudo_random::PseudoRandom;
 
+/// Fraction of refunded troops lost when retreating from an attack on another player (OpenFront parity).
+pub const RETREAT_PENALTY_VS_PLAYER: f64 = 0.25;
+
 #[derive(Component)]
 pub struct PlayerExecutionTag {
     pub player_id: u16,
@@ -45,13 +48,15 @@ impl PartialOrd for PrioritizedTile {
 
 #[derive(Component)]
 pub struct AttackExecution {
-    pub id: u64, // Used for deterministic sorting cross-client
+    pub id: u64,
     pub owner_id: u16,
-    pub target_owner: u16, // 0 = TerraNullius/neutral
+    pub target_owner: u16,
     pub troops: f64,
     pub initial_troops: f64,
     pub to_conquer: BinaryHeap<PrioritizedTile>,
     pub rng: PseudoRandom,
+    /// Player cancelled via HUD; next tick refunds remaining troops (with penalty vs players).
+    pub retreating: bool,
 }
 
 impl AttackExecution {
@@ -116,15 +121,36 @@ pub fn system_attack_execution(
 
     for (entity, _) in ordered {
         let Ok((_, mut execution)) = query.get_mut(entity) else { continue };
+
+        if execution.retreating {
+            let refund = execution.troops.max(0.0);
+            if refund > 0.0 && refund.is_finite() {
+                let factor = if execution.target_owner == 0 {
+                    1.0
+                } else {
+                    1.0 - RETREAT_PENALTY_VS_PLAYER
+                };
+                let back = refund * factor;
+                if let Some(player) = game
+                    .players
+                    .iter_mut()
+                    .find(|p| p.id == execution.owner_id)
+                {
+                    player.troops = (player.troops + back).min(player.max_troops);
+                }
+            }
+            commands.entity(entity).despawn();
+            continue;
+        }
+
         let mut expanded_this_tick = 0u32;
-        
+
         loop {
             if expanded_this_tick >= config::EXPAND_TILES_PER_TICK {
                 break;
             }
 
             if execution.troops < config::EXPAND_COST || execution.troops.is_nan() {
-                // Out of troops! Despawn
                 commands.entity(entity).despawn();
                 break;
             }
@@ -154,11 +180,7 @@ pub fn system_attack_execution(
                     new_owner: execution.owner_id,
                 });
 
-                // Subtract from player total if player exists
-                if let Some(player) = game.players.iter_mut().find(|p| p.id == execution.owner_id) {
-                    player.troops -= config::EXPAND_COST;
-                    player.troops = player.troops.max(0.0);
-                }
+                // Troops were reserved on intent; only drain execution pool per tile (OpenFront).
 
                 // Enqueue new neutral/enemy neighbors that touch our newly acquired tile
                 for (nx, ny) in game.map.neighbors(target_tile.x, target_tile.y) {
@@ -185,7 +207,16 @@ pub fn system_attack_execution(
                     });
                 }
             } else {
-                // Priority queue is empty - finished conquering!
+                let refund = execution.troops.max(0.0);
+                if refund > 0.0 && refund.is_finite() {
+                    if let Some(player) = game
+                        .players
+                        .iter_mut()
+                        .find(|p| p.id == execution.owner_id)
+                    {
+                        player.troops = (player.troops + refund).min(player.max_troops);
+                    }
+                }
                 commands.entity(entity).despawn();
                 break;
             }

@@ -3,7 +3,7 @@
 //! The server does NOT simulate the game. It:
 //!   1. Accepts WebSocket connections via Lightyear
 //!   2. Assigns player IDs and spawn points on connect
-//!   3. Collects incoming ClientIntentMessage into an IntentBuffer
+//!   3. Collects incoming ClientGameplayMessage into an IntentBuffer
 //!   4. At fixed TURN_INTERVAL, bundles intents into a Turn → broadcasts ServerTurnMessage
 //!   5. Sends ServerStartMessage with seed + player roster + missed turns on join
 //!
@@ -221,7 +221,7 @@ fn handle_intent_messages(
     client_map:   Res<ClientPlayerMap>,
     metadata:     Res<GameMetadata>,
     mut buffer:   ResMut<IntentBuffer>,
-    mut receivers: Query<(Entity, &mut MessageReceiver<ClientIntentMessage>)>,
+    mut receivers: Query<(Entity, &mut MessageReceiver<ClientGameplayMessage>)>,
 ) {
     if !metadata.started { return; }
 

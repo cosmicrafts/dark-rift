@@ -1,133 +1,281 @@
-//! Shared intent-to-execution converter.
-//!
-//! Given a StampedIntent from the server's Turn relay, spawns the appropriate
-//! Bevy ECS entities on the client (AttackExecution with BFS queue seeded).
-//!
-//! This function is the single source of truth for intent → execution conversion,
-//! used identically by every client to guarantee deterministic simulation.
-//!
-//! Mirrors OpenFront's Executor.createExecs() in core/GameRunner.ts.
+//! Intent → AttackExecution: merge, mutual cancel, upfront troop reservation (OpenFront parity).
+
+use std::collections::{BinaryHeap, HashMap};
 
 use bevy::prelude::*;
-use crate::game::GameState;
+
+use crate::config;
 use crate::execution::{AttackExecution, PrioritizedTile};
+use crate::game::GameState;
 use crate::map::TerrainType;
 use crate::pseudo_random::PseudoRandom;
-use crate::protocol::{StampedIntent, AttackIntent};
-use crate::config;
+use crate::protocol::{AttackIntent, GameplayIntent, StampedIntent};
 
-/// Convert a StampedIntent into a seeded AttackExecution entity.
-/// Called by every client when they receive a ServerTurnMessage.
-///
-/// Equivalent of OpenFront's Executor.createExecs() → AttackExecution constructor.
-pub fn apply_stamped_intent(
-    commands: &mut Commands,
-    game: &GameState,
-    stamped: &StampedIntent,
-    intent_index: u32,
-) {
-    let player_id = stamped.player_id;
-    let target_owner = stamped.intent.target_owner;
-
-    let player = match game.players.iter().find(|p| p.id == player_id) {
-        Some(p) => p,
-        None => {
-            warn!("apply_stamped_intent: player {} not found", player_id);
-            return;
-        }
-    };
-
-    if !player.alive {
-        return;
+/// Merge two frontiers: same cell keeps the tile with lower `priority` (better for expansion order).
+pub fn merge_frontiers(
+    mut a: BinaryHeap<PrioritizedTile>,
+    mut b: BinaryHeap<PrioritizedTile>,
+) -> BinaryHeap<PrioritizedTile> {
+    let mut best: HashMap<(u32, u32), PrioritizedTile> = HashMap::new();
+    for t in a.drain().chain(b.drain()) {
+        let k = (t.x, t.y);
+        best.entry(k)
+            .and_modify(|cur| {
+                if t.priority < cur.priority {
+                    *cur = t;
+                }
+            })
+            .or_insert(t);
     }
+    let mut v: Vec<PrioritizedTile> = best.into_values().collect();
+    v.sort_by(|x, y| x.cmp(y));
+    BinaryHeap::from(v)
+}
 
-    let troops = stamped.intent.troops.unwrap_or(player.troops);
-
-    // Seed the BFS priority queue from all border tiles adjacent to the target owner.
-    // Deterministic: same seed, same tick, same result on every client.
-    // Mirrors OpenFront AttackExecution constructor's initial queue seeding.
-    let mut rng = PseudoRandom::new(game.seed.wrapping_add(game.tick));
-    let mut to_conquer = std::collections::BinaryHeap::new();
-
+fn build_attack_frontier(
+    game: &GameState,
+    player_id: u16,
+    target_owner: u16,
+    rng: &mut PseudoRandom,
+) -> BinaryHeap<PrioritizedTile> {
+    let mut to_conquer = BinaryHeap::new();
     for (bx, by) in game.map.border_tiles_of(player_id) {
         for (nx, ny) in game.map.neighbors(bx, by) {
             if game.map.owner_id(nx, ny) != target_owner {
                 continue;
             }
-
-            // Count how many tiles bordering (nx,ny) we already own
-            let num_owned_by_me = game.map.neighbors(nx, ny)
+            let num_owned_by_me = game
+                .map
+                .neighbors(nx, ny)
                 .into_iter()
                 .filter(|(nnx, nny)| game.map.owner_id(*nnx, *nny) == player_id)
                 .count() as u32;
 
             let terrain = game.map.terrain_type(nx, ny);
             let mag = match terrain {
-                TerrainType::Plains   => 1.0f32,
+                TerrainType::Plains => 1.0f32,
                 TerrainType::Highland => 1.5,
                 TerrainType::Mountain => 2.0,
-                _                     => 1.0,
+                _ => 1.0,
             };
             let r = rng.next_int(0, 7) as f32;
             let prio = (r + 10.0) * (1.0 - (num_owned_by_me as f32) * 0.5 + mag / 2.0)
                 + game.tick as f32;
 
-            to_conquer.push(PrioritizedTile { priority: prio, x: nx, y: ny });
+            to_conquer.push(PrioritizedTile {
+                priority: prio,
+                x: nx,
+                y: ny,
+            });
+        }
+    }
+    to_conquer
+}
+
+/// Apply one stamped intent: mutates `GameState`, `AttackExecution` query, and queues spawns/despawns.
+pub fn apply_stamped_intent(
+    commands: &mut Commands,
+    game: &mut GameState,
+    q_exec: &mut Query<(Entity, &mut AttackExecution)>,
+    stamped: &StampedIntent,
+    intent_index: u32,
+) {
+    match &stamped.intent {
+        GameplayIntent::CancelAttack { attack_id } => {
+            let pid = stamped.player_id;
+            for (_, mut exec) in q_exec.iter_mut() {
+                if exec.id == *attack_id && exec.owner_id == pid {
+                    exec.retreating = true;
+                    return;
+                }
+            }
+            warn!(
+                "apply_stamped_intent: cancel attack_id={} for player {} — not found or not owner",
+                attack_id, pid
+            );
+        }
+        GameplayIntent::Attack(attack) => {
+            apply_attack_intent(commands, game, q_exec, stamped.player_id, attack, intent_index);
+        }
+    }
+}
+
+fn apply_attack_intent(
+    commands: &mut Commands,
+    game: &mut GameState,
+    q_exec: &mut Query<(Entity, &mut AttackExecution)>,
+    player_id: u16,
+    attack: &AttackIntent,
+    intent_index: u32,
+) {
+    let target_owner = attack.target_owner;
+
+    let Some(player) = game.players.iter().find(|p| p.id == player_id) else {
+        warn!("apply_attack_intent: player {} not found", player_id);
+        return;
+    };
+
+    if !player.alive {
+        return;
+    }
+
+    let pool_cap = player.troops;
+    let requested = attack
+        .troops
+        .unwrap_or(pool_cap)
+        .max(0.0)
+        .min(pool_cap);
+
+    if requested < config::EXPAND_COST {
+        return;
+    }
+
+    let Some(p) = game.players.iter_mut().find(|p| p.id == player_id) else {
+        return;
+    };
+    p.troops -= requested;
+    p.troops = p.troops.max(0.0);
+
+    let mut remaining = requested;
+
+    // Mutual annihilation with enemy attacks that target us (deterministic by enemy exec id).
+    let mut enemy_hits: Vec<(Entity, u64)> = q_exec
+        .iter()
+        .filter(|(_, ex)| {
+            ex.owner_id == target_owner && ex.target_owner == player_id && !ex.retreating
+        })
+        .map(|(e, ex)| (e, ex.id))
+        .collect();
+    enemy_hits.sort_by_key(|(_, id)| *id);
+
+    for (e_enemy, _) in &enemy_hits {
+        if remaining < config::EXPAND_COST {
+            break;
+        }
+        let Ok((_, mut enemy_ex)) = q_exec.get_mut(*e_enemy) else {
+            continue;
+        };
+        if enemy_ex.troops < config::EXPAND_COST {
+            continue;
+        }
+        let clash = enemy_ex.troops.min(remaining);
+        enemy_ex.troops -= clash;
+        enemy_ex.troops = enemy_ex.troops.max(0.0);
+        remaining -= clash;
+    }
+
+    for (e_enemy, _) in enemy_hits {
+        let despawn = q_exec
+            .get(e_enemy)
+            .map(|(_, ex)| ex.troops < config::EXPAND_COST)
+            .unwrap_or(false);
+        if despawn {
+            commands.entity(e_enemy).despawn();
         }
     }
 
-    if to_conquer.is_empty() {
-        return; // No valid border with target — intent is a no-op
+    if remaining < config::EXPAND_COST {
+        if let Some(p) = game.players.iter_mut().find(|p| p.id == player_id) {
+            p.troops = (p.troops + remaining).min(p.max_troops);
+        }
+        return;
+    }
+
+    let mut rng = PseudoRandom::new(
+        game
+            .seed
+            .wrapping_add(game.tick)
+            .wrapping_add(intent_index as u64),
+    );
+    let fresh = build_attack_frontier(game, player_id, target_owner, &mut rng);
+
+    if fresh.is_empty() {
+        if let Some(p) = game.players.iter_mut().find(|p| p.id == player_id) {
+            p.troops = (p.troops + remaining).min(p.max_troops);
+        }
+        return;
+    }
+
+    // Merge into existing outgoing attack to same target (lowest exec id wins).
+    let mut merge_candidates: Vec<(Entity, u64)> = q_exec
+        .iter()
+        .filter(|(_, ex)| {
+            ex.owner_id == player_id && ex.target_owner == target_owner && !ex.retreating
+        })
+        .map(|(e, ex)| (e, ex.id))
+        .collect();
+    merge_candidates.sort_by_key(|(_, id)| *id);
+
+    if let Some((e_merge, _)) = merge_candidates.first().copied() {
+        let Ok((_, mut ex)) = q_exec.get_mut(e_merge) else {
+            return;
+        };
+        ex.troops += remaining;
+        ex.initial_troops += remaining;
+        let merged = merge_frontiers(std::mem::take(&mut ex.to_conquer), fresh);
+        ex.to_conquer = merged;
+        return;
     }
 
     let exec_id = ((game.tick as u64) << 32) | (intent_index as u64);
-
     commands.spawn(AttackExecution {
         id: exec_id,
         owner_id: player_id,
         target_owner,
-        troops,
-        initial_troops: troops,
-        to_conquer,
+        troops: remaining,
+        initial_troops: remaining,
+        to_conquer: fresh,
         rng,
+        retreating: false,
     });
 }
 
-/// Simulation-driven Bot AI behavior. Runs locally on every client deterministically.
 pub fn system_bot_think(
     mut commands: Commands,
-    game: Res<GameState>,
+    mut game: ResMut<GameState>,
+    mut q_exec: Query<(Entity, &mut AttackExecution)>,
 ) {
     if game.phase != crate::game::GamePhase::Playing {
         return;
     }
 
-    let bot_ids: Vec<u16> = game.players.iter().filter(|p| !p.is_human() && p.alive).map(|p| p.id).collect();
-    if bot_ids.is_empty() { return; }
+    let bot_ids: Vec<u16> = game
+        .players
+        .iter()
+        .filter(|p| !p.is_human() && p.alive)
+        .map(|p| p.id)
+        .collect();
+    if bot_ids.is_empty() {
+        return;
+    }
 
     let mut rng = PseudoRandom::new(game.seed.wrapping_add(game.tick));
 
     for bot_id in bot_ids {
-        let Some(player) = game.player(bot_id) else { continue; };
+        let Some(player) = game.player(bot_id) else {
+            continue;
+        };
 
-        // Organic Pacing:
-        // Attack rate ~30 ticks (3 seconds). We use deterministic modulo based on bot_id.
-        let attack_interval = 30; 
+        let attack_interval = 30;
         if game.tick % attack_interval != (bot_id as u64 % attack_interval) {
             continue;
         }
 
-        // Trigger Phase: Save troops until we reach 60% capacity
         let trigger_limit = player.max_troops * 0.6;
-        if player.troops < trigger_limit { continue; }
+        if player.troops < trigger_limit {
+            continue;
+        }
 
-        // Burst Phase: Send what we have, minus a 30% reserve
         let reserve = player.max_troops * 0.3;
         let p_send = (player.troops - reserve).max(0.0);
-        if p_send < config::EXPAND_COST { continue; }
+        if p_send < config::EXPAND_COST {
+            continue;
+        }
 
         let borders = game.map.border_tiles_of(bot_id);
-        if borders.is_empty() { continue; }
+        if borders.is_empty() {
+            continue;
+        }
 
         let r_idx = rng.next_int(0, borders.len() as i32) as usize;
         let (bx, by) = borders[r_idx];
@@ -139,21 +287,31 @@ pub fn system_bot_think(
             if owner != bot_id {
                 targets.push(owner);
                 if owner == 0 {
-                    // Double priority for expanding into neutral territory
                     targets.push(0);
                     targets.push(0);
                 }
             }
         }
 
-        if targets.is_empty() { continue; }
+        if targets.is_empty() {
+            continue;
+        }
         let target_owner = targets[rng.next_int(0, targets.len() as i32) as usize];
-        
-        let intent = StampedIntent {
+
+        let stamped = StampedIntent {
             player_id: bot_id,
-            intent: AttackIntent { target_owner, troops: Some(p_send) }
+            intent: GameplayIntent::Attack(AttackIntent {
+                target_owner,
+                troops: Some(p_send),
+            }),
         };
-        
-        apply_stamped_intent(&mut commands, &game, &intent, bot_id as u32);
+
+        apply_stamped_intent(
+            &mut commands,
+            &mut game,
+            &mut q_exec,
+            &stamped,
+            bot_id as u32,
+        );
     }
 }

@@ -33,7 +33,7 @@ pub const MAX_TROOPS_BASE: f64 = 200.0;
 pub const MAX_TROOPS_SCALE: f64 = 50.0;
 
 /// Server tick rate (ticks per second).
-pub const TICK_RATE: f64 = 10.0;
+pub const TICK_RATE: f64 = 0.0;
 
 /// Percentage of tiles needed to win.
 pub const WIN_PERCENTAGE: f64 = 80.0;

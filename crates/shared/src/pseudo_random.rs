@@ -1,3 +1,4 @@
+#[derive(Clone, Copy, Debug)]
 pub struct PseudoRandom {
     state: u64,
 }
