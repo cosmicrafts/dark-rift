@@ -72,17 +72,17 @@ impl Player {
     }
 }
 
-/// Color palette for players.
+/// Color palette for human players (very high chroma; bots stay softer via `bot_territory_color`).
 pub fn player_colors() -> Vec<[f32; 3]> {
     vec![
-        [0.0, 0.75, 1.0],   // Cyan
-        [1.0, 0.25, 0.25],  // Red
-        [0.2, 0.9, 0.3],    // Green
-        [1.0, 0.85, 0.0],   // Gold
-        [1.0, 0.35, 0.75],  // Pink
-        [0.55, 0.35, 1.0],  // Violet
-        [1.0, 0.55, 0.15],  // Orange
-        [0.35, 0.9, 0.8],   // Teal
+        [0.0, 1.0, 1.0],    // Cyan
+        [1.0, 0.02, 0.08],  // Red
+        [0.02, 1.0, 0.08],  // Green
+        [1.0, 1.0, 0.0],    // Yellow
+        [1.0, 0.05, 0.95],  // Magenta
+        [0.45, 0.08, 1.0],  // Violet
+        [1.0, 0.32, 0.0],   // Orange
+        [0.0, 0.98, 0.88],  // Teal
     ]
 }
 
@@ -106,7 +106,7 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     [r, g, b]
 }
 
-/// Deterministic pastel territory color for bots (OpenFront-style: hue + moderate saturation).
+/// Deterministic softer territory tint for bots (still less saturated than `player_colors()`).
 /// PRNG stream is independent of spawn-placement RNG so map layout stays unchanged.
 pub fn bot_territory_color(game_seed: u64, bot_id: u16) -> [f32; 3] {
     let mix = game_seed
@@ -115,13 +115,12 @@ pub fn bot_territory_color(game_seed: u64, bot_id: u16) -> [f32; 3] {
         ^ (bot_id as u64);
     let mut rng = PseudoRandom::new(mix);
     let h = rng.next_int(0, 10_000) as f32 / 10_000.0;
-    // Saturated enough to read as a color on the map, still softer than `player_colors()`.
-    let s = 0.42 + rng.next_int(0, 1000) as f32 / 1000.0 * 0.24;
-    let v = 0.54 + rng.next_int(0, 1000) as f32 / 1000.0 * 0.22;
+    let s = 0.28 + rng.next_int(0, 1000) as f32 / 1000.0 * 0.18;
+    let v = 0.52 + rng.next_int(0, 1000) as f32 / 1000.0 * 0.18;
     let [r, g, b] = hsv_to_rgb(h, s, v);
     [
-        r.clamp(0.14, 0.92),
-        g.clamp(0.14, 0.92),
-        b.clamp(0.14, 0.92),
+        r.clamp(0.16, 0.88),
+        g.clamp(0.16, 0.88),
+        b.clamp(0.16, 0.88),
     ]
 }

@@ -3,12 +3,12 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct UiSettingsConfig {
+    /// Reserved for future AssetServer-based font override; labels use the embedded TTF.
+    #[allow(dead_code)]
     pub font_path: String,
     pub font_size: f32,
     pub outline_thickness: f32,
     pub outline_color: (f32, f32, f32, f32),
-    pub name_color_ally: (f32, f32, f32, f32),
-    pub name_color_enemy: (f32, f32, f32, f32),
     pub label_offset_y: f32,
 }
 
@@ -19,8 +19,6 @@ impl Default for UiSettingsConfig {
             font_size: 16.0,
             outline_thickness: 1.0,
             outline_color: (0.0, 0.0, 0.0, 1.0),
-            name_color_ally: (0.2, 1.0, 0.4, 1.0),
-            name_color_enemy: (1.0, 0.35, 0.28, 1.0),
             label_offset_y: 12.0,
         }
     }
@@ -36,24 +34,6 @@ impl UiSettingsConfig {
             self.outline_color.3,
         )
     }
-    
-    pub fn get_ally_color(&self) -> Color {
-        Color::srgba(
-            self.name_color_ally.0,
-            self.name_color_ally.1,
-            self.name_color_ally.2,
-            self.name_color_ally.3,
-        )
-    }
-    
-    pub fn get_enemy_color(&self) -> Color {
-        Color::srgba(
-            self.name_color_enemy.0,
-            self.name_color_enemy.1,
-            self.name_color_enemy.2,
-            self.name_color_enemy.3,
-        )
-    }
 }
 
 #[derive(Resource)]
@@ -62,29 +42,38 @@ pub struct UiSettings {
     pub font: Handle<Font>,
 }
 
-pub fn load_ui_settings(mut commands: Commands, asset_server: Res<AssetServer>) {
-    let ron_path = "assets/ui_settings.ron";
-    
-    let config = match std::fs::read_to_string(ron_path) {
+pub fn load_ui_settings(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
+    // Independent of process CWD (fixes `cargo run` from crates/client vs workspace root).
+    let ron_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/ui_settings.ron");
+
+    let config = match std::fs::read_to_string(&ron_path) {
         Ok(s) => match ron::from_str::<UiSettingsConfig>(&s) {
             Ok(c) => c,
             Err(e) => {
-                bevy::log::warn!("ui_settings.ron parse error: {}", e);
+                bevy::log::warn!("ui_settings.ron parse error ({}): {}", ron_path.display(), e);
                 UiSettingsConfig::default()
             }
         },
         Err(e) => {
-            bevy::log::warn!("Could not read ui_settings.ron: {}; using defaults", e);
+            bevy::log::warn!(
+                "Could not read {}: {}; using defaults",
+                ron_path.display(),
+                e
+            );
             UiSettingsConfig::default()
         }
     };
-    
-    let font_handle = if !config.font_path.is_empty() {
-        asset_server.load(&config.font_path)
-    } else {
-        Handle::default()
+
+    // Embed font so labels render even when AssetServer can't resolve `assets/` (wrong CWD).
+    // `font_path` in ui_settings.ron is kept for future hot-reload / overrides only.
+    let font_bytes = include_bytes!("../../../assets/fonts/Rajdhani-Medium.ttf");
+    let font_handle = match Font::try_from_bytes(font_bytes.to_vec()) {
+        Ok(f) => fonts.add(f),
+        Err(e) => {
+            bevy::log::error!("Rajdhani font bytes invalid: {e}; map labels may be invisible");
+            Handle::default()
+        }
     };
-    
     commands.insert_resource(UiSettings {
         config,
         font: font_handle,

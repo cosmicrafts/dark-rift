@@ -136,7 +136,7 @@ fn main() {
             turn_index: 0,
         });
 
-        app.add_systems(Startup, setup_offline)
+        app.add_systems(Startup, (load_ui_settings, setup_offline))
            .add_systems(Update, system_replay_pulse);
     } else {
         app.add_plugins(SharedProtocolPlugin)
@@ -818,14 +818,27 @@ fn handle_tile_change(
                         let idx = (cy as u32 * config::MAP_WIDTH as u32 + cx as u32) as usize;
                         let mut t_data = openfront_tile_color(&game, cx, cy);
                         
-                        // Si era un neighbor que acaba de entrar en el loop y también está pintarrajeado, combinemos
+                        // Boost freshly-painted tiles with their own core color (not white)
                         if let Some(&val) = fresh_tiles.tiles.get(&(cx as u32, cy as u32)) {
                             let srgba = t_data.color.to_srgba();
-                            let mix = val.clamp(0.0, 1.0);
+                            let t = val.clamp(0.0, 1.0);
+                            let eased = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t); // cubic ease-out
+                            let boost = 1.0 + 4.0 * eased; // multiply core color up to 5x for HDR bloom
+                            
+                            let owner = game.map.owner_id(cx as u32, cy as u32);
+                            let is_border = [(cx, cy - 1), (cx + 1, cy), (cx, cy + 1), (cx - 1, cy)]
+                                .iter()
+                                .any(|&(nx, ny)| {
+                                    game.map.is_valid_coord(nx, ny)
+                                        && game.map.owner_id(nx as u32, ny as u32) != owner
+                                });
+
+                            let white_flash = if is_border { 2.5 * eased } else { 0.0 };
+
                             t_data.color = Color::srgba(
-                                srgba.red * (1.0 - mix) + 3.0 * mix,
-                                srgba.green * (1.0 - mix) + 3.0 * mix,
-                                srgba.blue * (1.0 - mix) + 3.0 * mix,
+                                srgba.red * boost + white_flash,
+                                srgba.green * boost + white_flash,
+                                srgba.blue * boost + white_flash,
                                 srgba.alpha
                             );
                         }
@@ -851,7 +864,7 @@ fn system_animate_tile_colors(
     let Some(game) = game_opt else { return };
     
     let dt = time.delta_secs();
-    let lerp_speed = 3.33; 
+    let lerp_speed = 0.85; // Lowered from 3.33 -> 0.85 to leave a much longer "burning" tail over the territory
     let mut finished = vec![];
     
     for (&(x, y), val) in fresh_tiles.tiles.iter_mut() {
@@ -869,11 +882,24 @@ fn system_animate_tile_colors(
             let mut t_data = openfront_tile_color(&game, cx, cy);
             
             let srgba = t_data.color.to_srgba();
-            let mix = val.clamp(0.0, 1.0);
+            let t = val.clamp(0.0, 1.0);
+            let eased = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t); // cubic ease-out
+            let boost = 1.0 + 4.0 * eased; // multiply core color up to 5x for HDR bloom
+            
+            let owner = game.map.owner_id(cx as u32, cy as u32);
+            let is_border = [(cx, cy - 1), (cx + 1, cy), (cx, cy + 1), (cx - 1, cy)]
+                .iter()
+                .any(|&(nx, ny)| {
+                    game.map.is_valid_coord(nx, ny)
+                        && game.map.owner_id(nx as u32, ny as u32) != owner
+                });
+
+            let white_flash = if is_border { 2.5 * eased } else { 0.0 };
+
             t_data.color = Color::srgba(
-                srgba.red * (1.0 - mix) + 3.0 * mix,
-                srgba.green * (1.0 - mix) + 3.0 * mix,
-                srgba.blue * (1.0 - mix) + 3.0 * mix,
+                srgba.red * boost + white_flash,
+                srgba.green * boost + white_flash,
+                srgba.blue * boost + white_flash,
                 srgba.alpha
             );
             
@@ -959,13 +985,55 @@ fn rand_client_id() -> u64 {
 
 fn system_track_new_attacks(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
+    mut effects: ResMut<Assets<Particle2dEffect>>,
+    game_opt: Option<Res<GameState>>,
     q_new_attacks: Query<(Entity, &dark_rift_shared::execution::AttackExecution), Added<dark_rift_shared::execution::AttackExecution>>,
 ) {
-    for (entity, _exec) in &q_new_attacks {
+    let Some(game) = game_opt else { return };
+    for (entity, exec) in &q_new_attacks {
+        
+        let mut core_color = [1.0, 1.0, 1.0];
+        
+        // Find who is winning right now mathematically (assuming attacking troops vs remaining troops or similar)
+        if let Some(player) = game.players.iter().find(|p| p.id == exec.owner_id) {
+            core_color = player.color;
+        }
+
+        let is_incoming = exec.target_owner != exec.owner_id;
+        let p_scale = if exec.troops > 10.0 { 4.0 } else { 2.0 }; // Double size heuristic
+        
+        // Boost color heavily to trigger Bloom!
+        let bloom_color = LinearRgba::new(
+            core_color[0] * 8.0, 
+            core_color[1] * 8.0, 
+            core_color[2] * 8.0, 
+            1.0
+        );
+
+        let effect = Particle2dEffect {
+            spawn_rate: 0.05,
+            spawn_amount: 5,
+            emission_shape: EmissionShape::Point,
+            lifetime: Rval::new(0.6, 0.25),
+            linear_speed: Some(Rval::new(70.0, 0.5)),
+            direction: Some(Rval::new(Vec2::new(1.0, 0.0), 1.0)),
+            linear_damp: Some(Rval::new(100.0, 0.0)),
+            scale_curve: Some(MultiCurve::new()
+                .with_point(p_scale, 0.0, None)
+                .with_point(p_scale * 2.5, 0.1, Some(bevy::prelude::EaseFunction::QuarticOut))
+                .with_point(0.0, 1.0, Some(bevy::prelude::EaseFunction::QuarticIn))
+            ),
+            color_curve: Some(MultiCurve::new()
+                .with_point(bloom_color, 0.0, None)
+                .with_point(LinearRgba::new(core_color[0]*2., core_color[1]*2., core_color[2]*2., 0.8), 0.5, None)
+                .with_point(LinearRgba::new(0.0, 0.0, 0.0, 0.0), 1.0, None)
+            ),
+            ..default()
+        };
+
         commands.entity(entity).insert((
             ParticleSpawner::<ColorParticle2dMaterial>::default(),
-            ParticleEffectHandle(asset_server.load("enoki_impact.ron")),
+            ParticleEffectHandle(effects.add(effect)),
             Transform::from_xyz(0.0, 0.0, 100.0),
         ));
     }
@@ -991,15 +1059,21 @@ fn system_sync_player_labels(
     mut commands: Commands,
     game_opt: Option<Res<GameState>>,
     ui_opt: Option<Res<UiSettings>>,
-    my_id: Res<MyPlayerId>,
-    mut q_labels: Query<(Entity, &mut Text2d, &Children, &mut Transform, &PlayerLabel)>,
+    mut q_labels: Query<(
+        Entity,
+        &mut Text2d,
+        &Children,
+        &mut Transform,
+        &mut TextColor,
+        &PlayerLabel,
+    )>,
     mut q_shadows: Query<&mut Text2d, Without<PlayerLabel>>,
 ) {
     let Some(game) = game_opt else { return };
     let Some(ui) = ui_opt else { return };
 
     // 1. Despawn labels for dead players
-    for (entity, _, _, _, label) in &q_labels {
+    for (entity, _, _, _, _, label) in &q_labels {
         let alive = game.players.iter().any(|p| p.id == label.0 && p.alive);
         if !alive {
             commands.entity(entity).despawn();
@@ -1008,9 +1082,9 @@ fn system_sync_player_labels(
 
     // 2. Spawn labels for alive players if they don't exist
     for player in game.players.iter().filter(|p| p.alive) {
-        let exists = q_labels.iter().any(|(_, _, _, _, label)| label.0 == player.id);
+        let exists = q_labels.iter().any(|(_, _, _, _, _, label)| label.0 == player.id);
         if !exists {
-            let color = if player.id == my_id.0 { ui.config.get_ally_color() } else { ui.config.get_enemy_color() };
+            let color = Color::WHITE;
             let outline_px = ui.config.outline_thickness;
             let offsets: [(f32, f32); 8] = [
                 (-outline_px, 0.0), (outline_px, 0.0), (0.0, -outline_px), (0.0, outline_px),
@@ -1023,7 +1097,7 @@ fn system_sync_player_labels(
                 TextFont { font: ui.font.clone(), font_size: ui.config.font_size, ..default() },
                 TextColor(color),
                 TextLayout::new_with_justify(Justify::Center),
-                Transform::from_xyz(0.0, 0.0, 150.0).with_scale(Vec3::splat(0.7)),
+                Transform::from_xyz(0.0, 0.0, 150.0),
             )).with_children(|c| {
                 if outline_px > 0.0 {
                     for (ox, oy) in offsets {
@@ -1041,7 +1115,8 @@ fn system_sync_player_labels(
     }
 
     // 3. Update positions and text based on territory center of mass
-    for (_entity, mut text, children, mut transform, label) in q_labels.iter_mut() {
+    for (_entity, mut text, children, mut transform, mut text_color, label) in q_labels.iter_mut() {
+        *text_color = TextColor(Color::WHITE);
         let Some(player) = game.player(label.0) else { continue };
 
         let new_text = format!("{}\n[{:.0}]", player.name, player.troops);
