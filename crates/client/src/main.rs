@@ -112,8 +112,6 @@ impl Default for OverlayDiagnostics {
 struct PerfOverlayUiState {
     last_fps_refresh: Option<Instant>,
     last_net_refresh: Option<Instant>,
-    cached_fps: String,
-    cached_ping: String,
 }
 
 /// Client-side network timing: handshake (Connect → first `ServerStartMessage`) and EMA spacing
@@ -169,7 +167,6 @@ struct CombatVfxCache(Handle<Particle2dEffect>);
 #[derive(Component)]
 struct CombatVfx {
     target_exec: Entity,
-    exec_id: u64,
 }
 
 /// Multiline panel: incoming (↓) / outgoing (↑) like `AttacksDisplay.ts`.
@@ -489,6 +486,8 @@ fn setup_offline(
     mut ready: ResMut<GameReady>,
     director: NonSend<ReplayDirector>,
     asset_server: Res<AssetServer>,
+    settings: Res<ClientSettings>,
+    mut overlay: ResMut<OverlayDiagnostics>,
 ) {
     commands.spawn((
         Camera2d,
@@ -505,18 +504,36 @@ fn setup_offline(
         ),
     ));
 
-    commands.spawn((
-        Text::new("Replay Mode"),
-        TextFont { font_size: 14.0, ..default() },
-        TextColor(Color::srgb(0.7, 0.9, 0.7)),
-        Node {
-            position_type: PositionType::Absolute,
-            left: Val::Px(10.0),
-            top: Val::Px(10.0),
-            ..default()
-        },
-        HudText,
-    ));
+    overlay.status_line = "Replay Mode".to_string();
+    overlay.ping_value = "offline".to_string();
+
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                right: Val::Px(12.0),
+                top: Val::Px(10.0),
+                min_width: Val::Px(228.0),
+                padding: UiRect::all(Val::Px(8.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(8.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.1, 0.11, 0.14, 0.9)),
+            BorderColor::all(Color::srgba(0.32, 0.34, 0.4, 0.95)),
+        ))
+        .with_children(|p| {
+            p.spawn((
+                HudText,
+                Text::new("Replay Mode\nTick: 0\nFPS: …\nPing: offline"),
+                TextFont {
+                    font: settings.font.clone(),
+                    font_size: 13.0,
+                    ..default()
+                },
+                TextColor(Color::srgba(0.72, 0.82, 0.94, 0.95)),
+            ));
+        });
 
     let mut game = GameState::new(director.record.seed);
     for info in &director.record.players {
@@ -561,7 +578,12 @@ fn setup_offline(
     ready.0 = true;
 }
 
-fn setup_live(mut commands: Commands, cli: Res<Cli>, settings: Res<ClientSettings>) {
+fn setup_live(
+    mut commands: Commands,
+    cli: Res<Cli>,
+    settings: Res<ClientSettings>,
+    mut overlay: ResMut<OverlayDiagnostics>,
+) {
     let mut cmd = commands.spawn((
         Camera2d,
         Tonemapping::TonyMcMapface,
@@ -576,18 +598,36 @@ fn setup_live(mut commands: Commands, cli: Res<Cli>, settings: Res<ClientSetting
         });
     }
 
-    commands.spawn((
-        Text::new("Connecting to server..."),
-        TextFont { font_size: 14.0, ..default() },
-        TextColor(Color::srgb(0.7, 0.9, 0.7)),
-        Node {
-            position_type: PositionType::Absolute,
-            left: Val::Px(10.0),
-            top: Val::Px(10.0),
-            ..default()
-        },
-        HudText,
-    ));
+    overlay.status_line = "Connecting to server...".to_string();
+    overlay.ping_value = "connecting…".to_string();
+
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                right: Val::Px(12.0),
+                top: Val::Px(10.0),
+                min_width: Val::Px(228.0),
+                padding: UiRect::all(Val::Px(8.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(8.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.1, 0.11, 0.14, 0.9)),
+            BorderColor::all(Color::srgba(0.32, 0.34, 0.4, 0.95)),
+        ))
+        .with_children(|p| {
+            p.spawn((
+                HudText,
+                Text::new("Connecting to server...\nTick: 0\nFPS: …\nPing: connecting…"),
+                TextFont {
+                    font: settings.font.clone(),
+                    font_size: 13.0,
+                    ..default()
+                },
+                TextColor(Color::srgba(0.72, 0.82, 0.94, 0.95)),
+            ));
+        });
 
     // Home Button
     commands.spawn((
@@ -673,7 +713,7 @@ fn system_replay_pulse(
     mut pending: ResMut<PendingTicks>,
 ) {
     *timer += time.delta_secs();
-    let tick_len = (1.0 / config::TICK_RATE) as f32;
+    let tick_len = 0.040; // 40ms turn interval
     
     while *timer >= tick_len {
         *timer -= tick_len;
@@ -691,30 +731,11 @@ fn init_attack_ratio_from_ui_settings(ui: Res<ClientSettings>, mut ratio: ResMut
     ratio.0 = ui.config.ui.attack_ratio.clamp(0.01, 1.0);
 }
 
-fn spawn_perf_overlay(mut commands: Commands, settings: Res<ClientSettings>) {
-    commands.spawn((
-        PerfOverlayText,
-        Text::new("FPS: …\nPing: …"),
-        TextFont {
-            font: settings.font.clone(),
-            font_size: 13.0,
-            ..default()
-        },
-        TextColor(Color::srgba(0.72, 0.82, 0.94, 0.92)),
-        Node {
-            position_type: PositionType::Absolute,
-            right: Val::Px(12.0),
-            top: Val::Px(10.0),
-            ..default()
-        },
-    ));
-}
-
 fn system_update_perf_overlay(
     diagnostics: Res<DiagnosticsStore>,
     net: Res<NetTiming>,
     cli: Res<Cli>,
-    mut q: Query<&mut Text, With<PerfOverlayText>>,
+    mut overlay: ResMut<OverlayDiagnostics>,
     mut throttle: Local<PerfOverlayUiState>,
 ) {
     let now = Instant::now();
@@ -730,7 +751,7 @@ fn system_update_perf_overlay(
 
     if refresh_fps {
         throttle.last_fps_refresh = Some(now);
-        throttle.cached_fps = diagnostics
+        overlay.fps_value = diagnostics
             .get(&FrameTimeDiagnosticsPlugin::FPS)
             .and_then(|v| v.value())
             .map(|f| format!("{f:.1}"))
@@ -739,7 +760,7 @@ fn system_update_perf_overlay(
 
     if refresh_net {
         throttle.last_net_refresh = Some(now);
-        throttle.cached_ping = if cli.replay.is_some() {
+        overlay.ping_value = if cli.replay.is_some() {
             "offline".to_string()
         } else if net.handshake_ms.is_none() && net.connect_started.is_some() {
             "connecting…".to_string()
@@ -756,13 +777,6 @@ fn system_update_perf_overlay(
 
     if !(refresh_fps || refresh_net) {
         return;
-    }
-
-    let body = format!("FPS: {}\nPing: {}", throttle.cached_fps, throttle.cached_ping);
-    if let Ok(mut text) = q.single_mut() {
-        if **text != body {
-            **text = body;
-        }
     }
 }
 
@@ -900,12 +914,12 @@ fn handle_server_start(
     mut ready:     ResMut<GameReady>,
     mut my_id:     ResMut<MyPlayerId>,
     mut cam_q:     Query<&mut Transform, With<Camera2d>>,
-    mut hud_q:     Query<&mut Text, With<HudText>>,
     mut commands:  Commands,
     mut queue:     ResMut<TurnQueue>,
     mut pending:   ResMut<PendingTicks>,
     mut highest:   ResMut<HighestReceivedTurn>,
     mut net:       ResMut<NetTiming>,
+    mut overlay:   ResMut<OverlayDiagnostics>,
     asset_server:  Res<AssetServer>,
 ) {
     for mut receiver in receivers.iter_mut() {
@@ -1033,12 +1047,10 @@ fn handle_server_start(
 
             spawn_bottom_combat_hud(&mut commands, msg.my_player_id.is_none());
 
-            if let Ok(mut text) = hud_q.single_mut() {
-                if msg.my_player_id.is_some() {
-                    **text = format!("Connected — Player {:?}", msg.my_player_id);
-                } else {
-                    **text = "Connected — Observer".to_string();
-                }
+            if msg.my_player_id.is_some() {
+                overlay.status_line = format!("Connected — Player {:?}", msg.my_player_id);
+            } else {
+                overlay.status_line = "Connected — Observer".to_string();
             }
         }
     }
@@ -1412,13 +1424,16 @@ fn system_animate_tile_colors(
 
 fn update_hud(
     game_opt:  Option<Res<GameState>>,
+    overlay: Res<OverlayDiagnostics>,
     mut hud_q: Query<&mut Text, With<HudText>>,
 ) {
-    let Some(game) = game_opt else { return };
-    if !game.is_changed() { return; }
+    let tick = game_opt.map(|g| g.tick).unwrap_or(0);
     let Ok(mut text) = hud_q.single_mut() else { return };
 
-    let final_str = format!("Tick: {}", game.tick);
+    let final_str = format!(
+        "{}\nTick: {}\nFPS: {}\nPing: {}",
+        overlay.status_line, tick, overlay.fps_value, overlay.ping_value
+    );
     
     if **text != final_str {
         **text = final_str;
@@ -1931,9 +1946,7 @@ fn system_spawn_attack_vfx(
     q_attacks: Query<(Entity, &AttackExecution)>,
     q_vfx: Query<&CombatVfx>,
     vfx_cache: Res<CombatVfxCache>,
-    game_opt: Option<Res<GameState>>,
 ) {
-    let Some(game) = game_opt else { return };
     // Track ones that already have VFX
     let mut tracked = HashSet::new();
     for vfx in &q_vfx {
@@ -1955,17 +1968,9 @@ fn system_spawn_attack_vfx(
 
         let spawn_pos = Vec2::new(wx, wy);
 
-        // Fetch attacker's color
-        let actor_color = if let Some(player) = game.players.iter().find(|p| p.id == attack.owner_id) {
-            Color::srgba(player.color[0], player.color[1], player.color[2], 1.0)
-        } else {
-            Color::WHITE
-        };
-
         commands.spawn((
             CombatVfx {
                 target_exec: attack_ent,
-                exec_id: attack.id,
             },
             Transform::from_xyz(spawn_pos.x, spawn_pos.y, 110.0),
             ParticleSpawner::<ColorParticle2dMaterial>::default(),
