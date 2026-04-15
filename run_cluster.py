@@ -54,13 +54,17 @@ def run_cmd(cmd, desc):
 
 def build_and_deploy_server(ip):
     print(f"🚀 Deploying Server to {ip}...")
-    run_cmd("cargo build -p dark-rift-server --release", "Building Server Binary (Release)")
+    run_cmd("rustup target add x86_64-unknown-linux-musl", "Ensuring musl target for static cross-compilation")
+    
+    # We use CC_x86_64_unknown_linux_musl=x86_64-linux-musl-gcc for Mac/Linux cross-compilation
+    build_cmd = 'CC_x86_64_unknown_linux_musl="x86_64-linux-musl-gcc" CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="x86_64-linux-musl-gcc" cargo build -p dark-rift-server --release --target x86_64-unknown-linux-musl'
+    run_cmd(build_cmd, "Building Static Server Binary (Release)")
     
     remote_dir = "/home/bizkit/dark-rift-prod"
     run_cmd(f"ssh bizkit@{ip} 'mkdir -p {remote_dir}/assets'", "Preparing Remote Directory")
     
     print("📦 Uploading Binary and Assets via rsync...")
-    run_cmd(f"rsync -avz --progress target/release/dark-rift-server bizkit@{ip}:{remote_dir}/", "Rsync Binary")
+    run_cmd(f"rsync -avz --progress target/x86_64-unknown-linux-musl/release/dark-rift-server bizkit@{ip}:{remote_dir}/", "Rsync Binary")
     run_cmd(f"rsync -avz --progress crates/client/assets/ bizkit@{ip}:{remote_dir}/assets/", "Rsync Assets")
     
     service_file = """[Unit]
