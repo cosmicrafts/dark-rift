@@ -64,8 +64,8 @@ def build_and_deploy_server(ip):
     run_cmd(f"ssh bizkit@{ip} 'mkdir -p {remote_dir}/assets'", "Preparing Remote Directory")
     
     print("📦 Uploading Binary and Assets via rsync...")
-    run_cmd(f"rsync -avz --progress target/x86_64-unknown-linux-musl/release/dark-rift-server bizkit@{ip}:{remote_dir}/", "Rsync Binary")
-    run_cmd(f"rsync -avz --progress crates/client/assets/ bizkit@{ip}:{remote_dir}/assets/", "Rsync Assets")
+    run_cmd(f"scp target/x86_64-unknown-linux-musl/release/dark-rift-server bizkit@{ip}:{remote_dir}/", "SCP Binary")
+    run_cmd(f"scp -r crates/client/assets bizkit@{ip}:{remote_dir}/", "SCP Assets")
     
     service_file = """[Unit]
 Description=Dark Rift Server
