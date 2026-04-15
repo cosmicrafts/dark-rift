@@ -182,7 +182,7 @@ struct Cli {
     replay: Option<String>,
 
     /// Server address
-    #[arg(short, long, default_value = "127.0.0.1:5005")]
+    #[arg(short, long, default_value = "127.0.0.1:7777")]
     server: String,
 }
 

@@ -13,7 +13,7 @@ Usage Modes:
    sets up a systemd service, and restarts it on the target machine.
 
 3. Stress Test:
-   ./run_cluster.py --stress 120 --server <IP:5005>
+   ./run_cluster.py --stress 120 --server <IP:7777>
    Spawns 120 local clients pointing to the cloud server IP to test its limits.
 
 4. Web Deploy (WASM):
@@ -86,7 +86,7 @@ WantedBy=default.target"""
     print("🔧 Configuring Systemd Service...")
     run_cmd(f"echo '{service_file}' | ssh bizkit@{ip} 'sudo -n tee /etc/systemd/system/darkrift-server.service > /dev/null'", "Writing Service File")
     run_cmd(f"ssh bizkit@{ip} 'sudo -n systemctl daemon-reload && sudo -n systemctl enable darkrift-server && sudo -n systemctl restart darkrift-server'", "Restarting Service")
-    print(f"🎉 Deployment Complete! The server is now running on {ip}:5005")
+    print(f"🎉 Deployment Complete! The server is now running on {ip}:7777")
 
 def build_and_deploy_web(ip):
     print(f"🌐 Building WebAssembly Client for {ip}...")
@@ -143,7 +143,7 @@ def main():
     parser.add_argument("--deploy", metavar="IP", help="Deploy the server to the given IP via SSH/Rsync")
     parser.add_argument("--web", action="store_true", help="Also build WASM and deploy Web Client to Nginx (requires --deploy)")
     parser.add_argument("--stress", type=int, metavar="N", help="Run N clients locally for a stress test")
-    parser.add_argument("--server", default="127.0.0.1:5005", help="Server address for clients (default: 127.0.0.1:5005)")
+    parser.add_argument("--server", default="127.0.0.1:7777", help="Server address for clients (default: 127.0.0.1:7777)")
     args = parser.parse_args()
 
     if args.deploy:

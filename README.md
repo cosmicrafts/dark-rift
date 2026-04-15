@@ -40,7 +40,7 @@ The `run_cluster.py` script has been supercharged to act as an all-in-one orches
 ```bash
 ./run_cluster.py
 ```
-*Builds and runs 1 local server and 2 local clients connecting to it (127.0.0.1:5005).*
+*Builds and runs 1 local server and 2 local clients connecting to it (127.0.0.1:7777).*
 
 **2. Cloud Deploy (Server)**
 ```bash
@@ -56,6 +56,6 @@ The `run_cluster.py` script has been supercharged to act as an all-in-one orches
 
 **4. Stress Test**
 ```bash
-./run_cluster.py --stress 120 --server <VPS_IP:5005>
+./run_cluster.py --stress 120 --server <VPS_IP:7777>
 ```
 *Spawns 120 local instances of the client pointing to the given cloud server IP to test its limits.*

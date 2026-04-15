@@ -123,7 +123,7 @@ fn main() {
 // ─── Startup ────────────────────────────────────────────────────────────────
 
 fn setup(mut commands: Commands) {
-    let server_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 5005);
+    let server_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 7777);
 
     let ws_config = WebSocketConfig::builder()
         .with_bind_address(server_addr)
@@ -141,7 +141,7 @@ fn setup(mut commands: Commands) {
 
     commands.trigger(Start { entity: server_entity });
 
-    info!("🚀 Dark Rift relay server → ws://0.0.0.0:5005");
+    info!("🚀 Dark Rift relay server → ws://0.0.0.0:7777");
     info!("   Waiting for {} players...", MIN_PLAYERS);
 }
 
