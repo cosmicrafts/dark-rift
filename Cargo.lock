@@ -4489,7 +4489,6 @@ dependencies = [
  "bevy_utils",
  "lightyear_connection",
  "lightyear_core",
- "lightyear_interpolation",
  "lightyear_link",
  "lightyear_messages",
  "lightyear_prediction",

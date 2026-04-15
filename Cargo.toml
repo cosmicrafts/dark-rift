@@ -12,10 +12,10 @@ edition = "2024"
 license = "AGPL-3.0"
 
 [workspace.dependencies]
-bevy = { version = "0.18" }
+bevy = { version = "0.18", default-features = false }
 serde = { version = "1", features = ["derive"] }
 rand = "0.8"
-lightyear = "0.26.4"
+lightyear = { version = "0.26.4", default-features = false }
 bincode = "1.3"
 aeronet_io = "0.19.1"
 aeronet_websocket = "0.19.1"
