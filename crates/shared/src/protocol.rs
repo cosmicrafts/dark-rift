@@ -73,6 +73,7 @@ pub struct ClientLeaveMessage;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ServerStartMessage {
+    pub config: crate::game_config::GameConfig,
     pub my_player_id: Option<u16>,
     pub seed: u64,
     pub players: Vec<PlayerInfo>,
@@ -87,6 +88,7 @@ pub struct TurnLog {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ReplayFile {
+    pub config: crate::game_config::GameConfig,
     pub seed: u64,
     pub players: Vec<PlayerInfo>,
     pub turns: Vec<Turn>,

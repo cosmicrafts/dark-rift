@@ -12,6 +12,9 @@ pub struct JoinedLobby(pub Option<u64>);
 pub struct LobbyBrowserRoot;
 
 #[derive(Component)]
+pub struct SinglePlayerButton;
+
+#[derive(Component)]
 pub struct LobbyCardsContainer;
 
 #[derive(Component)]
@@ -74,6 +77,25 @@ pub fn setup_lobby_browser(
             },
             LobbyCardsContainer,
         ));
+
+        // Single Player Custom Game Button
+        p.spawn((
+            Button,
+            SinglePlayerButton,
+            Node {
+                margin: UiRect::top(Val::Px(40.0)),
+                padding: UiRect::axes(Val::Px(32.0), Val::Px(16.0)),
+                border_radius: BorderRadius::all(Val::Px(8.0)),
+                ..default()
+            },
+            BackgroundColor(accent_home()),
+        )).with_children(|btn| {
+            btn.spawn((
+                Text::new("🎮 SINGLE PLAYER (CUSTOM GAME)"),
+                TextFont { font: font.clone(), font_size: 20.0, ..default() },
+                TextColor(Color::WHITE),
+            ));
+        });
         
         // Container for Waiting Queue (starts hidden)
         p.spawn((
@@ -253,6 +275,49 @@ pub fn system_handle_join_clicks(
                 *bg = BackgroundColor(Color::srgba(0.2, 0.4, 0.8, 1.0));
             }
             Interaction::None => {}
+        }
+    }
+}
+pub fn system_handle_single_player_click(
+    mut interaction_q: Query<(&Interaction, &mut BackgroundColor), (Changed<Interaction>, With<SinglePlayerButton>)>,
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<crate::AppState>>,
+) {
+    for (interaction, mut bg) in interaction_q.iter_mut() {
+        match *interaction {
+            Interaction::Pressed => {
+                info!("🎮 Iniciando Single Player...");
+                *bg = BackgroundColor(accent_home_pressed());
+
+                let mut config = dark_rift_shared::game_config::GameConfig::default();
+                
+                if let Ok(content) = std::fs::read_to_string("assets/configs/default_single_player.ron") {
+                    if let Ok(parsed) = ron::from_str(&content) {
+                        config = parsed;
+                        info!("✅ Loaded Single Player config from .ron template!");
+                    } else {
+                        warn!("⚠️ Failed to parse .ron template, using fallback defaults.");
+                    }
+                } else {
+                    config.bot_count = 7;
+                }
+                
+                let spawn_x = config.map_width / 2;
+                let spawn_y = config.map_height / 2;
+                
+                let mock_msg = ServerStartMessage {
+                    config,
+                    my_player_id: Some(1),
+                    seed: 42069,
+                    players: vec![PlayerInfo { id: 1, name: "LocalPlayer".to_string(), color: [1.0, 0.2, 0.2], spawn_x, spawn_y }],
+                    missed_turns: vec![],
+                };
+
+                commands.insert_resource(crate::MockSinglePlayerStart(mock_msg));
+                next_state.set(crate::AppState::InGame);
+            }
+            Interaction::Hovered => *bg = BackgroundColor(Color::srgba(0.2, 0.4, 0.8, 1.0)),
+            Interaction::None => *bg = BackgroundColor(accent_home()),
         }
     }
 }

@@ -50,8 +50,9 @@ struct Lobby {
 struct StatePhase(LobbyPhase);
 
 #[derive(Component)]
-struct MatchMetadata {
-    seed: u64,
+pub struct MatchMetadata {
+    pub seed: u64,
+    pub config: dark_rift_shared::game_config::GameConfig,
 }
 
 #[derive(Component)]
@@ -165,7 +166,7 @@ fn system_master_lobby(
         let new_lobby = commands.spawn((
             Lobby { id: lobby_id },
             StatePhase(LobbyPhase::Waiting),
-            MatchMetadata { seed: 42 + lobby_id },
+            MatchMetadata { seed: 42 + lobby_id, config: dark_rift_shared::game_config::GameConfig::default() },
             MatchRoster::default(),
             MatchTurnLog::default(),
             MatchIntentBuffer::default(),
@@ -301,7 +302,7 @@ fn handle_client_joins(
                 
                 let colors = player_colors();
                 let color = colors[(player_id as usize - 1) % colors.len()];
-                let (sx, sy) = pick_spawn(&roster, player_id);
+                let (sx, sy) = pick_spawn(&roster, player_id, metadata.config.map_width, metadata.config.map_height);
 
                 roster.0.push(PlayerInfo { id: player_id, name: msg.name.clone(), color, spawn_x: sx, spawn_y: sy });
                 info!("✅ {} (id={}) se unió al Match ID {:?} → spawn({},{})", msg.name, player_id, lobby.id, sx, sy);
@@ -311,6 +312,7 @@ fn handle_client_joins(
             if phase.0 == LobbyPhase::Active {
                 if let Ok((_, mut sender)) = senders.get_mut(client_entity) {
                     let start_msg = ServerStartMessage {
+                        config: metadata.config.clone(),
                         my_player_id: assigned_id,
                         seed: metadata.seed,
                         players: roster.0.clone(),
@@ -375,6 +377,7 @@ fn system_start_matches(
                 if let Some(&(stored_match, player_id)) = registry.clients.get(&client_entity) {
                     if stored_match == match_entity {
                         let start_msg = ServerStartMessage {
+                            config: meta.config.clone(),
                             my_player_id: player_id, 
                             seed: meta.seed,
                             players: roster.0.clone(),
@@ -445,9 +448,7 @@ fn system_end_turn(
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-fn pick_spawn(roster: &MatchRoster, _player_id: u16) -> (u32, u32) {
-    let w = config::MAP_WIDTH;
-    let h = config::MAP_HEIGHT;
+fn pick_spawn(roster: &MatchRoster, _player_id: u16, w: u32, h: u32) -> (u32, u32) {
     let margin = config::SPAWN_RADIUS + 4;
 
     let candidates: [(u32, u32); 8] = [
@@ -489,9 +490,10 @@ fn system_dump_replay(
                 let seed = meta.seed;
                 let players = roster.0.clone();
                 let log_clone = log.turns.clone();
+                let config_clone = meta.config.clone();
 
                 std::thread::spawn(move || {
-                    let record = ReplayFile { seed, players, turns: log_clone };
+                    let record = ReplayFile { config: config_clone, seed, players, turns: log_clone };
                     if let Ok(json) = serde_json::to_string(&record) {
                         let file_name = "latest_replay.json".to_string();
                         std::fs::write(file_name, json).ok();

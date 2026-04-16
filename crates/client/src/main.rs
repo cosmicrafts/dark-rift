@@ -228,6 +228,18 @@ struct Cli {
     replay: Option<String>,
 }
 
+#[derive(Resource)]
+pub struct MockSinglePlayerStart(pub ServerStartMessage);
+
+#[derive(Resource, Default)]
+pub struct SinglePlayerState {
+    pub timer: Timer,
+    pub current_turn: u64,
+}
+
+#[derive(Resource, Default)]
+pub struct LocalIntentBuffer(pub Vec<StampedIntent>);
+
 struct ReplayDirector {
     record: ReplayFile,
     turn_index: usize,
@@ -309,6 +321,7 @@ fn main() {
             .add_systems(
                 Startup,
                 (
+
                     init_client_font,
                     init_attack_ratio_from_ui_settings,
                     setup_hud_shell,
@@ -324,11 +337,16 @@ fn main() {
                 system_update_lobby_browser,
                 system_handle_join_clicks,
                 system_handle_cancel_join,
+                ui_lobby_browser::system_handle_single_player_click,
             ).run_if(in_state(AppState::LobbyBrowser)))
             .add_systems(Update, (
                 handle_server_start,
+                system_mock_single_player_start,
                 handle_connection,
             ).chain())
+            .add_systems(Update, (
+                system_single_player_tick,
+            ).run_if(in_state(AppState::InGame)))
             .add_systems(Update, (
                handle_server_turns,
                system_evaluate_game_over,
@@ -544,8 +562,8 @@ fn setup_offline(
             ..default()
         },
         Transform::from_xyz(
-            config::MAP_WIDTH  as f32 * TILE_SIZE / 2.0,
-            config::MAP_HEIGHT as f32 * TILE_SIZE / 2.0,
+            director.record.config.map_width as f32 * TILE_SIZE / 2.0,
+            director.record.config.map_height as f32 * TILE_SIZE / 2.0,
             999.0
         ),
     ));
@@ -580,7 +598,7 @@ fn setup_offline(
             ));
         });
 
-    let mut game = GameState::new(director.record.seed);
+    let mut game = GameState::new(director.record.seed, director.record.config.map_width, director.record.config.map_height);
     for info in &director.record.players {
         let player = Player::new_human(info.id, info.name.clone(), info.color);
         game.spawn_player(player, info.spawn_x, info.spawn_y);
@@ -593,7 +611,7 @@ fn setup_offline(
         },
     );
 
-    let chunk_size = UVec2::new(config::MAP_WIDTH as u32, config::MAP_HEIGHT as u32);
+    let chunk_size = UVec2::new(director.record.config.map_width as u32, director.record.config.map_height as u32);
     let tile_display_size = UVec2::splat(TILE_SIZE as u32);
     let mut tile_data: Vec<Option<TileData>> = vec![None; (chunk_size.x * chunk_size.y) as usize];
 
@@ -613,8 +631,8 @@ fn setup_offline(
         },
         TilemapChunkTileData(tile_data),
         Transform::from_xyz(
-            config::MAP_WIDTH  as f32 * TILE_SIZE / 2.0,
-            config::MAP_HEIGHT as f32 * TILE_SIZE / 2.0,
+            director.record.config.map_width as f32 * TILE_SIZE / 2.0,
+            director.record.config.map_height as f32 * TILE_SIZE / 2.0,
             0.0
         ),
     ));
@@ -974,13 +992,86 @@ fn handle_server_start(
 ) {
     for mut receiver in receivers.iter_mut() {
         for msg in receiver.receive() {
-            if ready.0 { continue; }
-
+            start_game_core(
+                msg, &mut ready, &mut my_id, &mut cam_q, &mut commands,
+                &mut queue, &mut pending, &mut highest, &mut overlay, &shell, &asset_server, &mut next_state
+            );
             if net.handshake_ms.is_none() {
                 if let Some(t0) = net.connect_started.take() {
                     net.handshake_ms = Some(t0.elapsed().as_secs_f32() * 1000.0);
                 }
             }
+        }
+    }
+}
+
+fn system_mock_single_player_start(
+    mock:      Option<ResMut<MockSinglePlayerStart>>,
+    mut ready:     ResMut<GameReady>,
+    mut my_id:     ResMut<MyPlayerId>,
+    mut cam_q:     Query<&mut Transform, With<Camera2d>>,
+    mut commands:  Commands,
+    mut queue:     ResMut<TurnQueue>,
+    mut pending:   ResMut<PendingTicks>,
+    mut highest:   ResMut<HighestReceivedTurn>,
+    mut overlay:   ResMut<OverlayDiagnostics>,
+    shell:         Res<HudShellRegions>,
+    asset_server:  Res<AssetServer>,
+    mut next_state: ResMut<NextState<AppState>>,
+) {
+    if let Some(m) = mock {
+        commands.insert_resource(SinglePlayerState {
+            timer: Timer::from_seconds(0.1, TimerMode::Repeating),
+            current_turn: 0,
+        });
+        commands.insert_resource(LocalIntentBuffer::default());
+        start_game_core(
+            m.0.clone(), &mut ready, &mut my_id, &mut cam_q, &mut commands,
+            &mut queue, &mut pending, &mut highest, &mut overlay, &shell, &asset_server, &mut next_state
+        );
+        commands.remove_resource::<MockSinglePlayerStart>();
+    }
+}
+
+fn system_single_player_tick(
+    time: Res<Time>,
+    sp_state: Option<ResMut<SinglePlayerState>>,
+    buffer: Option<ResMut<LocalIntentBuffer>>,
+    mut queue: ResMut<TurnQueue>,
+    mut pending: ResMut<PendingTicks>,
+    mut highest: ResMut<HighestReceivedTurn>,
+) {
+    if let (Some(mut st), Some(mut buf)) = (sp_state, buffer) {
+        st.timer.tick(time.delta());
+        if st.timer.just_finished() {
+            let turn = dark_rift_shared::protocol::Turn {
+                turn_number: st.current_turn,
+                intents: std::mem::take(&mut buf.0),
+            };
+            st.current_turn += 1;
+            
+            queue.0.push_back(turn);
+            pending.0 += 1;
+            highest.0 = Some(highest.0.unwrap_or(0).max(st.current_turn));
+        }
+    }
+}
+
+fn start_game_core(
+    msg:           ServerStartMessage,
+    ready:         &mut ResMut<GameReady>,
+    my_id:         &mut ResMut<MyPlayerId>,
+    cam_q:         &mut Query<&mut Transform, With<Camera2d>>,
+    commands:      &mut Commands,
+    queue:         &mut ResMut<TurnQueue>,
+    pending:       &mut ResMut<PendingTicks>,
+    highest:       &mut ResMut<HighestReceivedTurn>,
+    overlay:       &mut ResMut<OverlayDiagnostics>,
+    shell:         &Res<HudShellRegions>,
+    asset_server:  &Res<AssetServer>,
+    next_state:    &mut ResMut<NextState<AppState>>,
+) {
+            if ready.0 { return; }
 
             if let Some(pid) = msg.my_player_id {
                 info!("🎮 Game starting! I am player {}", pid);
@@ -990,7 +1081,7 @@ fn handle_server_start(
                 my_id.0 = 0;
             }
 
-            let mut game = GameState::new(msg.seed);
+            let mut game = GameState::new(msg.seed, msg.config.map_width, msg.config.map_height);
             for info in &msg.players {
                 let player = Player::new_human(info.id, info.name.clone(), info.color);
                 game.spawn_player(player, info.spawn_x, info.spawn_y);
@@ -998,14 +1089,14 @@ fn handle_server_start(
 
             // Spawn deterministic bots (Tribes)
             let mut rng = PseudoRandom::new(msg.seed);
-            for i in 0..config::BOT_COUNT {
+            for i in 0..msg.config.bot_count {
                 let bot_id = 100 + i as u16;
                 let mut tries = 0;
                 let (mut sx, mut sy) = (0, 0);
                 
                 while tries < 1000 {
-                    sx = rng.next_int(0, config::MAP_WIDTH as i32) as u32;
-                    sy = rng.next_int(0, config::MAP_HEIGHT as i32) as u32;
+                    sx = rng.next_int(0, msg.config.map_width as i32) as u32;
+                    sy = rng.next_int(0, msg.config.map_height as i32) as u32;
                     let mut valid = true;
                     
                     // Check radius 15 clearance from map edge and any owned tiles
@@ -1044,9 +1135,13 @@ fn handle_server_start(
                 highest.0 = Some(highest.0.unwrap_or(0).max(turn.turn_number));
             }
 
-            // Center camera (on the player if playing, else map center)
-            let mut cx = config::MAP_WIDTH as f32 * TILE_SIZE / 2.0;
-            let mut cy = config::MAP_HEIGHT as f32 * TILE_SIZE / 2.0;
+            commands.insert_resource(msg.config.clone());
+            
+            
+            let map_w = msg.config.map_width as f32;
+            let map_h = msg.config.map_height as f32;
+            let mut cx = map_w * TILE_SIZE / 2.0;
+            let mut cy = map_h * TILE_SIZE / 2.0;
 
             if my_id.0 != 0 {
                 if let Some(me) = msg.players.iter().find(|p| p.id == my_id.0) {
@@ -1066,7 +1161,7 @@ fn handle_server_start(
                 },
             );
 
-            let chunk_size = UVec2::new(config::MAP_WIDTH as u32, config::MAP_HEIGHT as u32);
+            let chunk_size = UVec2::new(msg.config.map_width as u32, msg.config.map_height as u32);
             let tile_display_size = UVec2::splat(TILE_SIZE as u32);
             let mut tile_data: Vec<Option<TileData>> = vec![None; (chunk_size.x * chunk_size.y) as usize];
 
@@ -1087,8 +1182,8 @@ fn handle_server_start(
                 InGameEntity,
                 TilemapChunkTileData(tile_data),
                 Transform::from_xyz(
-                    config::MAP_WIDTH  as f32 * TILE_SIZE / 2.0,
-                    config::MAP_HEIGHT as f32 * TILE_SIZE / 2.0,
+                    msg.config.map_width  as f32 * TILE_SIZE / 2.0,
+                    msg.config.map_height as f32 * TILE_SIZE / 2.0,
                     0.0
                 ),
             ));
@@ -1097,15 +1192,13 @@ fn handle_server_start(
             ready.0 = true;
             next_state.set(AppState::InGame);
 
-            spawn_bottom_combat_hud(&mut commands, &shell, msg.my_player_id.is_none());
+            spawn_bottom_combat_hud(commands, &shell, msg.my_player_id.is_none());
 
             if msg.my_player_id.is_some() {
                 overlay.status_line = format!("Connected — Player {:?}", msg.my_player_id);
             } else {
                 overlay.status_line = "Connected — Observer".to_string();
             }
-        }
-    }
 }
 
 #[derive(Resource, Default)]
@@ -1214,6 +1307,7 @@ fn player_click(
     attack_ratio: Res<AttackRatio>,
     bottom_hud_hit: Query<&RelativeCursorPosition, With<BottomHudRoot>>,
     mut senders: Query<&mut MessageSender<ClientGameplayMessage>>,
+    local_buf: Option<ResMut<LocalIntentBuffer>>,
 ) {
     // We trigger ONLY on release to support dragging.
     // Additionally, if the user accumulated too much drag, we abort the intent payload.
@@ -1257,13 +1351,24 @@ fn player_click(
         return;
     }
 
-    for mut sender in senders.iter_mut() {
-        let _ = sender.send::<ReliableChannel>(ClientGameplayMessage {
-            intent: GameplayIntent::Attack(AttackIntent {
-                target_owner,
-                troops: Some(send),
-            }),
+    let intent = GameplayIntent::Attack(AttackIntent {
+        target_owner,
+        troops: Some(send),
+    });
+
+    if let Some(mut buf) = local_buf {
+        // Single player mock
+        buf.0.push(StampedIntent {
+            player_id: pid,
+            intent,
         });
+    } else {
+        // Multiplayer
+        for mut sender in senders.iter_mut() {
+            let _ = sender.send::<ReliableChannel>(ClientGameplayMessage {
+                intent: intent.clone(),
+            });
+        }
     }
 }
 
@@ -1372,7 +1477,7 @@ fn handle_tile_change(
             for mut chunk_data in chunks.iter_mut() {
                 for (cx, cy) in coords {
                     if game.map.is_valid_coord(cx, cy) {
-                        let idx = (cy as u32 * config::MAP_WIDTH as u32 + cx as u32) as usize;
+                        let idx = (cy as u32 * game.map.width as u32 + cx as u32) as usize;
                         let mut t_data = openfront_tile_color(&game, cx, cy);
                         
                         // Boost freshly-painted tiles with their own core color (not white)
@@ -1466,8 +1571,7 @@ fn system_animate_tile_colors(
                 srgba.blue * boost + white_flash,
                 srgba.alpha
             );
-            
-            let idx = (cy as u32 * config::MAP_WIDTH as u32 + cx as u32) as usize;
+            let idx = (cy as u32 * game.map.width as u32 + cx as u32) as usize;
             chunk_data[idx] = Some(t_data);
         }
     }
@@ -2138,6 +2242,8 @@ fn system_cleanup_ingame_entities(
         commands.entity(e).despawn();
     }
     commands.remove_resource::<GameState>();
+    commands.remove_resource::<SinglePlayerState>();
+    commands.remove_resource::<LocalIntentBuffer>();
 }
 
 #[derive(Component)]
@@ -2242,7 +2348,7 @@ pub fn system_handle_go_back(
     for (interaction, mut bg) in interaction_q.iter_mut() {
         match *interaction {
             Interaction::Pressed => {
-                if let Some(mut jl) = joined_lobby.as_mut() {
+                if let Some(jl) = joined_lobby.as_mut() {
                     jl.0 = None;
                 }
                 for mut sender in senders.iter_mut() {

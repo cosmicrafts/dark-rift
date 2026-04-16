@@ -7,3 +7,4 @@ pub mod config;
 pub mod pseudo_random;
 pub mod execution;
 pub mod intent;
+pub mod game_config;

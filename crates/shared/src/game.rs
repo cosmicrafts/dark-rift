@@ -35,11 +35,11 @@ pub struct GameState {
 }
 
 impl GameState {
-    pub fn new(seed: u64) -> Self {
+    pub fn new(seed: u64, width: u32, height: u32) -> Self {
         Self {
             seed,
-            phase: GamePhase::Playing, // Start playing immediately for MVP
-            map: GameMap::new(config::MAP_WIDTH, config::MAP_HEIGHT),
+            phase: GamePhase::Playing,
+            map: GameMap::new(width, height),
             players: Vec::new(),
             tick: 0,
             winner: None,

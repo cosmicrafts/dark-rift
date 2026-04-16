@@ -1,12 +1,5 @@
 /// Game balance constants.
 
-/// Map dimensions (in tiles).
-pub const MAP_WIDTH: u32 = 200;
-pub const MAP_HEIGHT: u32 = 200;
-
-/// Number of deterministic bots to spawn.
-pub const BOT_COUNT: u32 = 4;
-
 /// Starting troops for a new player.
 pub const STARTING_TROOPS: f64 = 100.0;
 

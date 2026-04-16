@@ -242,6 +242,7 @@ pub fn system_bot_think(
     mut commands: Commands,
     mut game: ResMut<GameState>,
     mut q_exec: Query<(Entity, &mut AttackExecution)>,
+    config_opt: Option<Res<crate::game_config::GameConfig>>,
 ) {
     if game.phase != crate::game::GamePhase::Playing {
         return;
@@ -259,24 +260,32 @@ pub fn system_bot_think(
 
     let mut rng = PseudoRandom::new(game.seed.wrapping_add(game.tick));
 
+    let Some(config) = config_opt else { return; };
+    let expand_cost = config.expand_cost;
+
+    let (attack_interval, trigger_ratio, reserve_ratio) = match config.bot_difficulty {
+        crate::game_config::BotDifficulty::BrainDead => (90, 0.9, 0.8),
+        crate::game_config::BotDifficulty::Vanilla => (30, 0.6, 0.3),
+        crate::game_config::BotDifficulty::Terminator => (20, 0.4, 0.1),
+    };
+
     for bot_id in bot_ids {
         let Some(player) = game.player(bot_id) else {
             continue;
         };
 
-        let attack_interval = 30;
         if game.tick % attack_interval != (bot_id as u64 % attack_interval) {
             continue;
         }
 
-        let trigger_limit = player.max_troops * 0.6;
+        let trigger_limit = player.max_troops * trigger_ratio;
         if player.troops < trigger_limit {
             continue;
         }
 
-        let reserve = player.max_troops * 0.3;
+        let reserve = player.max_troops * reserve_ratio;
         let p_send = (player.troops - reserve).max(0.0);
-        if p_send < config::EXPAND_COST {
+        if p_send < expand_cost as f64 {
             continue;
         }
 
