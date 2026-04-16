@@ -42,6 +42,21 @@ pub struct Turn {
 pub struct ClientJoinMessage {
     pub name: String,
     pub is_observer: bool,
+    pub target_lobby_id: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct LobbyInfo {
+    pub id: u64,
+    pub num_players: u8,
+    pub max_players: u8,
+    pub is_counting_down: bool,
+    pub timer_secs: f32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ServerLobbiesBroadcastMessage {
+    pub lobbies: Vec<LobbyInfo>,
 }
 
 /// Single FIFO gameplay channel: attacks and cancels share ordering.
@@ -107,6 +122,8 @@ impl Plugin for SharedProtocolPlugin {
         app.register_message::<ServerStartMessage>()
             .add_direction(NetworkDirection::ServerToClient);
         app.register_message::<ServerTurnMessage>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<ServerLobbiesBroadcastMessage>()
             .add_direction(NetworkDirection::ServerToClient);
     }
 }

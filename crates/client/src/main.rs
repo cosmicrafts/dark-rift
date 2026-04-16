@@ -45,9 +45,11 @@ use dark_rift_shared::pseudo_random::PseudoRandom;
 mod settings;
 mod ui_shell;
 mod ui_theme;
+mod ui_lobby_browser;
 use settings::*;
 use ui_shell::*;
 use ui_theme::*;
+use ui_lobby_browser::*;
 
 const TILE_SIZE: f32 = 8.0;
 const SERVER_ADDR: &str = "127.0.0.1:5005";
@@ -289,6 +291,7 @@ fn main() {
                     setup_hud_shell,
                     setup_live,
                     setup_combat_vfx,
+                    setup_lobby_browser,
                 )
                     .chain(),
             )
@@ -296,6 +299,8 @@ fn main() {
                handle_server_start,
                handle_server_turns,
                handle_connection,
+               system_update_lobby_browser,
+               system_handle_join_clicks,
            ).chain());
     }
 
@@ -700,12 +705,12 @@ fn setup_live(
 
 fn handle_connection(
     mut client_q: Query<&mut MessageSender<ClientJoinMessage>, Added<lightyear::prelude::client::Client>>,
-    cli: Res<Cli>,
+    _cli: Res<Cli>,
 ) {
-    for mut sender in client_q.iter_mut() {
-        let msg = ClientJoinMessage { name: format!("Rig-{}", rand_client_id() % 1000), is_observer: cli.observer };
-        info!("🤝 Dispatching ClientJoinMessage (Observer: {})...", cli.observer);
-        let _ = sender.send::<ReliableChannel>(msg);
+    for _ in client_q.iter_mut() {
+        // We no longer blind-send ClientJoinMessage here.
+        // It is now triggered by Clicking a Button in the LobbyBrowser UI!
+        info!("🔌 Connected to Transport. Presenting Lobby Browser...");
     }
 }
 
