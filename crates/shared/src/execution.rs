@@ -86,27 +86,17 @@ pub fn system_player_income(game_opt: Option<ResMut<GameState>>) {
             continue;
         }
 
-        let mut max_troops =
+        player.max_troops =
             config::MAX_TROOPS_BASE + (tiles_owned as f64).powf(0.6) * config::MAX_TROOPS_SCALE;
-
-        if player.player_type == crate::player::PlayerType::Bot {
-            max_troops /= 3.0;
-        }
-        player.max_troops = max_troops;
 
         // Defensive mathematical bound: if player troops violently drain below zero during massive intent execution bursts, 
         // the calculation mathematically breaks and introduces desyncing NaN generations universally. We clamp to safely avoid this!
         let safe_troops = player.troops.max(0.0);
-        let mut raw_income = config::TROOP_BASE_INCOME + (safe_troops.powf(0.73) / 4.0);
+        let raw_income = config::TROOP_BASE_INCOME + (safe_troops.powf(0.73) / 4.0);
         let ratio = 1.0 - (safe_troops / player.max_troops).min(1.0);
-        
-        raw_income *= ratio;
-        
-        if player.player_type == crate::player::PlayerType::Bot {
-            raw_income *= 0.6; // 40% income penalty for tribes
-        }
+        let income = raw_income * ratio;
 
-        player.troops = (safe_troops + raw_income).min(player.max_troops);
+        player.troops = (safe_troops + income).min(player.max_troops);
     }
 }
 
@@ -152,8 +142,8 @@ pub fn system_attack_execution(
         }
 
         let max_tiles_f32 = if execution.target_owner == 0 {
-            // Neutral expansion speed: clamp to max 100 to prevent map wipe
-            let base_speed = (execution.troops as f32 / 1000.0).clamp(5.0, 100.0);
+            // Neutral expansion speed: grows purely with attack troops
+            let base_speed = execution.troops as f32 / 50.0;
             base_speed.max(1.0).min(50.0) // At least 1, max 50
         } else {
             // PvP expansion speed: ratio based
