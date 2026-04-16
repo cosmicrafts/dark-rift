@@ -66,10 +66,20 @@ const CLIENT_CATCHUP_MAX_TICKS_PER_FRAME: u32 = 8;
 // ─── Resources ──────────────────────────────────────────────────────────────
 
 #[derive(Resource, Default)]
-struct GameReady(bool);
+pub struct GameReady(pub bool);
 
 #[derive(Resource, Default)]
 pub struct MyPlayerId(pub u16);
+
+#[derive(Clone, Copy, Default, Eq, PartialEq, Debug, Hash, States)]
+pub enum AppState {
+    #[default]
+    LobbyBrowser,
+    InGame,
+}
+
+#[derive(Component)]
+pub struct InGameEntity;
 
 #[derive(Resource, Default)]
 pub struct CameraDragState {
@@ -238,6 +248,10 @@ fn main() {
         }),
         ..default()
     }).disable::<bevy::audio::AudioPlugin>())
+    .insert_resource(bevy::winit::WinitSettings {
+        focused_mode: bevy::winit::UpdateMode::Continuous,
+        unfocused_mode: bevy::winit::UpdateMode::Continuous,
+    })
     .add_plugins(FrameTimeDiagnosticsPlugin::default())
     .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.04)))
     .add_systems(Startup, setup_attack_ring_mesh)
@@ -256,6 +270,14 @@ fn main() {
     .init_resource::<OverlayDiagnostics>()
     .init_resource::<UiShellState>();
 
+    // Insert ClientSettings BEFORE app.run() so it exists when OnEnter(LobbyBrowser) fires.
+    // Font handle is Handle::default() here; init_client_font patches it in Startup.
+    app.world_mut().insert_resource(ClientSettings {
+        config: build_client_settings_config(),
+        font: Handle::default(),
+    });
+
+
     if let Some(path) = is_replay {
         let file = std::fs::read_to_string(&path)
             .expect("Failed to read replay file");
@@ -270,7 +292,7 @@ fn main() {
         app.add_systems(
             Startup,
             (
-                load_client_settings,
+                init_client_font,
                 init_attack_ratio_from_ui_settings,
                 setup_hud_shell,
                 setup_offline,
@@ -282,26 +304,36 @@ fn main() {
         app.add_plugins(SharedProtocolPlugin)
            .add_plugins(ClientPlugins::default())
            .add_plugins(EnokiPlugin)
+           .init_state::<AppState>()
            .init_resource::<CombatVfxCache>()
             .add_systems(
                 Startup,
                 (
-                    load_client_settings,
+                    init_client_font,
                     init_attack_ratio_from_ui_settings,
                     setup_hud_shell,
                     setup_live,
                     setup_combat_vfx,
-                    setup_lobby_browser,
                 )
                     .chain(),
             )
-           .add_systems(Update, (
-               handle_server_start,
+            .add_systems(OnEnter(AppState::LobbyBrowser), setup_lobby_browser)
+            .add_systems(OnExit(AppState::LobbyBrowser), system_cleanup_lobby_browser)
+            .add_systems(OnExit(AppState::InGame), system_cleanup_ingame_entities)
+            .add_systems(Update, (
+                system_update_lobby_browser,
+                system_handle_join_clicks,
+                system_handle_cancel_join,
+            ).run_if(in_state(AppState::LobbyBrowser)))
+            .add_systems(Update, (
+                handle_server_start,
+                handle_connection,
+            ).chain())
+            .add_systems(Update, (
                handle_server_turns,
-               handle_connection,
-               system_update_lobby_browser,
-               system_handle_join_clicks,
-           ).chain());
+               system_evaluate_game_over,
+               system_handle_go_back,
+           ).chain().run_if(in_state(AppState::InGame)));
     }
 
     app.add_systems(Update, (system_update_ui_shell_state, system_apply_ui_shell_layout, system_update_perf_overlay));
@@ -319,12 +351,12 @@ fn main() {
         system_sync_bottom_combat_hud,
         system_sync_outgoing_attack_rows,
         system_handle_cancel_click,
-    ).run_if(game_is_ready))
+    ).run_if(in_state(AppState::InGame)))
     .add_systems(
         Update,
         system_animate_attack_command_rings
             .after(player_click)
-            .run_if(game_is_ready),
+            .run_if(in_state(AppState::InGame)),
     );
     
     app.add_systems(Update, (
@@ -332,7 +364,7 @@ fn main() {
         system_spawn_attack_vfx.run_if(|settings: Res<ClientSettings>| settings.config.visuals.enable_combat_particles),
         system_sync_attack_vfx_position.run_if(|settings: Res<ClientSettings>| settings.config.visuals.enable_combat_particles),
         system_sync_player_labels.run_if(|settings: Res<ClientSettings>| settings.config.visuals.enable_floating_labels),
-    ).run_if(game_is_ready));
+    ).run_if(in_state(AppState::InGame)));
 
     app.add_systems(Update, clear_inputs_on_focus_loss);
 
@@ -372,7 +404,7 @@ fn catchup_fast_forward(world: &mut World) {
     }
 }
 
-fn game_is_ready(ready: Res<GameReady>) -> bool { ready.0 }
+
 
 // Removed has_pending_ticks as it is obsolete
 
@@ -802,6 +834,7 @@ fn spawn_bottom_combat_hud(commands: &mut Commands, shell: &HudShellRegions, obs
         .spawn((
             ChildOf(shell.bottom_sheet),
             BottomHudRoot,
+            InGameEntity,
             RelativeCursorPosition::default(),
             vis,
             Node {
@@ -937,6 +970,7 @@ fn handle_server_start(
     mut overlay:   ResMut<OverlayDiagnostics>,
     shell:         Res<HudShellRegions>,
     asset_server:  Res<AssetServer>,
+    mut next_state: ResMut<NextState<AppState>>,
 ) {
     for mut receiver in receivers.iter_mut() {
         for msg in receiver.receive() {
@@ -1050,6 +1084,7 @@ fn handle_server_start(
                     tileset,
                     ..default()
                 },
+                InGameEntity,
                 TilemapChunkTileData(tile_data),
                 Transform::from_xyz(
                     config::MAP_WIDTH  as f32 * TILE_SIZE / 2.0,
@@ -1060,6 +1095,7 @@ fn handle_server_start(
 
             commands.insert_resource(game);
             ready.0 = true;
+            next_state.set(AppState::InGame);
 
             spawn_bottom_combat_hud(&mut commands, &shell, msg.my_player_id.is_none());
 
@@ -1208,6 +1244,7 @@ fn player_click(
             elapsed: 0.0,
             rgb: player.color,
         },
+        InGameEntity,
         Mesh2d(ring_mesh.0.clone()),
         MeshMaterial2d(mat),
         Transform::from_xyz(wx, wy, 260.0).with_scale(Vec3::ZERO),
@@ -1373,6 +1410,8 @@ fn handle_tile_change(
     // Clear out events so we effectively operate visually in 'Batched' chunks per-frame independently of tick iterations
     game.events.clear();
 }
+
+
 
 fn system_animate_tile_colors(
     time: Res<Time>,
@@ -1922,6 +1961,7 @@ fn system_sync_player_labels(
             let label_text = format!("{}\n[{:.0}]", player.name, player.troops);
             commands.spawn((
                 PlayerLabel(player.id),
+                InGameEntity,
                 PlayerLabelRenderCache(font_px),
                 Text2d::new(label_text),
                 TextFont {
@@ -2038,6 +2078,7 @@ fn system_spawn_attack_vfx(
             CombatVfx {
                 target_exec: attack_ent,
             },
+            InGameEntity,
             Transform::from_xyz(spawn_pos.x, spawn_pos.y, 110.0),
             ParticleSpawner::<ColorParticle2dMaterial>::default(),
             ParticleEffectHandle(vfx_cache.0.clone()),
@@ -2070,6 +2111,151 @@ fn system_sync_attack_vfx_position(
         } else {
             // Target AttackExecution died/merged/resolved, clean up VFX independent shadow
             commands.entity(vfx_ent).despawn();
+        }
+    }
+}
+
+fn system_cleanup_ingame_entities(
+    mut commands: Commands,
+    mut ready: ResMut<GameReady>,
+    mut queue: ResMut<TurnQueue>,
+    mut pending: ResMut<PendingTicks>,
+    mut highest: ResMut<HighestReceivedTurn>,
+    mut outgoing_map: ResMut<OutgoingAttackRowMap>,
+    q_ingame: Query<Entity, With<InGameEntity>>,
+    q_execs: Query<Entity, With<AttackExecution>>,
+) {
+    ready.0 = false;
+    queue.0.clear();
+    pending.0 = 0;
+    highest.0 = None;
+    outgoing_map.0.clear();
+    
+    for e in q_ingame.iter() {
+        commands.entity(e).despawn();
+    }
+    for e in q_execs.iter() {
+        commands.entity(e).despawn();
+    }
+    commands.remove_resource::<GameState>();
+}
+
+#[derive(Component)]
+pub struct GameOverPanel;
+
+#[derive(Component)]
+pub struct GoBackButton;
+
+fn system_evaluate_game_over(
+    mut commands: Commands,
+    game: Option<Res<GameState>>,
+    ready: Res<GameReady>,
+    my_id: Res<MyPlayerId>,
+    settings: Res<ClientSettings>,
+    panel_q: Query<Entity, With<GameOverPanel>>,
+) {
+    let Some(game) = game else { return; };
+    if !ready.0 { return; }
+    if panel_q.iter().next().is_some() { return; }
+
+    let alive_count = game.players.iter().filter(|p| p.alive).count();
+    let am_i_alive = game.players.iter().find(|p| p.id == my_id.0).map(|p| p.alive).unwrap_or(false);
+
+    let mut show_panel = false;
+    let mut victory = false;
+
+    if alive_count <= 1 {
+        show_panel = true;
+        victory = am_i_alive;
+    } else if !am_i_alive && my_id.0 != 0 {
+        show_panel = true;
+        victory = false;
+    }
+
+    if show_panel {
+        let font = settings.font.clone();
+        let title = if victory { "VICTORY" } else { "DEFEAT" };
+        let title_color = if victory { ui_theme::accent_primary() } else { ui_theme::accent_danger() };
+
+        commands.spawn((
+            GameOverPanel,
+            InGameEntity,
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                position_type: PositionType::Absolute,
+                flex_direction: FlexDirection::Column,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            ZIndex(500),
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.8)),
+        )).with_children(|p| {
+            p.spawn((
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    padding: UiRect::all(Val::Px(40.0)),
+                    border_radius: BorderRadius::all(Val::Px(16.0)),
+                    border: UiRect::all(Val::Px(2.0)),
+                    ..default()
+                },
+                BackgroundColor(ui_theme::panel_bg()),
+                BorderColor::all(ui_theme::panel_border()),
+            )).with_children(|modal| {
+                modal.spawn((
+                    Text::new(title),
+                    TextFont { font: font.clone(), font_size: 64.0, ..default() },
+                    TextColor(title_color),
+                    Node { margin: UiRect::bottom(Val::Px(30.0)), ..default() }
+                ));
+
+                modal.spawn((
+                    Button,
+                    GoBackButton,
+                    Node {
+                        padding: UiRect::axes(Val::Px(40.0), Val::Px(20.0)),
+                        border_radius: BorderRadius::all(Val::Px(12.0)),
+                        ..default()
+                    },
+                    BackgroundColor(ui_theme::accent_home()),
+                )).with_children(|btn| {
+                    btn.spawn((
+                        Text::new("GO BACK TO LOBBY"),
+                        TextFont { font: font.clone(), font_size: 24.0, ..default() },
+                        TextColor(Color::WHITE),
+                    ));
+                });
+            });
+        });
+    }
+}
+
+pub fn system_handle_go_back(
+    mut interaction_q: Query<(&Interaction, &mut BackgroundColor), (Changed<Interaction>, With<GoBackButton>)>,
+    mut next_state: ResMut<NextState<AppState>>,
+    mut senders: Query<&mut MessageSender<ClientLeaveMessage>>,
+    mut joined_lobby: Option<ResMut<JoinedLobby>>,
+) {
+    for (interaction, mut bg) in interaction_q.iter_mut() {
+        match *interaction {
+            Interaction::Pressed => {
+                if let Some(mut jl) = joined_lobby.as_mut() {
+                    jl.0 = None;
+                }
+                for mut sender in senders.iter_mut() {
+                    let _ = sender.send::<dark_rift_shared::protocol::ReliableChannel>(ClientLeaveMessage);
+                }
+                next_state.set(AppState::LobbyBrowser);
+            }
+            Interaction::Hovered => {
+                *bg = BackgroundColor(ui_theme::accent_home_hover());
+            }
+            Interaction::None => {
+                *bg = BackgroundColor(ui_theme::accent_home());
+            }
         }
     }
 }

@@ -104,9 +104,10 @@ fn main() {
     app.add_systems(Startup, setup);
     app.add_systems(Update, (
         system_master_lobby,
-        system_broadcast_lobbies,
-        handle_client_joins,
         system_start_matches,
+        handle_client_joins,
+        handle_client_leave,
+        system_broadcast_lobbies,
         handle_intent_messages,
         system_end_turn,
         system_dump_replay,
@@ -224,12 +225,15 @@ fn system_broadcast_lobbies(
             0.0
         };
         
+        let player_names = roster.0.iter().map(|p| p.name.clone()).collect();
+        
         infos.push(LobbyInfo {
             id: lobby.id,
             num_players: roster.0.len() as u8,
             max_players: 4,
             is_counting_down: phase.0 == LobbyPhase::CountingDown,
             timer_secs,
+            player_names,
         });
     }
     
@@ -251,9 +255,13 @@ fn handle_client_joins(
             let mut target_lobby = None;
             
             if let Some(target_id) = msg.target_lobby_id {
-                for (entity, lobby, _phase, _roster, _, _) in q_lobbies.iter() {
+                for (entity, lobby, phase, _roster, _, _) in q_lobbies.iter() {
                     if lobby.id == target_id {
-                        target_lobby = Some(entity);
+                        if phase.0 == LobbyPhase::Active && !msg.is_observer {
+                            warn!("Client tried to join active Lobby {} as player, redirecting...", target_id);
+                        } else {
+                            target_lobby = Some(entity);
+                        }
                         break;
                     }
                 }
@@ -310,6 +318,43 @@ fn handle_client_joins(
                     };
                     info!("📨  Enviando ServerStartMessage (late-join) a {:?}", assigned_id);
                     let _ = sender.send::<ReliableChannel>(start_msg);
+                }
+            }
+        }
+    }
+}
+
+fn handle_client_leave(
+    mut registry: ResMut<ClientRegistry>,
+    mut q_matches: Query<&mut MatchRoster>,
+    mut receivers: Query<(Entity, &mut MessageReceiver<ClientLeaveMessage>)>,
+    q_clients: Query<(), (With<MessageSender<ServerStartMessage>>, With<MessageReceiver<ClientJoinMessage>>)>,
+) {
+    let mut to_remove = Vec::new();
+    
+    // 1. Explicit Leave
+    for (client_entity, mut receiver) in receivers.iter_mut() {
+        for _ in receiver.receive() {
+            to_remove.push(client_entity);
+        }
+    }
+    
+    // 2. Disconnects (ghosts)
+    for (client_entity, _) in registry.clients.iter() {
+        if !q_clients.contains(*client_entity) && !to_remove.contains(client_entity) {
+            to_remove.push(*client_entity);
+        }
+    }
+    
+    // Process
+    for client_entity in to_remove {
+        if let Some((match_entity, player_id)) = registry.clients.remove(&client_entity) {
+            if let Ok(mut roster) = q_matches.get_mut(match_entity) {
+                if let Some(pid) = player_id {
+                    roster.0.retain(|p| p.id != pid);
+                    info!("👋 Jugador {} abandonó el lobby (Roster actualizado)", pid);
+                } else {
+                    info!("👁  Observer abandonó el lobby");
                 }
             }
         }
@@ -440,7 +485,7 @@ fn system_dump_replay(
         *next_dump -= 10.0;
         
         for (phase, meta, roster, log) in q_matches.iter() {
-            if phase.0 == LobbyPhase::Active {
+            if phase.0 == LobbyPhase::Active && !roster.0.is_empty() {
                 let seed = meta.seed;
                 let players = roster.0.clone();
                 let log_clone = log.turns.clone();
@@ -448,7 +493,7 @@ fn system_dump_replay(
                 std::thread::spawn(move || {
                     let record = ReplayFile { seed, players, turns: log_clone };
                     if let Ok(json) = serde_json::to_string(&record) {
-                        let file_name = format!("latest_replay_{}.json", seed);
+                        let file_name = "latest_replay.json".to_string();
                         std::fs::write(file_name, json).ok();
                     }
                 });

@@ -92,11 +92,10 @@ pub struct ClientSettings {
     pub font: Handle<Font>,
 }
 
-pub fn load_client_settings(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
-    // Independent of process CWD (fixes `cargo run` from crates/client vs workspace root).
+/// Builds config from disk (or defaults). No Bevy required — safe to call before app.run().
+pub fn build_client_settings_config() -> ClientSettingsConfig {
     let ron_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/settings.ron");
-
-    let config = match std::fs::read_to_string(&ron_path) {
+    match std::fs::read_to_string(&ron_path) {
         Ok(s) => match ron::from_str::<ClientSettingsConfig>(&s) {
             Ok(c) => c,
             Err(e) => {
@@ -105,17 +104,28 @@ pub fn load_client_settings(mut commands: Commands, mut fonts: ResMut<Assets<Fon
             }
         },
         Err(e) => {
-            bevy::log::warn!(
-                "Could not read {}: {}; using defaults",
-                ron_path.display(),
-                e
-            );
+            bevy::log::warn!("Could not read {}: {}; using defaults", ron_path.display(), e);
             ClientSettingsConfig::default()
         }
-    };
+    }
+}
 
-    // Embed font so labels render even when AssetServer can't resolve `assets/` (wrong CWD).
-    // `font_path` in ui_settings.ron is kept for future hot-reload / overrides only.
+/// System that patches the real font Handle into ClientSettings once Assets<Font> is available.
+pub fn init_client_font(mut settings: ResMut<ClientSettings>, mut fonts: ResMut<Assets<Font>>) {
+    let font_bytes = include_bytes!("../../../assets/fonts/Rajdhani-Medium.ttf");
+    settings.font = match Font::try_from_bytes(font_bytes.to_vec()) {
+        Ok(f) => fonts.add(f),
+        Err(e) => {
+            bevy::log::error!("Rajdhani font bytes invalid: {e}");
+            Handle::default()
+        }
+    };
+}
+
+/// Legacy: kept for compatibility, delegates to build+patch.
+#[allow(dead_code)]
+pub fn load_client_settings(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
+    let config = build_client_settings_config();
     let font_bytes = include_bytes!("../../../assets/fonts/Rajdhani-Medium.ttf");
     let font_handle = match Font::try_from_bytes(font_bytes.to_vec()) {
         Ok(f) => fonts.add(f),

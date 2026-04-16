@@ -52,6 +52,7 @@ pub struct LobbyInfo {
     pub max_players: u8,
     pub is_counting_down: bool,
     pub timer_secs: f32,
+    pub player_names: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -64,6 +65,9 @@ pub struct ServerLobbiesBroadcastMessage {
 pub struct ClientGameplayMessage {
     pub intent: GameplayIntent,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ClientLeaveMessage;
 
 // ─── Server Messages (Server → Client) ─────────────────────────────────────
 
@@ -115,6 +119,8 @@ impl Plugin for SharedProtocolPlugin {
         .add_direction(NetworkDirection::Bidirectional);
 
         app.register_message::<ClientJoinMessage>()
+            .add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<ClientLeaveMessage>()
             .add_direction(NetworkDirection::ClientToServer);
         app.register_message::<ClientGameplayMessage>()
             .add_direction(NetworkDirection::ClientToServer);
