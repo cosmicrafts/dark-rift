@@ -1,0 +1,6 @@
+(
+    attack_interval_ticks: 600, // Very slow ~10s
+    trigger_ratio: 0.9,         // Waits until almost max army capacity
+    reserve_ratio: 0.7,         // Leaves huge army behind 
+    expand_ratio: 0.1,          // Expands slowly
+)

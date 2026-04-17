@@ -248,16 +248,24 @@ struct CancelAttackButton(u64);
 #[derive(Resource, Default)]
 struct OutgoingAttackRowMap(std::collections::HashMap<u64, (Entity, Entity)>);
 
-#[derive(Parser, Resource)]
+#[derive(Parser, Resource, Clone)]
 #[command(author, version, about, long_about = None)]
-struct Cli {
+pub struct Cli {
     /// Start as an observer
     #[arg(short, long)]
-    observer: bool,
+    pub observer: bool,
 
     /// Play a replay file locally
     #[arg(short, long)]
-    replay: Option<String>,
+    pub replay: Option<String>,
+
+    /// Run as a headless bot for network stress testing
+    #[arg(short, long)]
+    pub bot: bool,
+
+    /// Profile config file inside `assets/bots/` (e.g. `tortuga.ron`)
+    #[arg(short, long)]
+    pub profile: Option<String>,
 }
 
 #[derive(Resource)]
@@ -272,7 +280,15 @@ pub struct SinglePlayerState {
 #[derive(Resource, Default)]
 pub struct LocalIntentBuffer(pub Vec<StampedIntent>);
 
+#[derive(Resource)]
+pub struct HeadlessBotState {
+    pub profile: dark_rift_shared::game_config::BotProfile,
+    pub timer: Timer,
+    pub has_joined_lobby: bool,
+}
+
 struct ReplayDirector {
+
     record: ReplayFile,
     turn_index: usize,
 }
@@ -284,44 +300,98 @@ fn main() {
     let is_replay = cli.replay.clone();
 
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: "Dark Rift — Multiplayer".to_string(),
-            resolution: (1280u32, 720u32).into(),
+
+    if cli.bot {
+        // ── HEADLESS MODE ─────────────────────────────────────────────────────
+        // Only MinimalPlugins (no AssetPlugin, no RenderPlugin, no Winit).
+        // This avoids the Shader asset registration crash.
+        let profile_path = cli.profile.as_deref().unwrap_or("tortuga");
+        let profile_str = std::fs::read_to_string(format!("assets/bots/{profile_path}.ron"))
+            .unwrap_or_else(|_| String::from("(attack_interval_ticks: 240, trigger_ratio: 0.6, reserve_ratio: 0.3, expand_ratio: 0.15)"));
+        let profile: dark_rift_shared::game_config::BotProfile = ron::from_str(&profile_str).expect("Failed to parse bot profile");
+        info!("🤖 Headless Bot initialized profile='{}' interval_ticks={}", profile_path, profile.attack_interval_ticks);
+
+        app.add_plugins(MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(
+            std::time::Duration::from_secs_f64(1.0 / 60.0),
+        )));
+        app.add_plugins(bevy::log::LogPlugin::default());
+        app.add_plugins(bevy::state::app::StatesPlugin);
+
+        app.insert_resource(HeadlessBotState {
+            timer: Timer::new(std::time::Duration::from_secs_f64(profile.attack_interval_ticks as f64 / 60.0), TimerMode::Repeating),
+            profile,
+            has_joined_lobby: false,
+        });
+
+        // Shared game resources (no render deps)
+        app.insert_resource(cli.clone())
+            .init_resource::<GameReady>()
+            .init_resource::<MyPlayerId>()
+            .init_resource::<PendingTicks>()
+            .init_resource::<TurnQueue>()
+            .init_resource::<HighestReceivedTurn>()
+            .init_resource::<NetTiming>()
+            .init_resource::<HoveredTile>()
+            .init_resource::<FreshlyPaintedTiles>()
+            .init_resource::<AttackRatio>()
+            .init_resource::<OutgoingAttackRowMap>();
+
+        // Network stack — same as normal client, but no visual plugins
+        app.add_plugins(SharedProtocolPlugin)
+           .add_plugins(ClientPlugins::default())
+           .init_state::<AppState>()
+           .add_systems(Startup, setup_network)
+           .add_systems(Update, (
+               handle_server_start,
+               system_mock_single_player_start,
+               handle_connection,
+           ).chain())
+           .add_systems(Update, (
+               handle_server_turns,
+               system_evaluate_game_over,
+           ).chain().run_if(in_state(AppState::InGame)));
+    } else {
+        // ── NORMAL (GRAPHICAL) MODE ────────────────────────────────────────────
+        app.add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Dark Rift — Multiplayer".to_string(),
+                resolution: (1280u32, 720u32).into(),
+                ..default()
+            }),
             ..default()
-        }),
-        ..default()
-    }).disable::<bevy::audio::AudioPlugin>())
-    .insert_resource(bevy::winit::WinitSettings {
-        focused_mode: bevy::winit::UpdateMode::Continuous,
-        unfocused_mode: bevy::winit::UpdateMode::Continuous,
-    })
-    .add_plugins(FrameTimeDiagnosticsPlugin::default())
-    .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.04)))
-    .add_systems(Startup, setup_attack_ring_mesh)
-    .insert_resource(cli)
-    .init_resource::<GameReady>()
-    .init_resource::<MyPlayerId>()
-    .init_resource::<HoveredTile>()
-    .init_resource::<PendingTicks>()
-    .init_resource::<TurnQueue>()
-    .init_resource::<HighestReceivedTurn>()
-    .init_resource::<CameraDragState>()
-    .init_resource::<FreshlyPaintedTiles>()
-    .init_resource::<AttackRatio>()
-    .init_resource::<OutgoingAttackRowMap>()
-    .init_resource::<NetTiming>()
-    .init_resource::<OverlayDiagnostics>()
-    .init_resource::<UiShellState>();
+        }).disable::<bevy::audio::AudioPlugin>());
 
-    // Insert ClientSettings BEFORE app.run() so it exists when OnEnter(LobbyBrowser) fires.
-    // Font handle is Handle::default() here; init_client_font patches it in Startup.
-    app.world_mut().insert_resource(ClientSettings {
-        config: build_client_settings_config(),
-        font: Handle::default(),
-    });
+        app.insert_resource(bevy::winit::WinitSettings {
+            focused_mode: bevy::winit::UpdateMode::Continuous,
+            unfocused_mode: bevy::winit::UpdateMode::Continuous,
+        })
+        .add_plugins(FrameTimeDiagnosticsPlugin::default())
+        .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.04)))
+        .insert_resource(cli.clone())
+        .init_resource::<GameReady>()
+        .init_resource::<MyPlayerId>()
+        .init_resource::<HoveredTile>()
+        .init_resource::<PendingTicks>()
+        .init_resource::<TurnQueue>()
+        .init_resource::<HighestReceivedTurn>()
+        .init_resource::<CameraDragState>()
+        .init_resource::<FreshlyPaintedTiles>()
+        .init_resource::<AttackRatio>()
+        .init_resource::<OutgoingAttackRowMap>()
+        .init_resource::<NetTiming>()
+        .init_resource::<OverlayDiagnostics>()
+        .init_resource::<UiShellState>();
 
+        // Insert ClientSettings BEFORE app.run() so it exists when OnEnter(LobbyBrowser) fires.
+        // Font handle is Handle::default() here; init_client_font patches it in Startup.
+        app.world_mut().insert_resource(ClientSettings {
+            config: build_client_settings_config(),
+            font: Handle::default(),
+        });
+    }
 
+    if !cli.bot {
+    // ── REPLAY / LIVE BLOCK (skipped for headless bots) ───────────────────
     if let Some(path) = is_replay {
         let file = std::fs::read_to_string(&path)
             .expect("Failed to read replay file");
@@ -345,32 +415,40 @@ fn main() {
         )
            .add_systems(Update, system_replay_pulse);
     } else {
+        // ── LIVE NETWORKING (both normal clients AND headless bots need this) ──
         app.add_plugins(SharedProtocolPlugin)
            .add_plugins(ClientPlugins::default())
-           .add_plugins(EnokiPlugin)
-           .init_state::<AppState>()
-           .init_resource::<CombatVfxCache>()
-            .add_systems(
+           .init_state::<AppState>();
+
+        if !cli.bot {
+            // Visual-only plugins — skip entirely in headless mode
+            app.add_plugins(EnokiPlugin)
+               .init_resource::<CombatVfxCache>();
+        }
+
+        app.add_systems(
                 Startup,
                 (
-
+                    setup_network,
+                    setup_attack_ring_mesh,
                     init_client_font,
                     init_attack_ratio_from_ui_settings,
                     setup_hud_shell,
                     setup_live,
                     setup_combat_vfx,
                 )
-                    .chain(),
+                    .chain()
+                    .run_if(|cli: Res<Cli>| !cli.bot),
             )
-            .add_systems(OnEnter(AppState::LobbyBrowser), setup_lobby_browser)
-            .add_systems(OnExit(AppState::LobbyBrowser), system_cleanup_lobby_browser)
-            .add_systems(OnExit(AppState::InGame), system_cleanup_ingame_entities)
+            .add_systems(OnEnter(AppState::LobbyBrowser), setup_lobby_browser.run_if(|cli: Res<Cli>| !cli.bot))
+            .add_systems(OnExit(AppState::LobbyBrowser), system_cleanup_lobby_browser.run_if(|cli: Res<Cli>| !cli.bot))
+            .add_systems(OnExit(AppState::InGame), system_cleanup_ingame_entities.run_if(|cli: Res<Cli>| !cli.bot))
             .add_systems(Update, (
                 system_update_lobby_browser,
                 system_handle_join_clicks,
                 system_handle_cancel_join,
                 ui_lobby_browser::system_handle_single_player_click,
-            ).run_if(in_state(AppState::LobbyBrowser)))
+            ).run_if(|state: Res<State<AppState>>, cli: Res<Cli>| *state.get() == AppState::LobbyBrowser && !cli.bot))
             .add_systems(Update, (
                 handle_server_start,
                 system_mock_single_player_start,
@@ -385,38 +463,41 @@ fn main() {
                system_handle_go_back,
            ).chain().run_if(in_state(AppState::InGame)));
     }
+    } // end if !cli.bot
 
-    app.add_systems(Update, (system_update_ui_shell_state, system_apply_ui_shell_layout, system_update_perf_overlay));
+    if !cli.bot {
+        app.add_systems(Update, (system_update_ui_shell_state, system_apply_ui_shell_layout, system_update_perf_overlay).run_if(|cli: Res<Cli>| !cli.bot));
 
-    app.add_systems(Update, (
-        hover_system,
-        system_attack_ratio_keyboard,
-        system_attack_ratio_slider_drag,
-        player_click,
-        system_home_button,
-        handle_tile_change,
-        system_animate_tile_colors,
-        update_hud,
-        system_apply_responsive_hud_layout,
-        system_sync_bottom_combat_hud,
-        system_sync_outgoing_attack_rows,
-        system_handle_cancel_click,
-    ).run_if(in_state(AppState::InGame)))
-    .add_systems(
-        Update,
-        system_animate_attack_command_rings
-            .after(player_click)
-            .run_if(in_state(AppState::InGame)),
-    );
-    
-    app.add_systems(Update, (
-        camera_movement_and_zoom,
-        system_spawn_attack_vfx.run_if(|settings: Res<ClientSettings>| settings.config.visuals.enable_combat_particles),
-        system_sync_attack_vfx_position.run_if(|settings: Res<ClientSettings>| settings.config.visuals.enable_combat_particles),
-        system_sync_player_labels.run_if(|settings: Res<ClientSettings>| settings.config.visuals.enable_floating_labels),
-    ).run_if(in_state(AppState::InGame)));
+        app.add_systems(Update, (
+            hover_system,
+            system_attack_ratio_keyboard,
+            system_attack_ratio_slider_drag,
+            player_click,
+            system_home_button,
+            handle_tile_change,
+            system_animate_tile_colors,
+            update_hud,
+            system_apply_responsive_hud_layout,
+            system_sync_bottom_combat_hud,
+            system_sync_outgoing_attack_rows,
+            system_handle_cancel_click,
+        ).run_if(in_state(AppState::InGame)))
+        .add_systems(
+            Update,
+            system_animate_attack_command_rings
+                .after(player_click)
+                .run_if(in_state(AppState::InGame)),
+        );
+        
+        app.add_systems(Update, (
+            camera_movement_and_zoom,
+            system_spawn_attack_vfx.run_if(|settings: Res<ClientSettings>| settings.config.visuals.enable_combat_particles),
+            system_sync_attack_vfx_position.run_if(|settings: Res<ClientSettings>| settings.config.visuals.enable_combat_particles),
+            system_sync_player_labels.run_if(|settings: Res<ClientSettings>| settings.config.visuals.enable_floating_labels),
+        ).run_if(in_state(AppState::InGame)));
 
-    app.add_systems(Update, clear_inputs_on_focus_loss);
+        app.add_systems(Update, clear_inputs_on_focus_loss);
+    }
 
     let mut sim_schedule = Schedule::new(SimulationSchedule);
     sim_schedule.add_systems((
@@ -425,6 +506,7 @@ fn main() {
         system_bot_think,
         system_attack_execution,
         system_game_tick,
+        system_headless_bot_engine.run_if(|cli: Res<Cli>| cli.bot),
         decrement_pending,
     ).chain());
     app.add_schedule(sim_schedule);
@@ -747,7 +829,9 @@ fn setup_live(
             TextColor(Color::WHITE),
         ));
     });
+}
 
+fn setup_network(mut commands: Commands, cli: Res<Cli>) {
     let server_addr: SocketAddr = multiplayer_netcode_socket();
     let client_id = rand_client_id();
 
@@ -809,12 +893,20 @@ fn setup_live(
 
 fn handle_connection(
     mut client_q: Query<&mut MessageSender<ClientJoinMessage>, Added<lightyear::prelude::client::Client>>,
-    _cli: Res<Cli>,
+    cli: Res<Cli>,
 ) {
-    for _ in client_q.iter_mut() {
-        // We no longer blind-send ClientJoinMessage here.
-        // It is now triggered by Clicking a Button in the LobbyBrowser UI!
-        info!("🔌 Connected to Transport. Presenting Lobby Browser...");
+    for mut sender in client_q.iter_mut() {
+        if cli.bot {
+            info!("🔌 Bot Connected to Transport. Automatically joining Lobby...");
+            let msg = ClientJoinMessage { 
+                name: format!("HydraBot-{}", rand_client_id() % 1000), 
+                is_observer: cli.observer, 
+                target_lobby_id: None, // Joins any available lobby or seeds a new one
+            };
+            let _ = sender.send::<ReliableChannel>(msg);
+        } else {
+            info!("🔌 Connected to Transport. Presenting Lobby Browser...");
+        }
     }
 }
 
@@ -1039,9 +1131,9 @@ fn handle_server_start(
     mut pending:   ResMut<PendingTicks>,
     mut highest:   ResMut<HighestReceivedTurn>,
     mut net:       ResMut<NetTiming>,
-    mut overlay:   ResMut<OverlayDiagnostics>,
-    shell:         Res<HudShellRegions>,
-    asset_server:  Res<AssetServer>,
+    mut overlay:   Option<ResMut<OverlayDiagnostics>>,
+    shell:         Option<Res<HudShellRegions>>,
+    asset_server:  Option<Res<AssetServer>>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
     for mut receiver in receivers.iter_mut() {
@@ -1068,9 +1160,9 @@ fn system_mock_single_player_start(
     mut queue:     ResMut<TurnQueue>,
     mut pending:   ResMut<PendingTicks>,
     mut highest:   ResMut<HighestReceivedTurn>,
-    mut overlay:   ResMut<OverlayDiagnostics>,
-    shell:         Res<HudShellRegions>,
-    asset_server:  Res<AssetServer>,
+    mut overlay:   Option<ResMut<OverlayDiagnostics>>,
+    shell:         Option<Res<HudShellRegions>>,
+    asset_server:  Option<Res<AssetServer>>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
     if let Some(m) = mock {
@@ -1120,9 +1212,9 @@ fn start_game_core(
     queue:         &mut ResMut<TurnQueue>,
     pending:       &mut ResMut<PendingTicks>,
     highest:       &mut ResMut<HighestReceivedTurn>,
-    overlay:       &mut ResMut<OverlayDiagnostics>,
-    shell:         &Res<HudShellRegions>,
-    asset_server:  &Res<AssetServer>,
+    overlay:       &mut Option<ResMut<OverlayDiagnostics>>,
+    shell:         &Option<Res<HudShellRegions>>,
+    asset_server:  &Option<Res<AssetServer>>,
     next_state:    &mut ResMut<NextState<AppState>>,
 ) {
             if ready.0 { return; }
@@ -1207,51 +1299,56 @@ fn start_game_core(
             if let Ok(mut cam) = cam_q.single_mut() {
                 cam.translation = Vec3::new(cx, cy, 999.0);
             }
+            if let Some(assets) = asset_server {
+                let tileset = assets.load_with_settings(
+                    "white_array.png",
+                    |settings: &mut ImageLoaderSettings| {
+                        settings.array_layout = Some(ImageArrayLayout::RowCount { rows: 2 });
+                    },
+                );
 
-            let tileset = asset_server.load_with_settings(
-                "white_array.png",
-                |settings: &mut ImageLoaderSettings| {
-                    settings.array_layout = Some(ImageArrayLayout::RowCount { rows: 2 });
-                },
-            );
+                let chunk_size = UVec2::new(msg.config.map_width as u32, msg.config.map_height as u32);
+                let tile_display_size = UVec2::splat(TILE_SIZE as u32);
+                let mut tile_data: Vec<Option<TileData>> = vec![None; (chunk_size.x * chunk_size.y) as usize];
 
-            let chunk_size = UVec2::new(msg.config.map_width as u32, msg.config.map_height as u32);
-            let tile_display_size = UVec2::splat(TILE_SIZE as u32);
-            let mut tile_data: Vec<Option<TileData>> = vec![None; (chunk_size.x * chunk_size.y) as usize];
-
-            for y in 0..game.map.height {
-                for x in 0..game.map.width {
-                    let idx = (y * game.map.width + x) as usize;
-                    tile_data[idx] = Some(openfront_tile_color(&game, x as i32, y as i32));
+                for y in 0..game.map.height {
+                    for x in 0..game.map.width {
+                        let idx = (y * game.map.width + x) as usize;
+                        tile_data[idx] = Some(openfront_tile_color(&game, x as i32, y as i32));
+                    }
                 }
-            }
 
-            commands.spawn((
-                TilemapChunk {
-                    chunk_size,
-                    tile_display_size,
-                    tileset,
-                    ..default()
-                },
-                InGameEntity,
-                TilemapChunkTileData(tile_data),
-                Transform::from_xyz(
-                    msg.config.map_width  as f32 * TILE_SIZE / 2.0,
-                    msg.config.map_height as f32 * TILE_SIZE / 2.0,
-                    0.0
-                ),
-            ));
+                commands.spawn((
+                    TilemapChunk {
+                        chunk_size,
+                        tile_display_size,
+                        tileset,
+                        ..default()
+                    },
+                    InGameEntity,
+                    TilemapChunkTileData(tile_data),
+                    Transform::from_xyz(
+                        msg.config.map_width  as f32 * TILE_SIZE / 2.0,
+                        msg.config.map_height as f32 * TILE_SIZE / 2.0,
+                        0.0
+                    ),
+                ));
+            }
 
             commands.insert_resource(game);
             ready.0 = true;
             next_state.set(AppState::InGame);
 
-            spawn_bottom_combat_hud(commands, &shell, msg.my_player_id.is_none());
+            if let Some(s) = shell {
+                spawn_bottom_combat_hud(commands, s, msg.my_player_id.is_none());
+            }
 
-            if msg.my_player_id.is_some() {
-                overlay.status_line = format!("Connected — Player {:?}", msg.my_player_id);
-            } else {
-                overlay.status_line = "Connected — Observer".to_string();
+            if let Some(over) = overlay {
+                if msg.my_player_id.is_some() {
+                    over.status_line = format!("Connected — Player {:?}", msg.my_player_id);
+                } else {
+                    over.status_line = "Connected — Observer".to_string();
+                }
             }
 }
 
@@ -2345,7 +2442,7 @@ fn system_evaluate_game_over(
     game: Option<Res<GameState>>,
     ready: Res<GameReady>,
     my_id: Res<MyPlayerId>,
-    settings: Res<ClientSettings>,
+    settings: Option<Res<ClientSettings>>,
     panel_q: Query<Entity, With<GameOverPanel>>,
 ) {
     let Some(game) = game else { return; };
@@ -2367,7 +2464,8 @@ fn system_evaluate_game_over(
     }
 
     if show_panel {
-        let font = settings.font.clone();
+        if let Some(settings) = settings {
+            let font = settings.font.clone();
         let title = if victory { "VICTORY" } else { "DEFEAT" };
         let title_color = if victory { ui_theme::accent_primary() } else { ui_theme::accent_danger() };
 
@@ -2424,6 +2522,7 @@ fn system_evaluate_game_over(
                 });
             });
         });
+        }
     }
 }
 
@@ -2452,4 +2551,90 @@ pub fn system_handle_go_back(
             }
         }
     }
+}
+
+/// Headless client logic for the bot.
+fn system_headless_bot_engine(
+    mut bot_state: ResMut<HeadlessBotState>,
+    game: Res<GameState>,
+    mut sender: Query<&mut MessageSender<ClientGameplayMessage>>,
+    my_id: Res<MyPlayerId>,
+) {
+    if !bot_state.timer.tick(std::time::Duration::from_secs_f64(1.0 / 60.0)).just_finished() {
+        return;
+    }
+
+    let Some(mut sender_mut) = sender.iter_mut().next() else {
+        return;
+    };
+
+    let Some(player) = game.player(my_id.0) else {
+        return;
+    };
+
+    let bot_id = my_id.0;
+    
+    // Exact same logic ported from `intent.rs` to generate an attack via ClientGameplayMessage.
+    let trigger_ratio = bot_state.profile.trigger_ratio;
+    let reserve_ratio = bot_state.profile.reserve_ratio;
+    let expand_ratio = bot_state.profile.expand_ratio;
+    
+    let borders = game.map.border_tiles_of(bot_id);
+    if borders.is_empty() {
+        return;
+    }
+
+    let mut has_neutral = false;
+    let mut player_targets = Vec::new();
+
+    for &(bx, by) in &borders {
+        for (nx, ny) in game.map.neighbors(bx, by) {
+            let owner = game.map.owner_id(nx, ny);
+            if owner != bot_id {
+                if owner == 0 {
+                    has_neutral = true;
+                } else {
+                    player_targets.push(owner);
+                }
+            }
+        }
+    }
+
+    let mut bot_rng = PseudoRandom::new(game.seed.wrapping_add(game.tick as u64).wrapping_add(1999));
+
+    let (target_owner, is_neutral) = if has_neutral {
+        (0, true)
+    } else {
+        if player_targets.is_empty() {
+            return;
+        }
+        (player_targets[bot_rng.next_int(0, player_targets.len() as i32) as usize], false)
+    };
+
+    if !is_neutral {
+        let trigger_limit = player.max_troops * trigger_ratio;
+        if player.troops < trigger_limit {
+            return;
+        }
+    }
+
+    let active_reserve_ratio = if is_neutral { expand_ratio } else { reserve_ratio };
+    let reserve = player.max_troops * active_reserve_ratio;
+    let p_send = (player.troops - reserve).max(0.0);
+    
+    if p_send < dark_rift_shared::game_config::GameConfig::default().expand_cost as f64 {
+        return;
+    }
+
+    let Some(target) = player_targets.first().copied().or(Some(0)) else {
+        return;
+    };
+
+    info!("🤖 Headless sent Attack -> Player {} (troops: {})", target_owner, p_send);
+    let _ = sender_mut.send::<ReliableChannel>(ClientGameplayMessage {
+        intent: dark_rift_shared::protocol::GameplayIntent::Attack(dark_rift_shared::protocol::AttackIntent {
+            target_owner,
+            troops: Some(p_send),
+        }),
+    });
 }

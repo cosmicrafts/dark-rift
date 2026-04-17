@@ -1,0 +1,6 @@
+(
+    attack_interval_ticks: 30,  // Hyperactive ~0.5s (like legacy Terminator)
+    trigger_ratio: 0.1,         // Always attacking instantly
+    reserve_ratio: 0.0,         // ZERO defense
+    expand_ratio: 0.0,          // Expands everywhere instantly
+)

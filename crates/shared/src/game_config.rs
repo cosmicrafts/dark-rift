@@ -8,6 +8,25 @@ pub enum BotDifficulty {
     Terminator,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, bevy::prelude::Resource)]
+pub struct BotProfile {
+    pub attack_interval_ticks: u64,
+    pub trigger_ratio: f64,
+    pub reserve_ratio: f64,
+    pub expand_ratio: f64,
+}
+
+impl Default for BotProfile {
+    fn default() -> Self {
+        Self {
+            attack_interval_ticks: 240, // 4 seconds by default
+            trigger_ratio: 0.6,
+            reserve_ratio: 0.3,
+            expand_ratio: 0.15,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, bevy::prelude::Resource)]
 pub struct GameConfig {
     pub max_players: u32,

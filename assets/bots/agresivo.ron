@@ -1,0 +1,6 @@
+(
+    attack_interval_ticks: 150, // Rapid pace ~2.5s
+    trigger_ratio: 0.4,         // Low threshold to attack players    
+    reserve_ratio: 0.1,         // Leaves almost no defense 
+    expand_ratio: 0.15,         // Normal expansion
+)
