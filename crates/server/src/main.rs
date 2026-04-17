@@ -39,6 +39,7 @@ enum LobbyPhase {
     Waiting,
     CountingDown,
     Active,
+    Finished,
 }
 
 #[derive(Component)]
@@ -57,6 +58,9 @@ pub struct MatchMetadata {
 
 #[derive(Component)]
 struct CountdownTimer(Timer);
+
+#[derive(Component)]
+struct ActiveEmptyTimer(Timer);
 
 #[derive(Component, Default)]
 struct MatchRoster(Vec<PlayerInfo>);
@@ -105,6 +109,7 @@ fn main() {
     app.add_systems(Startup, setup);
     app.add_systems(Update, (
         system_master_lobby,
+        system_lobby_gc,
         system_start_matches,
         handle_client_joins,
         handle_client_leave,
@@ -199,7 +204,37 @@ fn system_master_lobby(
                 if timer.0.just_finished() || roster.0.len() >= 4 {
                     phase.0 = LobbyPhase::Active;
                     commands.entity(entity).remove::<CountdownTimer>();
+                    commands.entity(entity).insert(ActiveEmptyTimer(Timer::from_seconds(30.0, TimerMode::Once)));
                     info!("⚔️  [Master] Lobby {} es ahora ACTIVE con {} jugadores!", lobby.id, roster.0.len());
+                }
+            }
+        }
+    }
+}
+
+fn system_lobby_gc(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut q_lobbies: Query<(Entity, &Lobby, &mut StatePhase, &MatchRoster, Option<&mut ActiveEmptyTimer>)>,
+) {
+    for (entity, lobby, mut phase, roster, timer_opt) in q_lobbies.iter_mut() {
+        if phase.0 == LobbyPhase::Active {
+            if roster.0.is_empty() {
+                if let Some(mut timer) = timer_opt {
+                    timer.0.tick(time.delta());
+                    if timer.0.just_finished() {
+                        info!("🗑️  [GC] Lobby {} estuvo vacío por 30s. Terminando...", lobby.id);
+                        phase.0 = LobbyPhase::Finished;
+                        commands.entity(entity).despawn();
+                    }
+                } else {
+                    info!("🗑️  [GC] Todos los jugadores abandonaron el Lobby {}. Terminando...", lobby.id);
+                    phase.0 = LobbyPhase::Finished;
+                    commands.entity(entity).despawn();
+                }
+            } else {
+                if timer_opt.is_some() {
+                    commands.entity(entity).remove::<ActiveEmptyTimer>();
                 }
             }
         }
@@ -218,7 +253,7 @@ fn system_broadcast_lobbies(
     
     let mut infos = Vec::new();
     for (lobby, phase, roster, timer) in q_lobbies.iter() {
-        if phase.0 == LobbyPhase::Active { continue; }
+        if phase.0 == LobbyPhase::Active || phase.0 == LobbyPhase::Finished { continue; }
         
         let timer_secs = if let Some(t) = timer {
             t.0.duration().as_secs_f32() - t.0.elapsed_secs()
@@ -258,7 +293,9 @@ fn handle_client_joins(
             if let Some(target_id) = msg.target_lobby_id {
                 for (entity, lobby, phase, _roster, _, _) in q_lobbies.iter() {
                     if lobby.id == target_id {
-                        if phase.0 == LobbyPhase::Active && !msg.is_observer {
+                        if phase.0 == LobbyPhase::Finished {
+                            warn!("Client tried to join finished Lobby {}, redirecting...", target_id);
+                        } else if phase.0 == LobbyPhase::Active && !msg.is_observer {
                             warn!("Client tried to join active Lobby {} as player, redirecting...", target_id);
                         } else {
                             target_lobby = Some(entity);
