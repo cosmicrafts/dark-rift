@@ -265,9 +265,9 @@ pub fn system_bot_think(
 
     // Adjusted for 60 ticks per second (OpenFront was 4 ticks per second. Multiply by 15x)
     let (attack_interval_base, trigger_ratio, reserve_ratio) = match config.bot_difficulty {
-        crate::game_config::BotDifficulty::BrainDead => (1350, 0.9, 0.8), // 22.5s
-        crate::game_config::BotDifficulty::Vanilla => (600, 0.6, 0.3),    // 10.0s (matches OpenFront 40 ticks base)
-        crate::game_config::BotDifficulty::Terminator => (300, 0.4, 0.1), // 5.0s
+        crate::game_config::BotDifficulty::BrainDead => (500, 0.9, 0.8),
+        crate::game_config::BotDifficulty::Vanilla => (250, 0.6, 0.3),
+        crate::game_config::BotDifficulty::Terminator => (125, 0.4, 0.1),
     };
 
     for bot_id in bot_ids {
@@ -282,17 +282,6 @@ pub fn system_bot_think(
         let my_offset = bot_setup_rng.next_int(0, my_interval as i32) as u64;
 
         if game.tick % my_interval != my_offset {
-            continue;
-        }
-
-        let trigger_limit = player.max_troops * trigger_ratio;
-        if player.troops < trigger_limit {
-            continue;
-        }
-
-        let reserve = player.max_troops * reserve_ratio;
-        let p_send = (player.troops - reserve).max(0.0);
-        if p_send < expand_cost as f64 {
             continue;
         }
 
@@ -318,14 +307,34 @@ pub fn system_bot_think(
             }
         }
 
-        let target_owner = if has_neutral {
-            0
+        // OpenFront AI Algorithm Port:
+        // 1. If Neutral, we expand organically. No trigger limit, tiny reserve.
+        // 2. If Player, we stockpile (dumb/slow AI). Strict trigger limit, larger reserve.
+        let (target_owner, is_neutral) = if has_neutral {
+            (0, true)
         } else {
             if player_targets.is_empty() {
                 continue;
             }
-            player_targets[rng.next_int(0, player_targets.len() as i32) as usize]
+            (player_targets[rng.next_int(0, player_targets.len() as i32) as usize], false)
         };
+
+        if !is_neutral {
+            // Player Attack: Must save up troops first to burst
+            let trigger_limit = player.max_troops * trigger_ratio;
+            if player.troops < trigger_limit {
+                continue;
+            }
+        }
+
+        // Neutral attacks use expand_ratio (e.g. 0.15) so they trickle constantly. Player attacks use reserve_ratio.
+        let active_reserve_ratio = if is_neutral { 0.15 } else { reserve_ratio };
+        let reserve = player.max_troops * active_reserve_ratio;
+        let p_send = (player.troops - reserve).max(0.0);
+        
+        if p_send < expand_cost as f64 {
+            continue;
+        }
 
         let stamped = StampedIntent {
             player_id: bot_id,
