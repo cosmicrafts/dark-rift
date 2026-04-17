@@ -29,7 +29,16 @@ impl Ord for PrioritizedTile {
             Ordering::Equal => {
                 // Return exact Insertion Time inverse!
                 // Older items (smallest insert_seq) pop FIRST, guaranteeing deterministic BFS organicity!
-                other.insert_seq.cmp(&self.insert_seq) 
+                match other.insert_seq.cmp(&self.insert_seq) {
+                    Ordering::Equal => {
+                        // Flawless Secondary Tie-Breaker: Coordinate space is immutable and unique per tile
+                        match other.y.cmp(&self.y) {
+                            Ordering::Equal => other.x.cmp(&self.x),
+                            ord => ord,
+                        }
+                    },
+                    ord => ord,
+                }
             },
             ord => ord,
         }

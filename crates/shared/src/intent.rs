@@ -260,7 +260,7 @@ pub fn system_bot_think(
 
     let mut rng = PseudoRandom::new(game.seed.wrapping_add(game.tick));
 
-    let Some(config) = config_opt else { return; };
+    let config = config_opt.map(|c| c.clone()).unwrap_or_default();
     let expand_cost = config.expand_cost;
 
     let (attack_interval, trigger_ratio, reserve_ratio) = match config.bot_difficulty {
