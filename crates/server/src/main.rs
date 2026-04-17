@@ -120,7 +120,7 @@ fn main() {
 // ─── Startup ────────────────────────────────────────────────────────────────
 
 fn setup(mut commands: Commands) {
-    let server_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 5005);
+    let server_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 25565);
 
     let ws_config = WebSocketConfig::builder()
         .with_bind_address(server_addr)
@@ -138,7 +138,7 @@ fn setup(mut commands: Commands) {
 
     commands.trigger(Start { entity: server_entity });
 
-    info!("🚀 Dark Rift LOBBY relay server → ws://0.0.0.0:5005");
+    info!("🚀 Dark Rift LOBBY relay server → ws://0.0.0.0:25565");
 }
 
 // ─── Sistemas ───────────────────────────────────────────────────────────────

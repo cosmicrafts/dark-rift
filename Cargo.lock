@@ -2721,14 +2721,20 @@ dependencies = [
  "aeronet_io",
  "aeronet_websocket",
  "bevy",
+ "bevy_ecs",
  "bevy_enoki",
+ "bevy_state",
  "clap",
  "dark-rift-shared",
+ "getrandom 0.2.17",
+ "instant",
+ "js-sys",
  "lightyear",
  "rand 0.8.5",
  "ron 0.8.1",
  "serde",
  "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2749,6 +2755,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bincode 1.3.3",
+ "getrandom 0.2.17",
  "lightyear",
  "rand 0.8.5",
  "serde",
@@ -3957,6 +3964,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "instant"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0242819d153cba4b4b05a5a8f2a7e9bbf97b6055b2a002b395c96b5ff3c0222"
+dependencies = [
+ "cfg-if",
+ "js-sys",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

@@ -4,8 +4,12 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+# `std::time::Instant` panics on wasm32-unknown-unknown; this uses `performance.now()` in the browser.
+instant = { version = "0.1", features = ["wasm-bindgen"] }
 dark-rift-shared = { path = "../shared" }
-bevy = { version = "0.18", features = ["dynamic_linking"] }
+# Needed for `#[derive(Component)]` / `States` when `bevy` is target-gated (proc macros resolve direct crates).
+bevy_ecs = "0.18"
+bevy_state = "0.18"
 serde = { workspace = true }
 serde_json = "1.0.149"
 clap = { version = "4.6.0", features = ["derive"] }
@@ -15,4 +19,13 @@ aeronet_io = { workspace = true }
 aeronet_websocket = { workspace = true }
 ron = "0.8.1"
 bevy_enoki = "0.6.0"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+bevy = { version = "0.18", features = ["dynamic_linking"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+bevy = { version = "0.18" }
+getrandom = { version = "0.2", features = ["js"] }
+js-sys = "0.3"
+wasm-bindgen = "0.2"
 

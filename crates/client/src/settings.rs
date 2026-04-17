@@ -94,18 +94,33 @@ pub struct ClientSettings {
 
 /// Builds config from disk (or defaults). No Bevy required — safe to call before app.run().
 pub fn build_client_settings_config() -> ClientSettingsConfig {
-    let ron_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/settings.ron");
-    match std::fs::read_to_string(&ron_path) {
-        Ok(s) => match ron::from_str::<ClientSettingsConfig>(&s) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        const EMBEDDED_SETTINGS: &str = include_str!("../../../assets/settings.ron");
+        match ron::from_str::<ClientSettingsConfig>(EMBEDDED_SETTINGS) {
             Ok(c) => c,
             Err(e) => {
-                bevy::log::warn!("settings.ron parse error ({}): {}", ron_path.display(), e);
+                bevy::log::warn!("embedded settings.ron parse error: {e}; using defaults");
                 ClientSettingsConfig::default()
             }
-        },
-        Err(e) => {
-            bevy::log::warn!("Could not read {}: {}; using defaults", ron_path.display(), e);
-            ClientSettingsConfig::default()
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let ron_path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/settings.ron");
+        match std::fs::read_to_string(&ron_path) {
+            Ok(s) => match ron::from_str::<ClientSettingsConfig>(&s) {
+                Ok(c) => c,
+                Err(e) => {
+                    bevy::log::warn!("settings.ron parse error ({}): {}", ron_path.display(), e);
+                    ClientSettingsConfig::default()
+                }
+            },
+            Err(e) => {
+                bevy::log::warn!("Could not read {}: {}; using defaults", ron_path.display(), e);
+                ClientSettingsConfig::default()
+            }
         }
     }
 }

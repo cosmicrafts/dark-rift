@@ -1,7 +1,7 @@
 //! Dark Rift Client — Networked (Lightyear WebSocket + Netcode)
 //!
 //! Flow:
-//!   1. Spawn a Client entity: NetcodeClient + WebSocketClientIo → ws://127.0.0.1:5000
+//!   1. Spawn a Client entity: NetcodeClient + WebSocketClientIo → native `ws://…:25565`, WASM `wss://…/ws/`
 //!   2. Trigger Connect to start handshake
 //!   3. MessageReceiver<ServerStartMessage>: init local GameState, spawn tile grid
 //!   4. On player click: send ClientGameplayMessage via MessageSender
@@ -26,11 +26,14 @@ use lightyear::prelude::client::*;
 use lightyear::netcode::{NetcodeClient, Key};
 use lightyear::netcode::prelude::client::NetcodeConfig;
 use lightyear::netcode::auth::Authentication;
-use lightyear::websocket::client::{WebSocketClientIo, WebSocketScheme};
+use lightyear::websocket::client::WebSocketClientIo;
+#[cfg(not(target_arch = "wasm32"))]
+use lightyear::websocket::client::WebSocketScheme;
 use aeronet_io::connection::PeerAddr;
 use std::net::SocketAddr;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use clap::Parser;
+use instant::Instant;
 
 use dark_rift_shared::config;
 use dark_rift_shared::game::{GameState, GameEvent};
@@ -52,7 +55,36 @@ use ui_theme::*;
 use ui_lobby_browser::*;
 
 const TILE_SIZE: f32 = 8.0;
-const SERVER_ADDR: &str = "127.0.0.1:5005";
+
+/// Native client: plain WebSocket to this `SocketAddr` (see `WebSocketScheme::Plain`).
+#[cfg(not(target_arch = "wasm32"))]
+const NATIVE_NETCODE_SOCKET: &str = "127.0.0.1:25565";
+
+/// WASM: browser needs **WSS** through your TLS reverse proxy (Nginx).
+#[cfg(target_arch = "wasm32")]
+const WASM_MULTIPLAYER_WSS_URL: &str = "wss://darkrift.ai/ws/";
+
+/// WASM: netcode `ConnectToken` / `PeerAddr` must be a **numeric** `IPv4:port` string.
+/// `wasm32-unknown-unknown` cannot resolve hostnames at runtime; for production set this to your
+/// VPS public IP and the same TCP port Nginx forwards to the game server (often `25565`).
+#[cfg(target_arch = "wasm32")]
+const WASM_NETCODE_SOCKET: &str = "74.208.246.177:25565";
+
+#[inline]
+fn multiplayer_netcode_socket() -> SocketAddr {
+    #[cfg(target_arch = "wasm32")]
+    {
+        WASM_NETCODE_SOCKET
+            .parse()
+            .expect("WASM_NETCODE_SOCKET must be a numeric IPv4:port (DNS not available on wasm32-unknown-unknown)")
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        NATIVE_NETCODE_SOCKET
+            .parse()
+            .expect("NATIVE_NETCODE_SOCKET must be a valid SocketAddr string")
+    }
+}
 
 /// Perf overlay: refresh FPS readout at most ~4×/s (avoids jittery every-frame text).
 const PERF_OVERLAY_FPS_INTERVAL: Duration = Duration::from_millis(250);
@@ -716,7 +748,7 @@ fn setup_live(
         ));
     });
 
-    let server_addr: SocketAddr = SERVER_ADDR.parse().unwrap();
+    let server_addr: SocketAddr = multiplayer_netcode_socket();
     let client_id = rand_client_id();
 
     let mut netcode_cfg = NetcodeConfig::default();
@@ -732,14 +764,22 @@ fn setup_live(
         netcode_cfg,
     ).expect("Failed to build NetcodeClient");
 
+    #[cfg(target_arch = "wasm32")]
+    let ws_io = WebSocketClientIo::from_url(
+        aeronet_websocket::client::ClientConfig::default(),
+        WASM_MULTIPLAYER_WSS_URL,
+    );
+    #[cfg(not(target_arch = "wasm32"))]
+    let ws_io = WebSocketClientIo::from_addr(
+        aeronet_websocket::client::ClientConfig::default(),
+        WebSocketScheme::Plain,
+    );
+
     let client_entity = commands.spawn((
         Name::from("DarkRiftClient"),
         netcode,
         PeerAddr(server_addr),
-        WebSocketClientIo::from_addr(
-            aeronet_websocket::client::ClientConfig::default(),
-            WebSocketScheme::Plain,
-        ),
+        ws_io,
     )).id();
 
     commands.insert_resource(NetTiming {
@@ -750,7 +790,21 @@ fn setup_live(
     // Trigger Netcode connection (which internally initiates LinkStart)
     commands.trigger(lightyear::prelude::client::Connect { entity: client_entity });
 
-    info!("🔌 Connecting to ws://{}... (client_id={}), observer={}", SERVER_ADDR, client_id, cli.observer);
+    #[cfg(target_arch = "wasm32")]
+    info!(
+        "🔌 Connecting (WASM): transport {} | netcode token {:?} (client_id={}, observer={})",
+        WASM_MULTIPLAYER_WSS_URL,
+        server_addr,
+        client_id,
+        cli.observer
+    );
+    #[cfg(not(target_arch = "wasm32"))]
+    info!(
+        "🔌 Connecting to ws://{}... (client_id={}, observer={})",
+        NATIVE_NETCODE_SOCKET,
+        client_id,
+        cli.observer
+    );
 }
 
 fn handle_connection(
@@ -1021,7 +1075,7 @@ fn system_mock_single_player_start(
 ) {
     if let Some(m) = mock {
         commands.insert_resource(SinglePlayerState {
-            timer: Timer::from_seconds(0.1, TimerMode::Repeating),
+            timer: Timer::from_seconds(0.040, TimerMode::Repeating),
             current_turn: 0,
         });
         commands.insert_resource(LocalIntentBuffer::default());
@@ -2005,9 +2059,26 @@ fn openfront_tile_color(game: &GameState, cx: i32, cy: i32) -> TileData {
 }
 
 fn rand_client_id() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_nanos();
-    nanos as u64
+    #[cfg(target_arch = "wasm32")]
+    {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let millis = js_sys::Date::now() as u64;
+        millis
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(seq)
+            .wrapping_add(js_sys::Math::random().to_bits())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
+        nanos as u64
+    }
 }
 
 // -------------------------------------------------------------
@@ -2146,9 +2217,24 @@ fn system_sync_player_labels(
 
 // ─── Enoki Combat VFX ────────────────────────────────────────────────────────
 
-fn setup_combat_vfx(mut commands: Commands, asset_server: Res<AssetServer>) {
-    let effect = asset_server.load("enoki_impact.ron");
-    commands.insert_resource(CombatVfxCache(effect));
+/// Small burst used when an attack tile is hit — defined in Rust so WASM does not fetch `*.ron`.
+fn impact_particle_effect() -> Particle2dEffect {
+    Particle2dEffect {
+        spawn_rate: 80.0,
+        spawn_amount: 3,
+        emission_shape: EmissionShape::Circle(5.0),
+        lifetime: Rval::new(0.28, 0.06),
+        linear_speed: Some(Rval(90.0, 0.35)),
+        direction: Some(Rval(Vec2::Y, 1.0)),
+        scale: Some(Rval(3.0, 0.35)),
+        linear_damp: Some(Rval(3.5, 0.15)),
+        ..Default::default()
+    }
+}
+
+fn setup_combat_vfx(mut commands: Commands, mut effects: ResMut<Assets<Particle2dEffect>>) {
+    let handle = effects.add(impact_particle_effect());
+    commands.insert_resource(CombatVfxCache(handle));
 }
 
 fn system_spawn_attack_vfx(

@@ -27,6 +27,28 @@ To organically tie-break priorities without resorting to Floating Point Math (`f
 ### 🤖 OpenClaw Integration Test
 This repository is currently being orchestrated and optimized via OpenClaw AI. Automated deployments, config management, and stress-testing logic have been validated.
 
+## WASM local build (Fase 1)
+
+One-time toolchain:
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli
+```
+
+If `wasm-bindgen` fails with a version mismatch, install the CLI version it prints (for example `cargo install wasm-bindgen-cli --version 0.2.118` to match this workspace’s `wasm-bindgen` crate).
+
+From the `dark-rift/` directory:
+
+```bash
+./build_wasm_local.sh
+python3 -m http.server 8000 -d dist/
+```
+
+Open `http://localhost:8000/` to run the client in the browser.
+
+**Multiplayer from the browser:** the WASM client uses **`wss://darkrift.ai/ws/`** for the WebSocket transport (TLS in the browser). Netcode still embeds a numeric **`IP:25565`** in the connect token; on `wasm32-unknown-unknown` Rust cannot resolve hostnames, so before production deploy set `WASM_NETCODE_SOCKET` in `crates/client/src/main.rs` to your VPS public IPv4 (same port Nginx forwards to the game server).
+
 ## Deployment & Orchestration
 
 The `run_cluster.py` script has been supercharged to act as an all-in-one orchestrator for local development, cloud deployment, web (WASM) building, and stress testing.
@@ -37,7 +59,7 @@ The `run_cluster.py` script has been supercharged to act as an all-in-one orches
 ```bash
 ./run_cluster.py
 ```
-*Builds and runs 1 local server and 2 local clients connecting to it (127.0.0.1:5005).*
+*Builds and runs 1 local server and 2 local clients connecting to it (127.0.0.1:25565).*
 
 **2. Cloud Deploy (Server)**
 ```bash
@@ -53,6 +75,6 @@ The `run_cluster.py` script has been supercharged to act as an all-in-one orches
 
 **4. Stress Test**
 ```bash
-./run_cluster.py --stress 120 --server <VPS_IP:5005>
+./run_cluster.py --stress 120 --server <VPS_IP:25565>
 ```
 *Spawns 120 local instances of the client pointing to the given cloud server IP to test its limits.*
