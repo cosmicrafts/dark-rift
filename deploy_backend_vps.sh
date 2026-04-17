@@ -17,5 +17,8 @@ ssh ${VPS_USER}@${VPS_IP} "mkdir -p ${DEST_DIR}"
 echo "==> Sincronizando binario al VPS..."
 rsync -avzP target/x86_64-unknown-linux-musl/release/dark-rift-server ${VPS_USER}@${VPS_IP}:${DEST_DIR}/
 
-echo "==> ¡Listo! El backend está en el VPS."
-echo "Para probarlo, entra por SSH y corre: ${DEST_DIR}/dark-rift-server"
+echo "==> Reiniciando servicio en el VPS..."
+ssh ${VPS_USER}@${VPS_IP} "sudo systemctl restart darkrift-server"
+
+echo "==> ¡Listo! El backend está en el VPS y el servicio fue reiniciado."
+echo "Para ver los logs, entra por SSH y corre: journalctl -fu darkrift-server"
