@@ -263,10 +263,11 @@ pub fn system_bot_think(
     let config = config_opt.map(|c| c.clone()).unwrap_or_default();
     let expand_cost = config.expand_cost;
 
-    let (attack_interval, trigger_ratio, reserve_ratio) = match config.bot_difficulty {
-        crate::game_config::BotDifficulty::BrainDead => (90, 0.9, 0.8),
-        crate::game_config::BotDifficulty::Vanilla => (30, 0.6, 0.3),
-        crate::game_config::BotDifficulty::Terminator => (20, 0.4, 0.1),
+    // Adjusted for 60 ticks per second (OpenFront was 4 ticks per second. Multiply by 15x)
+    let (attack_interval_base, trigger_ratio, reserve_ratio) = match config.bot_difficulty {
+        crate::game_config::BotDifficulty::BrainDead => (1350, 0.9, 0.8), // 22.5s
+        crate::game_config::BotDifficulty::Vanilla => (600, 0.6, 0.3),    // 10.0s (matches OpenFront 40 ticks base)
+        crate::game_config::BotDifficulty::Terminator => (300, 0.4, 0.1), // 5.0s
     };
 
     for bot_id in bot_ids {
@@ -274,7 +275,13 @@ pub fn system_bot_think(
             continue;
         };
 
-        if game.tick % attack_interval != (bot_id as u64 % attack_interval) {
+        // Use a unique setup RNG for each bot that does not pollute the global PRNG
+        let mut bot_setup_rng = PseudoRandom::new(game.seed.wrapping_add(bot_id as u64).wrapping_add(1337));
+        // Bot interval varies between base and 2x base (e.g., Vanilla: 30 to 60)
+        let my_interval = bot_setup_rng.next_int(attack_interval_base as i32, (attack_interval_base as i32 * 2).max(1)) as u64;
+        let my_offset = bot_setup_rng.next_int(0, my_interval as i32) as u64;
+
+        if game.tick % my_interval != my_offset {
             continue;
         }
 
@@ -294,26 +301,31 @@ pub fn system_bot_think(
             continue;
         }
 
-        let r_idx = rng.next_int(0, borders.len() as i32) as usize;
-        let (bx, by) = borders[r_idx];
+        let mut has_neutral = false;
+        let mut player_targets = Vec::new();
 
-        let neighbors = game.map.neighbors(bx, by);
-        let mut targets = Vec::new();
-        for (nx, ny) in neighbors {
-            let owner = game.map.owner_id(nx, ny);
-            if owner != bot_id {
-                targets.push(owner);
-                if owner == 0 {
-                    targets.push(0);
-                    targets.push(0);
+        // Terra Nullius Pacifism: Scan entire perimeter for ANY empty land
+        for &(bx, by) in &borders {
+            for (nx, ny) in game.map.neighbors(bx, by) {
+                let owner = game.map.owner_id(nx, ny);
+                if owner != bot_id {
+                    if owner == 0 {
+                        has_neutral = true;
+                    } else {
+                        player_targets.push(owner);
+                    }
                 }
             }
         }
 
-        if targets.is_empty() {
-            continue;
-        }
-        let target_owner = targets[rng.next_int(0, targets.len() as i32) as usize];
+        let target_owner = if has_neutral {
+            0
+        } else {
+            if player_targets.is_empty() {
+                continue;
+            }
+            player_targets[rng.next_int(0, player_targets.len() as i32) as usize]
+        };
 
         let stamped = StampedIntent {
             player_id: bot_id,

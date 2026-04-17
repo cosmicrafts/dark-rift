@@ -2312,6 +2312,7 @@ fn system_cleanup_ingame_entities(
     mut pending: ResMut<PendingTicks>,
     mut highest: ResMut<HighestReceivedTurn>,
     mut outgoing_map: ResMut<OutgoingAttackRowMap>,
+    mut fresh_tiles: ResMut<FreshlyPaintedTiles>,
     q_ingame: Query<Entity, With<InGameEntity>>,
     q_execs: Query<Entity, With<AttackExecution>>,
 ) {
@@ -2320,6 +2321,7 @@ fn system_cleanup_ingame_entities(
     pending.0 = 0;
     highest.0 = None;
     outgoing_map.0.clear();
+    fresh_tiles.tiles.clear();
     
     for e in q_ingame.iter() {
         commands.entity(e).despawn();

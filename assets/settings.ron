@@ -1,13 +1,13 @@
 (
     visuals: (
-        enable_combat_particles: true,
-        enable_hdr_bloom: false,
-        enable_territory_expansion_animations: false,
+        enable_combat_particles: false,
+        enable_hdr_bloom: true,
+        enable_territory_expansion_animations: true,
         enable_floating_labels: true,
     ),
     ui: (
         font_path: "fonts/Rajdhani-Medium.ttf",
-        font_size: 12.0,
+        font_size: 16.0,
         label_offset_y: 14.0,
         label_size_ref_tiles: 64.0,
         label_max_scale: 5.0,
