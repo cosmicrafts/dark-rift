@@ -12,5 +12,8 @@
         label_size_ref_tiles: 64.0,
         label_max_scale: 5.0,
         attack_ratio: 0.5,
-    )
+    ),
+    profile: (
+        nickname: "perry54",
+    ),
 )

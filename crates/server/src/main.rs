@@ -171,10 +171,20 @@ fn system_master_lobby(
         let lobby_id = id_gen.0;
         id_gen.0 += 1;
         
-        let config = dark_rift_shared::game_config::GameConfig::default();
+        let mut config = dark_rift_shared::game_config::GameConfig::default();
+        
+        let maps = ["europe", "world"];
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        config.map_name = maps[rng.gen_range(0..maps.len())].to_string();
+
         let loaded = dark_rift_shared::map_loader::load_openfront_map(&config.map_name);
         let (map_cache, manifest_cache) = match loaded {
-            Some((map, manifest)) => (Some(map), Some(manifest)),
+            Some((map, manifest)) => {
+                config.map_width = manifest.map.width;
+                config.map_height = manifest.map.height;
+                (Some(map), Some(manifest))
+            },
             None => (None, None),
         };
 
@@ -210,8 +220,8 @@ fn system_master_lobby(
             if let Some(mut timer) = timer_opt {
                 timer.0.tick(time.delta());
                 
-                // Si el timer termina o se llena el lobby (150 max)
-                if timer.0.just_finished() || roster.0.len() >= 150 {
+                // Si el timer termina o se llena el lobby (550 max)
+                if timer.0.just_finished() || roster.0.len() >= 550 {
                     phase.0 = LobbyPhase::Active;
                     commands.entity(entity).remove::<CountdownTimer>();
                     commands.entity(entity).insert(ActiveEmptyTimer(Timer::from_seconds(30.0, TimerMode::Once)));
@@ -308,8 +318,8 @@ fn system_broadcast_lobbies(
         
         infos.push(LobbyInfo {
             id: lobby.id,
-            num_players: roster.0.len() as u8,
-            max_players: meta.config.max_players as u8,
+            num_players: roster.0.len() as u32,
+            max_players: meta.config.max_players,
             is_counting_down: phase.0 == LobbyPhase::CountingDown,
             timer_secs,
             player_names,
@@ -366,6 +376,14 @@ fn handle_client_joins(
                     }
                 }
             }
+            if target_lobby.is_none() {
+                for (entity, _lobby, phase, _roster, _, _) in q_lobbies.iter() {
+                    if phase.0 == LobbyPhase::Active {
+                        target_lobby = Some(entity);
+                        break;
+                    }
+                }
+            }
             
             let Some(match_entity) = target_lobby else {
                 warn!("No lobby available to join!");
@@ -386,15 +404,7 @@ fn handle_client_joins(
                 let color = colors[(player_id as usize - 1) % colors.len()];
                 let (sx, sy, nation_opt) = pick_spawn(&roster, player_id, metadata);
 
-                let final_name = if let Some(nation_name) = nation_opt {
-                    if msg.name.starts_with("Bot") {
-                        nation_name
-                    } else {
-                        format!("{} ({})", msg.name, nation_name)
-                    }
-                } else {
-                    msg.name.clone()
-                };
+                let final_name = msg.name.clone();
 
                 roster.0.push(PlayerInfo { id: player_id, name: final_name.clone(), player_type: dark_rift_shared::player::PlayerType::Human, color, spawn_x: sx, spawn_y: sy });
                 info!("✅ {} (id={}) se unió al Match ID {:?} → spawn({},{})", final_name, player_id, lobby.id, sx, sy);

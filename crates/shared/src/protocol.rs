@@ -48,8 +48,8 @@ pub struct ClientJoinMessage {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct LobbyInfo {
     pub id: u64,
-    pub num_players: u8,
-    pub max_players: u8,
+    pub num_players: u32,
+    pub max_players: u32,
     pub is_counting_down: bool,
     pub timer_secs: f32,
     pub player_names: Vec<String>,

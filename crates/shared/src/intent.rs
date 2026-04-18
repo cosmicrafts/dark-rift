@@ -272,7 +272,7 @@ pub fn system_bot_think(
     };
 
     for bot_id in bot_ids {
-        let Some(player) = game.player(bot_id) else {
+        let Some(_player) = game.player(bot_id) else {
             continue;
         };
 

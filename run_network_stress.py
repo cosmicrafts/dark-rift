@@ -114,7 +114,7 @@ def main():
         time.sleep(2)
 
         bot_profiles = ["agresivo", "suicida", "tortuga"]
-        num_bots = 2
+        num_bots = 120
         
         print(f"🤖 Launching {num_bots} Network Bots concurrently...")
         for i in range(num_bots):

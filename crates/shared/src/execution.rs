@@ -86,7 +86,7 @@ pub fn system_player_income(game_opt: Option<ResMut<GameState>>) {
         return;
     }
 
-    let GameState { map, players, .. } = &mut *game;
+    let GameState { map: _, players, .. } = &mut *game;
 
     for player in players.iter_mut().filter(|p| p.alive) {
         let tiles_owned = player.tile_count;

@@ -14,13 +14,13 @@ use bevy::app::AppExit;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::text::FontWeight;
 use bevy::ui::RelativeCursorPosition;
-use bevy::mesh::prelude::{Mesh2d, Meshable};
-use bevy::sprite_render::{ColorMaterial, MeshMaterial2d, TileData, TilemapChunk, TilemapChunkTileData};
+use bevy::sprite::Sprite;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
+use bevy::asset::RenderAssetUsages;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::post_process::bloom::{Bloom, BloomCompositeMode};
 use bevy_enoki::prelude::*;
 use std::collections::{HashMap, HashSet};
-use bevy::image::{ImageArrayLayout, ImageLoaderSettings};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use lightyear::prelude::*;
 use lightyear::prelude::client::*;
@@ -38,7 +38,7 @@ use instant::Instant;
 
 use dark_rift_shared::config;
 use dark_rift_shared::game::{GameState, GameEvent};
-use dark_rift_shared::player::{bot_territory_color, Player};
+use dark_rift_shared::player::Player;
 use dark_rift_shared::execution::{
     system_attack_execution, system_player_income, system_game_tick, AttackExecution,
 };
@@ -51,6 +51,7 @@ mod ui_layers;
 mod ui_shell;
 mod ui_theme;
 mod ui_lobby_browser;
+mod ui_leaderboard;
 use settings::*;
 use ui_layers::GAME_OVER;
 use ui_shell::*;
@@ -58,8 +59,6 @@ use ui_theme::*;
 use ui_lobby_browser::*;
 
 const TILE_SIZE: f32 = 8.0;
-const CHUNK_SIZE: u32 = 64;
-
 /// Native client: plain WebSocket to this `SocketAddr` (see `WebSocketScheme::Plain`).
 #[cfg(not(target_arch = "wasm32"))]
 const NATIVE_NETCODE_SOCKET: &str = "127.0.0.1:25565";
@@ -145,6 +144,9 @@ struct ExitButton;
 #[derive(Component)]
 struct HudText;
 
+#[derive(Component)]
+struct FpsText;
+
 #[derive(Resource)]
 struct OverlayDiagnostics {
     status_line: String,
@@ -208,36 +210,8 @@ struct FreshlyPaintedTiles {
     tiles: HashMap<(u32, u32), f32>,
 }
 
-/// Identifies which spatial chunk a TilemapChunk entity corresponds to.
-#[derive(Component)]
-struct ChunkIndex {
-    /// Chunk column (0-based)
-    cx: u32,
-    /// Chunk row (0-based)
-    cy: u32,
-    /// Width of this chunk in tiles (last column may be shorter)
-    w: u32,
-    /// Height of this chunk in tiles (last row may be shorter)
-    h: u32,
-}
-
-/// Lookup resource: given a world tile (x,y), find the Entity of the chunk that owns it.
-#[derive(Resource, Default)]
-struct ChunkLookup {
-    /// Number of chunk columns
-    cols: u32,
-    /// Vec indexed by (chunk_cy * cols + chunk_cx)
-    entities: Vec<Entity>,
-}
-
-impl ChunkLookup {
-    fn entity_for_tile(&self, x: u32, y: u32) -> Option<Entity> {
-        let cx = x / CHUNK_SIZE;
-        let cy = y / CHUNK_SIZE;
-        let idx = (cy * self.cols + cx) as usize;
-        self.entities.get(idx).copied()
-    }
-}
+#[derive(Resource)]
+struct MapImageHandle(Handle<Image>);
 
 /// Troop fraction committed on each attack click (OpenFront `uiState.attackRatio` + ControlPanel slider 1–100%).
 #[derive(Resource)]
@@ -400,6 +374,7 @@ fn main() {
             primary_window: Some(Window {
                 title: "Dark Rift — Multiplayer".to_string(),
                 resolution: (1280u32, 720u32).into(),
+                fit_canvas_to_parent: true,
                 ..default()
             }),
             ..default()
@@ -486,13 +461,19 @@ fn main() {
             )
             .add_systems(OnEnter(AppState::LobbyBrowser), setup_lobby_browser.run_if(|cli: Res<Cli>| !cli.bot))
             .add_systems(OnExit(AppState::LobbyBrowser), system_cleanup_lobby_browser.run_if(|cli: Res<Cli>| !cli.bot))
+            .add_systems(OnEnter(AppState::InGame), ui_leaderboard::setup_leaderboard.run_if(|cli: Res<Cli>| !cli.bot))
             .add_systems(OnExit(AppState::InGame), system_cleanup_ingame_entities.run_if(|cli: Res<Cli>| !cli.bot))
             .add_systems(Update, (
                 system_update_lobby_browser,
                 system_handle_join_clicks,
                 system_handle_cancel_join,
-                ui_lobby_browser::system_sync_single_player_button_visibility,
+                ui_lobby_browser::system_handle_coming_soon_click,
+                ui_lobby_browser::system_clear_lobby_nickname_focus,
                 ui_lobby_browser::system_handle_single_player_click,
+                ui_lobby_browser::system_nickname_field_focus_from_click,
+                ui_lobby_browser::system_nickname_keyboard_when_focused
+                    .run_if(|f: Res<LobbyNicknameFocused>| f.0),
+                ui_lobby_browser::system_nickname_autosave_tick,
             ).run_if(|state: Res<State<AppState>>, cli: Res<Cli>| *state.get() == AppState::LobbyBrowser && !cli.bot))
             .add_systems(Update, (
                 handle_server_start,
@@ -527,6 +508,7 @@ fn main() {
             system_sync_bottom_combat_hud,
             system_sync_outgoing_attack_rows,
             system_handle_cancel_click,
+            ui_leaderboard::system_update_leaderboard,
         ).run_if(in_state(AppState::InGame)))
         .add_systems(
             Update,
@@ -708,7 +690,7 @@ fn setup_offline(
     mut commands: Commands,
     mut ready: ResMut<GameReady>,
     director: NonSend<ReplayDirector>,
-    asset_server: Res<AssetServer>,
+    mut images: ResMut<Assets<Image>>,
     settings: Res<ClientSettings>,
     mut overlay: ResMut<OverlayDiagnostics>,
     shell: Res<HudShellRegions>,
@@ -741,24 +723,24 @@ fn setup_offline(
                 width: Val::Auto,
                 min_width: Val::Px(200.0),
                 max_width: Val::Percent(72.0),
-                padding: UiRect::all(Val::Px(8.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(8.0)),
+                padding: UiRect::all(Val::Px(12.0)),
+                border: UiRect::all(Val::Px(2.0)),
+                border_radius: BorderRadius::all(Val::Px(12.0)),
                 ..default()
             },
-            BackgroundColor(panel_bg()),
+            BackgroundColor(Color::srgba(0.05, 0.08, 0.1, 0.85)),
             BorderColor::all(panel_border()),
         ))
         .with_children(|p| {
             p.spawn((
                 HudText,
-                Text::new("Replay Mode\nTick: 0\nFPS: …\nPing: offline"),
+                Text::new("Replay Mode\nTick: 0\nPing: offline"),
                 TextFont {
                     font: settings.font.clone(),
-                    font_size: 13.0,
+                    font_size: 15.0,
                     ..default()
                 },
-                TextColor(text_secondary()),
+                TextColor(Color::srgba(0.8, 0.8, 0.8, 1.0)),
             ));
         });
 
@@ -767,29 +749,61 @@ fn setup_offline(
             ChildOf(shell.top_bar),
             Node {
                 align_self: AlignSelf::FlexStart,
-                width: Val::Px(100.0),
-                height: Val::Px(60.0),
-                justify_content: JustifyContent::Center,
+                flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
-                border: UiRect::all(Val::Px(4.0)),
-                border_radius: BorderRadius::all(Val::Px(12.0)),
+                column_gap: Val::Px(12.0),
                 ..default()
             },
-            Button,
-            ExitButton,
-            BackgroundColor(accent_danger()),
-            BorderColor::all(accent_danger_border()),
         ))
-        .with_children(|b| {
-            b.spawn((
-                Text::new("EXIT"),
-                TextFont {
-                    font: settings.font.clone(),
-                    font_size: 22.0,
+        .with_children(|right_group| {
+            // FPS Pill
+            right_group.spawn((
+                Node {
+                    padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                    border_radius: BorderRadius::all(Val::Px(8.0)),
                     ..default()
                 },
-                TextColor(Color::WHITE),
-            ));
+                BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.8)),
+            )).with_children(|fps_pill| {
+                fps_pill.spawn((
+                    FpsText,
+                    Text::new("… FPS"),
+                    TextFont {
+                        font: settings.font.clone(),
+                        font_size: 16.0,
+                        ..default()
+                    },
+                    TextColor(Color::srgba(0.4, 0.9, 0.4, 1.0)),
+                ));
+            });
+
+            // EXIT Button
+            right_group.spawn((
+                Button,
+                ExitButton,
+                Node {
+                    width: Val::Px(120.0),
+                    height: Val::Px(48.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border: UiRect::all(Val::Px(2.0)),
+                    border_radius: BorderRadius::all(Val::Px(12.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.8, 0.2, 0.2, 1.0)),
+                BorderColor::all(Color::srgba(1.0, 0.3, 0.3, 1.0)),
+            ))
+            .with_children(|b| {
+                b.spawn((
+                    Text::new("EXIT"),
+                    TextFont {
+                        font: settings.font.clone(),
+                        font_size: 20.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+            });
         });
 
     let mut game = GameState::new(director.record.seed, director.record.config.map_width, director.record.config.map_height);
@@ -798,15 +812,8 @@ fn setup_offline(
         game.spawn_player(player, info.spawn_x, info.spawn_y);
     }
 
-    let tileset = asset_server.load_with_settings(
-        "white_array.png",
-        |settings: &mut ImageLoaderSettings| {
-            settings.array_layout = Some(ImageArrayLayout::RowCount { rows: 2 });
-        },
-    );
-
-    let lookup = spawn_chunked_tilemap(&mut commands, &game, &tileset, false);
-    commands.insert_resource(lookup);
+    let handle = spawn_single_texture_tilemap(&mut commands, &game, &mut images, false);
+    commands.insert_resource(MapImageHandle(handle));
 
     commands.insert_resource(game);
     ready.0 = true;
@@ -844,24 +851,24 @@ fn setup_live(
                 width: Val::Auto,
                 min_width: Val::Px(200.0),
                 max_width: Val::Percent(72.0),
-                padding: UiRect::all(Val::Px(8.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(8.0)),
+                padding: UiRect::all(Val::Px(12.0)),
+                border: UiRect::all(Val::Px(2.0)),
+                border_radius: BorderRadius::all(Val::Px(12.0)),
                 ..default()
             },
-            BackgroundColor(panel_bg()),
+            BackgroundColor(Color::srgba(0.05, 0.08, 0.1, 0.85)),
             BorderColor::all(panel_border()),
         ))
         .with_children(|p| {
             p.spawn((
                 HudText,
-                Text::new("Connecting to server...\nTick: 0\nFPS: …\nPing: connecting…"),
+                Text::new("Connecting to server...\nTick: 0\nPing: connecting…"),
                 TextFont {
                     font: settings.font.clone(),
-                    font_size: 13.0,
+                    font_size: 15.0,
                     ..default()
                 },
-                TextColor(text_secondary()),
+                TextColor(Color::srgba(0.8, 0.8, 0.8, 1.0)),
             ));
         });
 
@@ -870,54 +877,86 @@ fn setup_live(
             ChildOf(shell.top_bar),
             Node {
                 align_self: AlignSelf::FlexStart,
-                width: Val::Px(100.0),
-                height: Val::Px(60.0),
-                justify_content: JustifyContent::Center,
+                flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
-                border: UiRect::all(Val::Px(4.0)),
-                border_radius: BorderRadius::all(Val::Px(12.0)),
+                column_gap: Val::Px(12.0),
                 ..default()
             },
-            Button,
-            ExitButton,
-            BackgroundColor(accent_danger()),
-            BorderColor::all(accent_danger_border()),
         ))
-        .with_children(|b| {
-            b.spawn((
-                Text::new("EXIT"),
-                TextFont {
-                    font: settings.font.clone(),
-                    font_size: 22.0,
+        .with_children(|right_group| {
+            // FPS Pill
+            right_group.spawn((
+                Node {
+                    padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                    border_radius: BorderRadius::all(Val::Px(8.0)),
                     ..default()
                 },
-                TextColor(Color::WHITE),
-            ));
+                BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.8)),
+            )).with_children(|fps_pill| {
+                fps_pill.spawn((
+                    FpsText,
+                    Text::new("… FPS"),
+                    TextFont {
+                        font: settings.font.clone(),
+                        font_size: 16.0,
+                        ..default()
+                    },
+                    TextColor(Color::srgba(0.4, 0.9, 0.4, 1.0)), // Bright green FPS
+                ));
+            });
+
+            // EXIT Button
+            right_group.spawn((
+                Button,
+                ExitButton,
+                Node {
+                    width: Val::Px(120.0),
+                    height: Val::Px(48.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border: UiRect::all(Val::Px(2.0)),
+                    border_radius: BorderRadius::all(Val::Px(12.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.8, 0.2, 0.2, 1.0)),
+                BorderColor::all(Color::srgba(1.0, 0.3, 0.3, 1.0)),
+            ))
+            .with_children(|b| {
+                b.spawn((
+                    Text::new("EXIT"),
+                    TextFont {
+                        font: settings.font.clone(),
+                        font_size: 20.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+            });
         });
 
     // Home Button (gameplay dock)
     commands.spawn((
         ChildOf(shell.action_dock),
         Node {
-            width: Val::Px(100.0),
-            height: Val::Px(60.0),
+            width: Val::Px(120.0),
+            height: Val::Px(48.0),
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
-            border: UiRect::all(Val::Px(4.0)),
+            border: UiRect::all(Val::Px(2.0)),
             border_radius: BorderRadius::all(Val::Px(12.0)),
             ..default()
         },
         Button,
         HomeButton,
         BackgroundColor(accent_home()),
-        BorderColor::all(Color::WHITE),
+        BorderColor::all(Color::srgba(0.8, 0.8, 1.0, 1.0)),
     ))
     .with_children(|b| {
         b.spawn((
             Text::new("HOME"),
             TextFont {
                 font: settings.font.clone(),
-                font_size: 24.0,
+                font_size: 20.0,
                 ..default()
             },
             TextColor(Color::WHITE),
@@ -986,7 +1025,7 @@ fn setup_network(mut commands: Commands, cli: Res<Cli>) {
 }
 
 fn handle_connection(
-    mut client_q: Query<&mut MessageSender<ClientJoinMessage>, Added<lightyear::prelude::client::Client>>,
+    mut client_q: Query<&mut MessageSender<ClientJoinMessage>, Added<lightyear::prelude::client::Connected>>,
     cli: Res<Cli>,
 ) {
     for mut sender in client_q.iter_mut() {
@@ -1099,68 +1138,74 @@ fn spawn_bottom_combat_hud(commands: &mut Commands, shell: &HudShellRegions, obs
                 width: Val::Percent(100.0),
                 align_items: AlignItems::Center,
                 flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(6.0),
+                row_gap: Val::Px(12.0),
+                padding: UiRect::bottom(Val::Px(16.0)),
                 ..default()
             },
         ))
         .with_children(|root| {
             root.spawn((
                 Node {
-                    width: Val::Percent(92.0),
-                    min_width: Val::Px(220.0),
-                    max_width: Val::Px(620.0),
-                    padding: UiRect::all(Val::Px(8.0)),
+                    width: Val::Percent(96.0),
+                    min_width: Val::Px(280.0),
+                    max_width: Val::Px(800.0),
+                    padding: UiRect::all(Val::Px(16.0)),
                     flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(4.0),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(8.0)),
+                    row_gap: Val::Px(8.0),
+                    border: UiRect::all(Val::Px(2.0)),
+                    border_radius: BorderRadius::all(Val::Px(12.0)),
                     ..default()
                 },
-                BackgroundColor(panel_bg()),
+                BackgroundColor(Color::srgba(0.05, 0.08, 0.1, 0.9)),
                 BorderColor::all(panel_border()),
                 AttackSummaryText,
                 Text::new(""),
                 TextFont {
-                    font_size: 12.0,
+                    font_size: 16.0,
                     ..default()
                 },
-                TextColor(text_primary()),
+                TextColor(Color::srgba(0.9, 0.9, 0.9, 1.0)),
             ));
 
             root.spawn((
                 OutgoingRowsContainer,
                 Node {
-                    width: Val::Percent(92.0),
-                    min_width: Val::Px(220.0),
-                    max_width: Val::Px(620.0),
+                    width: Val::Percent(96.0),
+                    min_width: Val::Px(280.0),
+                    max_width: Val::Px(800.0),
                     flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(4.0),
-                    max_height: Val::Px(220.0),
+                    row_gap: Val::Px(8.0),
+                    max_height: Val::Px(280.0),
                     overflow: Overflow::scroll_y(),
                     ..default()
                 },
             ));
 
-            root.spawn(Node {
-                width: Val::Percent(92.0),
-                max_width: Val::Px(620.0),
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(10.0),
-                flex_wrap: FlexWrap::Wrap,
-                ..default()
-            })
+            root.spawn((
+                Node {
+                    width: Val::Percent(96.0),
+                    max_width: Val::Px(800.0),
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(16.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    padding: UiRect::all(Val::Px(12.0)),
+                    border_radius: BorderRadius::all(Val::Px(12.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.1, 0.1, 0.15, 0.85)),
+            ))
             .with_children(|row| {
                 row.spawn((
                     AttackRatioReadout,
                     Text::new(""),
                     TextFont {
-                        font_size: 13.0,
+                        font_size: 18.0,
                         ..default()
                     },
                     TextColor(Color::WHITE),
                     Node {
-                        width: Val::Px(158.0),
+                        width: Val::Px(180.0),
                         ..default()
                     },
                 ));
@@ -1171,7 +1216,7 @@ fn spawn_bottom_combat_hud(commands: &mut Commands, shell: &HudShellRegions, obs
                     RelativeCursorPosition::default(),
                     Node {
                         flex_grow: 1.0,
-                        height: Val::Px(12.0),
+                        height: Val::Px(32.0),
                         align_items: AlignItems::Center,
                         justify_content: JustifyContent::Stretch,
                         ..default()
@@ -1182,10 +1227,10 @@ fn spawn_bottom_combat_hud(commands: &mut Commands, shell: &HudShellRegions, obs
                         .spawn((
                             Node {
                                 width: Val::Percent(100.0),
-                                height: Val::Px(8.0),
+                                height: Val::Px(16.0),
                                 flex_direction: FlexDirection::Row,
                                 overflow: Overflow::clip(),
-                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                border_radius: BorderRadius::all(Val::Px(8.0)),
                                 ..default()
                             },
                         ))
@@ -1197,7 +1242,7 @@ fn spawn_bottom_combat_hud(commands: &mut Commands, shell: &HudShellRegions, obs
                                     height: Val::Percent(100.0),
                                     ..default()
                                 },
-                                BackgroundColor(accent_primary()),
+                                BackgroundColor(Color::srgba(0.2, 0.8, 0.2, 1.0)),
                             ));
                             bar.spawn((
                                 Node {
@@ -1205,7 +1250,7 @@ fn spawn_bottom_combat_hud(commands: &mut Commands, shell: &HudShellRegions, obs
                                     height: Val::Percent(100.0),
                                     ..default()
                                 },
-                                BackgroundColor(Color::srgb(0.11, 0.11, 0.13)),
+                                BackgroundColor(Color::srgb(0.2, 0.2, 0.25)),
                             ));
                         });
                 });
@@ -1227,14 +1272,14 @@ fn handle_server_start(
     mut net:       ResMut<NetTiming>,
     mut overlay:   Option<ResMut<OverlayDiagnostics>>,
     shell:         Option<Res<HudShellRegions>>,
-    asset_server:  Option<Res<AssetServer>>,
+    mut images:    ResMut<Assets<Image>>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
     for mut receiver in receivers.iter_mut() {
         for msg in receiver.receive() {
             start_game_core(
                 msg, &mut ready, &mut my_id, &mut cam_q, &mut commands,
-                &mut queue, &mut pending, &mut highest, &mut overlay, &shell, &asset_server, &mut next_state
+                &mut queue, &mut pending, &mut highest, &mut overlay, &shell, &mut images, &mut next_state
             );
             if net.handshake_ms.is_none() {
                 if let Some(t0) = net.connect_started.take() {
@@ -1256,7 +1301,7 @@ fn system_mock_single_player_start(
     mut highest:   ResMut<HighestReceivedTurn>,
     mut overlay:   Option<ResMut<OverlayDiagnostics>>,
     shell:         Option<Res<HudShellRegions>>,
-    asset_server:  Option<Res<AssetServer>>,
+    mut images:    ResMut<Assets<Image>>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
     if let Some(m) = mock {
@@ -1267,7 +1312,7 @@ fn system_mock_single_player_start(
         commands.insert_resource(LocalIntentBuffer::default());
         start_game_core(
             m.0.clone(), &mut ready, &mut my_id, &mut cam_q, &mut commands,
-            &mut queue, &mut pending, &mut highest, &mut overlay, &shell, &asset_server, &mut next_state
+            &mut queue, &mut pending, &mut highest, &mut overlay, &shell, &mut images, &mut next_state
         );
         commands.remove_resource::<MockSinglePlayerStart>();
     }
@@ -1308,7 +1353,7 @@ fn start_game_core(
     highest:       &mut ResMut<HighestReceivedTurn>,
     overlay:       &mut Option<ResMut<OverlayDiagnostics>>,
     shell:         &Option<Res<HudShellRegions>>,
-    asset_server:  &Option<Res<AssetServer>>,
+    images:        &mut ResMut<Assets<Image>>,
     next_state:    &mut ResMut<NextState<AppState>>,
 ) {
             if ready.0 { return; }
@@ -1355,24 +1400,15 @@ fn start_game_core(
             if my_id.0 != 0 {
                 if let Some(me) = msg.players.iter().find(|p| p.id == my_id.0) {
                     cx = me.spawn_x as f32 * TILE_SIZE;
-                    cy = me.spawn_y as f32 * TILE_SIZE;
+                    cy = (game.map.height as f32 - me.spawn_y as f32) * TILE_SIZE;
                 }
             }
 
             if let Ok(mut cam) = cam_q.single_mut() {
                 cam.translation = Vec3::new(cx, cy, 999.0);
             }
-            if let Some(assets) = asset_server {
-                let tileset = assets.load_with_settings(
-                    "white_array.png",
-                    |settings: &mut ImageLoaderSettings| {
-                        settings.array_layout = Some(ImageArrayLayout::RowCount { rows: 2 });
-                    },
-                );
-
-                let lookup = spawn_chunked_tilemap(commands, &game, &tileset, true);
-                commands.insert_resource(lookup);
-            }
+            let handle = spawn_single_texture_tilemap(commands, &game, images, true);
+            commands.insert_resource(MapImageHandle(handle));
 
             commands.insert_resource(game);
             ready.0 = true;
@@ -1476,7 +1512,7 @@ fn hover_system(
     let Ok(world) = camera.viewport_to_world_2d(cam_t, cursor) else { return };
 
     let gx = (world.x / TILE_SIZE).round() as i32;
-    let gy = (world.y / TILE_SIZE).round() as i32;
+    let gy = (game.map.height as f32 - (world.y / TILE_SIZE)).round() as i32;
     if game.map.is_valid_coord(gx, gy) {
         hovered.0 = Some((gx as u32, gy as u32));
     }
@@ -1528,7 +1564,7 @@ fn player_click(
     }
 
     let wx = (x as f32 + 0.5) * TILE_SIZE;
-    let wy = (y as f32 + 0.5) * TILE_SIZE;
+    let wy = (game.map.height as f32 - y as f32 - 0.5) * TILE_SIZE;
     let [r, g, b] = player.color;
     let mat = materials.add(ColorMaterial::from_color(Color::srgba(r, g, b, 0.97)));
     let label = format!("{:.0}", send);
@@ -1706,21 +1742,23 @@ fn system_home_button(
 const MAX_FRESH_TILES: usize = 512;
 
 fn handle_tile_change(
-    game_opt:    Option<ResMut<GameState>>,
+    game_opt: Option<ResMut<GameState>>,
     mut fresh_tiles: ResMut<FreshlyPaintedTiles>,
-    chunk_lookup: Option<Res<ChunkLookup>>,
-    mut chunks:  Query<(&ChunkIndex, &mut TilemapChunkTileData)>,
+    map_handle: Option<Res<MapImageHandle>>,
+    mut images: ResMut<Assets<Image>>,
     settings: Res<ClientSettings>,
 ) {
     let Some(mut game) = game_opt else { return };
     if !game.is_changed() { return; }
-    let Some(lookup) = chunk_lookup else { return; };
+    let Some(map_handle) = map_handle else { return; };
+    let Some(image) = images.get_mut(&map_handle.0) else { return; };
 
     let animations_on = settings.config.visuals.territory_expansion_animations_enabled();
+    let map_w = game.map.width;
+    let map_h = game.map.height;
 
     for ev in &game.events {
         if let GameEvent::TileCaptured { x, y, new_owner: _ } = ev {
-            // Only track fresh tiles when animations are enabled and under the cap
             if animations_on && fresh_tiles.tiles.len() < MAX_FRESH_TILES {
                 fresh_tiles.tiles.insert((*x, *y), 1.0);
             }
@@ -1736,16 +1774,11 @@ fn handle_tile_change(
                 if !game.map.is_valid_coord(wx, wy) { continue; }
                 let ux = wx as u32;
                 let uy = wy as u32;
-                let Some(chunk_entity) = lookup.entity_for_tile(ux, uy) else { continue; };
-                let Ok((ci, mut chunk_data)) = chunks.get_mut(chunk_entity) else { continue; };
-
-                let lx = ux - ci.cx * CHUNK_SIZE;
-                let ly = uy - ci.cy * CHUNK_SIZE;
-                let idx = (ly * ci.w + lx) as usize;
-                let mut t_data = openfront_tile_color(&game, wx, wy);
-
+                
+                let mut color = openfront_tile_color(&game, wx, wy);
+                
                 if let Some(&val) = fresh_tiles.tiles.get(&(ux, uy)) {
-                    let srgba = t_data.color.to_srgba();
+                    let srgba = color.to_srgba();
                     let t = val.clamp(0.0, 1.0);
                     let eased = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t);
                     let boost = 1.0 + 4.0 * eased;
@@ -1759,7 +1792,7 @@ fn handle_tile_change(
                         });
 
                     let white_flash = if is_border { 2.5 * eased } else { 0.0 };
-                    t_data.color = Color::srgba(
+                    color = Color::srgba(
                         srgba.red * boost + white_flash,
                         srgba.green * boost + white_flash,
                         srgba.blue * boost + white_flash,
@@ -1767,7 +1800,17 @@ fn handle_tile_change(
                     );
                 }
 
-                chunk_data[idx] = Some(t_data);
+                let flipped_uy = map_h as u32 - 1 - uy;
+                let idx = ((flipped_uy * map_w as u32 + ux) * 4) as usize;
+                if let Some(data) = &mut image.data {
+                    if idx + 3 < data.len() {
+                        let srgba = color.to_srgba();
+                        data[idx] = (srgba.red * 255.0).clamp(0.0, 255.0) as u8;
+                        data[idx + 1] = (srgba.green * 255.0).clamp(0.0, 255.0) as u8;
+                        data[idx + 2] = (srgba.blue * 255.0).clamp(0.0, 255.0) as u8;
+                        data[idx + 3] = (srgba.alpha * 255.0).clamp(0.0, 255.0) as u8;
+                    }
+                }
             }
         }
     }
@@ -1781,8 +1824,8 @@ fn system_animate_tile_colors(
     time: Res<Time>,
     game_opt: Option<Res<GameState>>,
     mut fresh_tiles: ResMut<FreshlyPaintedTiles>,
-    chunk_lookup: Option<Res<ChunkLookup>>,
-    mut chunks: Query<(&ChunkIndex, &mut TilemapChunkTileData)>,
+    map_handle: Option<Res<MapImageHandle>>,
+    mut images: ResMut<Assets<Image>>,
     settings: Res<ClientSettings>,
 ) {
     if !settings.config.visuals.territory_expansion_animations_enabled() {
@@ -1791,7 +1834,8 @@ fn system_animate_tile_colors(
     }
     if fresh_tiles.tiles.is_empty() { return; }
     let Some(game) = game_opt else { return };
-    let Some(lookup) = chunk_lookup else { return; };
+    let Some(map_handle) = map_handle else { return; };
+    let Some(image) = images.get_mut(&map_handle.0) else { return; };
     
     let dt = time.delta_secs();
     let lerp_speed = 0.85;
@@ -1805,15 +1849,14 @@ fn system_animate_tile_colors(
         }
     }
     
+    let map_w = game.map.width;
+    let map_h = game.map.height;
     for (&(x, y), val) in fresh_tiles.tiles.iter() {
-        let Some(chunk_entity) = lookup.entity_for_tile(x, y) else { continue; };
-        let Ok((ci, mut chunk_data)) = chunks.get_mut(chunk_entity) else { continue; };
-
         let wx = x as i32;
         let wy = y as i32;
-        let mut t_data = openfront_tile_color(&game, wx, wy);
+        let mut color = openfront_tile_color(&game, wx, wy);
         
-        let srgba = t_data.color.to_srgba();
+        let srgba = color.to_srgba();
         let t = val.clamp(0.0, 1.0);
         let eased = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t);
         let boost = 1.0 + 4.0 * eased;
@@ -1827,17 +1870,23 @@ fn system_animate_tile_colors(
             });
 
         let white_flash = if is_border { 2.5 * eased } else { 0.0 };
-        t_data.color = Color::srgba(
+        color = Color::srgba(
             srgba.red * boost + white_flash,
             srgba.green * boost + white_flash,
             srgba.blue * boost + white_flash,
             srgba.alpha
         );
 
-        let lx = x - ci.cx * CHUNK_SIZE;
-        let ly = y - ci.cy * CHUNK_SIZE;
-        let idx = (ly * ci.w + lx) as usize;
-        chunk_data[idx] = Some(t_data);
+        let idx = ((y * map_w as u32 + x) * 4) as usize;
+        if let Some(data) = &mut image.data {
+            if idx + 3 < data.len() {
+                let s = color.to_srgba();
+                data[idx] = (s.red * 255.0).clamp(0.0, 255.0) as u8;
+                data[idx + 1] = (s.green * 255.0).clamp(0.0, 255.0) as u8;
+                data[idx + 2] = (s.blue * 255.0).clamp(0.0, 255.0) as u8;
+                data[idx + 3] = (s.alpha * 255.0).clamp(0.0, 255.0) as u8;
+            }
+        }
     }
     
     for key in finished {
@@ -1848,18 +1897,23 @@ fn system_animate_tile_colors(
 fn update_hud(
     game_opt:  Option<Res<GameState>>,
     overlay: Res<OverlayDiagnostics>,
-    mut hud_q: Query<&mut Text, With<HudText>>,
+    mut hud_q: Query<&mut Text, (With<HudText>, Without<FpsText>)>,
+    mut fps_q: Query<&mut Text, (With<FpsText>, Without<HudText>)>,
 ) {
     let tick = game_opt.map(|g| g.tick).unwrap_or(0);
-    let Ok(mut text) = hud_q.single_mut() else { return };
-
-    let final_str = format!(
-        "{}\nTick: {}\nFPS: {}\nPing: {}",
-        overlay.status_line, tick, overlay.fps_value, overlay.ping_value
-    );
     
-    if **text != final_str {
-        **text = final_str;
+    if let Some(mut text) = hud_q.iter_mut().next() {
+        let final_str = format!("{}\nTick: {}\nPing: {}", overlay.status_line, tick, overlay.ping_value);
+        if **text != final_str {
+            **text = final_str;
+        }
+    }
+
+    if let Some(mut fps_text) = fps_q.iter_mut().next() {
+        let fps_str = format!("{} FPS", overlay.fps_value);
+        if **fps_text != fps_str {
+            **fps_text = fps_str;
+        }
     }
 }
 
@@ -2243,70 +2297,67 @@ fn player_base_color(game: &GameState, owner: u16) -> [f32; 3] {
         .map(|p| p.color)
         .unwrap_or([0.3, 0.3, 0.3])
 }
-/// Spawn the map as a grid of 64×64 `TilemapChunk` entities.
-/// Returns a `ChunkLookup` resource for O(1) entity lookup by world tile coordinate.
-fn spawn_chunked_tilemap(
+fn spawn_single_texture_tilemap(
     commands: &mut Commands,
     game: &GameState,
-    tileset: &Handle<Image>,
+    images: &mut Assets<Image>,
     in_game: bool,
-) -> ChunkLookup {
+) -> Handle<Image> {
     let map_w = game.map.width;
     let map_h = game.map.height;
-    let cols = (map_w + CHUNK_SIZE - 1) / CHUNK_SIZE;
-    let rows = (map_h + CHUNK_SIZE - 1) / CHUNK_SIZE;
-    let tile_display_size = UVec2::splat(TILE_SIZE as u32);
 
-    let mut entities = Vec::with_capacity((cols * rows) as usize);
+    let mut image = Image::new_fill(
+        Extent3d {
+            width: map_w,
+            height: map_h,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        &[0, 0, 0, 0],
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+    image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST;
 
-    for cy in 0..rows {
-        for cx in 0..cols {
-            let x0 = cx * CHUNK_SIZE;
-            let y0 = cy * CHUNK_SIZE;
-            let cw = (map_w - x0).min(CHUNK_SIZE);
-            let ch = (map_h - y0).min(CHUNK_SIZE);
-
-            let mut tile_data: Vec<Option<TileData>> = vec![None; (cw * ch) as usize];
-            for ly in 0..ch {
-                for lx in 0..cw {
-                    let wx = x0 + lx;
-                    let wy = y0 + ly;
-                    let idx = (ly * cw + lx) as usize;
-                    tile_data[idx] = Some(openfront_tile_color(game, wx as i32, wy as i32));
-                }
+    for y in 0..map_h {
+        for x in 0..map_w {
+            let color = openfront_tile_color(game, x as i32, y as i32).to_srgba();
+            let idx = (((y * map_w) + x) * 4) as usize;
+            if let Some(data) = &mut image.data {
+                data[idx] = (color.red * 255.0).clamp(0.0, 255.0) as u8;
+                data[idx + 1] = (color.green * 255.0).clamp(0.0, 255.0) as u8;
+                data[idx + 2] = (color.blue * 255.0).clamp(0.0, 255.0) as u8;
+                data[idx + 3] = (color.alpha * 255.0).clamp(0.0, 255.0) as u8;
             }
-
-            // Chunk center in world space
-            let world_cx = (x0 as f32 + cw as f32 / 2.0) * TILE_SIZE;
-            let world_cy = (y0 as f32 + ch as f32 / 2.0) * TILE_SIZE;
-
-            let mut ecmd = commands.spawn((
-                TilemapChunk {
-                    chunk_size: UVec2::new(cw, ch),
-                    tile_display_size,
-                    tileset: tileset.clone(),
-                    ..default()
-                },
-                TilemapChunkTileData(tile_data),
-                ChunkIndex { cx, cy, w: cw, h: ch },
-                Transform::from_xyz(world_cx, world_cy, 0.0),
-            ));
-
-            if in_game {
-                ecmd.insert(InGameEntity);
-            }
-
-            entities.push(ecmd.id());
         }
     }
+    
+    let handle = images.add(image);
 
-    ChunkLookup { cols, entities }
+    let mut ecmd = commands.spawn((
+        Sprite {
+            image: handle.clone(),
+            custom_size: Some(Vec2::new((map_w * TILE_SIZE as u32) as f32, (map_h * TILE_SIZE as u32) as f32)),
+            ..default()
+        },
+        Transform::from_xyz(
+            (map_w as f32 * TILE_SIZE as f32) / 2.0 - (TILE_SIZE as f32 / 2.0),
+            (map_h as f32 * TILE_SIZE as f32) / 2.0 - (TILE_SIZE as f32 / 2.0),
+            0.0
+        ),
+    ));
+    
+    if in_game {
+        ecmd.insert(InGameEntity);
+    }
+    
+    handle
 }
 
 /// OpenFront-style TileData:
 /// - Border (any cardinal neighbor has different owner) → `base * TERRITORY_BORDER_RGB_MULTIPLIER`, alpha 1
 /// - Interior → base color, alpha `config::TERRITORY_INTERIOR_ALPHA`
-fn openfront_tile_color(game: &GameState, cx: i32, cy: i32) -> TileData {
+fn openfront_tile_color(game: &GameState, cx: i32, cy: i32) -> Color {
     let owner = game.map.owner_id(cx as u32, cy as u32);
     let base = player_base_color(game, owner);
 
@@ -2338,7 +2389,7 @@ fn openfront_tile_color(game: &GameState, cx: i32, cy: i32) -> TileData {
         )
     };
 
-    TileData { tileset_index: 0, color, ..default() }
+    color
 }
 
 fn rand_client_id() -> u64 {
@@ -2458,7 +2509,7 @@ fn system_sync_player_labels(
 
         if player.tile_count > 0 {
             let cx = (player.sum_x as f32 / player.tile_count as f32) * TILE_SIZE;
-            let cy = (player.sum_y as f32 / player.tile_count as f32) * TILE_SIZE;
+            let cy = (game.map.height as f32 - (player.sum_y as f32 / player.tile_count as f32)) * TILE_SIZE;
             
             let target = Vec3::new(cx, cy + ui.config.ui.label_offset_y, 150.0);
             
@@ -2512,6 +2563,7 @@ fn system_spawn_attack_vfx(
     q_attacks: Query<(Entity, &AttackExecution)>,
     q_vfx: Query<&CombatVfx>,
     vfx_cache: Res<CombatVfxCache>,
+    game: Res<GameState>,
 ) {
     // Track ones that already have VFX
     let mut tracked = HashSet::new();
@@ -2530,7 +2582,7 @@ fn system_spawn_attack_vfx(
 
         // Determine target world position
         let wx = (active_target.x as f32 + 0.5) * TILE_SIZE;
-        let wy = (active_target.y as f32 + 0.5) * TILE_SIZE;
+        let wy = (game.map.height as f32 - active_target.y as f32 - 0.5) * TILE_SIZE;
 
         let spawn_pos = Vec2::new(wx, wy);
 
@@ -2550,6 +2602,7 @@ fn system_sync_attack_vfx_position(
     mut commands: Commands,
     q_attacks: Query<&AttackExecution>,
     mut q_vfx: Query<(Entity, &CombatVfx, &mut Transform)>,
+    game: Res<GameState>,
 ) {
     for (vfx_ent, vfx, mut target_t) in &mut q_vfx {
         if let Ok(attack) = q_attacks.get(vfx.target_exec) {
@@ -2562,7 +2615,7 @@ fn system_sync_attack_vfx_position(
             // Sync visual position continuously to current target tile logic
             if let Some(front) = attack.to_conquer.peek() {
                 let wx = (front.x as f32 + 0.5) * TILE_SIZE;
-                let wy = (front.y as f32 + 0.5) * TILE_SIZE;
+                let wy = (game.map.height as f32 - front.y as f32 - 0.5) * TILE_SIZE;
                 
                 // Exponential decay interpolation for smooth VFX gliding
                 let target_pos = Vec3::new(wx, wy, 110.0);
@@ -2741,7 +2794,7 @@ fn system_headless_bot_engine(
         return;
     };
 
-    let Some(player) = game.player(my_id.0) else {
+    let Some(_player) = game.player(my_id.0) else {
         return;
     };
 
@@ -2798,10 +2851,6 @@ fn system_headless_bot_engine(
     if p_send < dark_rift_shared::game_config::GameConfig::default().expand_cost as f64 {
         return;
     }
-
-    let Some(target) = player_targets.first().copied().or(Some(0)) else {
-        return;
-    };
 
     info!("🤖 Headless sent Attack -> Player {} (troops: {})", target_owner, p_send);
     let _ = sender_mut.send::<ReliableChannel>(ClientGameplayMessage {

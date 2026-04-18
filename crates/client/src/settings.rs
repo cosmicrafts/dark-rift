@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 fn default_true() -> bool { true }
 
@@ -11,7 +11,7 @@ fn default_attack_ratio() -> f32 {
     0.2
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct VisualSettingsConfig {
     /// Reserved for a future particle path; Enoki was removed (despawn races + perf).
     #[serde(default = "default_false")]
@@ -48,7 +48,7 @@ impl VisualSettingsConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct UiSettingsConfig {
     /// Reserved for future AssetServer-based font override; labels use the embedded TTF.
     #[allow(dead_code)]
@@ -78,12 +78,95 @@ impl Default for UiSettingsConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+fn default_empty_string() -> String {
+    String::new()
+}
+
+/// Player-chosen display name (menu + `ClientJoinMessage.name`). Persisted in `settings.ron` on native only.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ProfileConfig {
+    #[serde(default = "default_empty_string")]
+    pub nickname: String,
+}
+
+impl Default for ProfileConfig {
+    fn default() -> Self {
+        Self {
+            nickname: String::new(),
+        }
+    }
+}
+
+impl ProfileConfig {
+    pub const NICKNAME_MAX_CHARS: usize = 24;
+    pub const FALLBACK_NICKNAME: &'static str = "Pilot";
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct ClientSettingsConfig {
     #[serde(default)]
     pub visuals: VisualSettingsConfig,
     #[serde(default)]
     pub ui: UiSettingsConfig,
+    #[serde(default)]
+    pub profile: ProfileConfig,
+}
+
+impl ClientSettingsConfig {
+    /// Nickname used for multiplayer join and single-player `PlayerInfo` (non-empty, length-capped).
+    #[must_use]
+    pub fn display_nickname_for_play(&self) -> String {
+        let trimmed = self.profile.nickname.trim();
+        if trimmed.is_empty() {
+            return ProfileConfig::FALLBACK_NICKNAME.to_string();
+        }
+        trimmed
+            .chars()
+            .take(ProfileConfig::NICKNAME_MAX_CHARS)
+            .collect()
+    }
+
+    /// Clamp stored nickname to max length (whitespace preserved for editing).
+    pub fn clamp_profile_nickname_in_place(&mut self) {
+        if self.profile.nickname.chars().count() <= ProfileConfig::NICKNAME_MAX_CHARS {
+            return;
+        }
+        self.profile.nickname = self
+            .profile
+            .nickname
+            .chars()
+            .take(ProfileConfig::NICKNAME_MAX_CHARS)
+            .collect();
+    }
+}
+
+/// Path to `assets/settings.ron` relative to the client crate (native read/write).
+#[must_use]
+pub fn settings_ron_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/settings.ron")
+}
+
+/// Writes full client config to disk. **No-op on WASM** (no filesystem); nickname stays in memory for the session.
+pub fn save_client_settings_config(config: &ClientSettingsConfig) -> Result<(), String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = config;
+        bevy::log::info!(
+            "settings save skipped on wasm32 (profile is session-only until localStorage is wired)"
+        );
+        return Ok(());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let path = settings_ron_path();
+        let pretty = ron::ser::PrettyConfig::new()
+            .depth_limit(8)
+            .separate_tuple_members(true);
+        let body = ron::ser::to_string_pretty(config, pretty)
+            .map_err(|e| format!("RON serialize: {e}"))?;
+        std::fs::write(&path, body).map_err(|e| format!("write {}: {e}", path.display()))?;
+        Ok(())
+    }
 }
 
 #[derive(Resource)]
@@ -107,8 +190,7 @@ pub fn build_client_settings_config() -> ClientSettingsConfig {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let ron_path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/settings.ron");
+        let ron_path = settings_ron_path();
         match std::fs::read_to_string(&ron_path) {
             Ok(s) => match ron::from_str::<ClientSettingsConfig>(&s) {
                 Ok(c) => c,

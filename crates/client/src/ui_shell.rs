@@ -13,7 +13,6 @@ pub enum UiBreakpoint {
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct UiShellState {
     pub breakpoint: UiBreakpoint,
-    pub width: f32,
     pub inset_top: f32,
     pub inset_right: f32,
     pub inset_bottom: f32,
@@ -24,7 +23,6 @@ impl Default for UiShellState {
     fn default() -> Self {
         Self {
             breakpoint: UiBreakpoint::Wide,
-            width: 1280.0,
             inset_top: SPACE_3,
             inset_right: SPACE_3,
             inset_bottom: SPACE_3,
@@ -133,7 +131,6 @@ pub fn system_update_ui_shell_state(
 
     *state = UiShellState {
         breakpoint,
-        width,
         inset_top: inset,
         inset_right: inset,
         inset_bottom: inset,
