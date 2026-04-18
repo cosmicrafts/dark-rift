@@ -1,8 +1,8 @@
 (
     visuals: (
         enable_combat_particles: false,
-        enable_hdr_bloom: true,
-        enable_territory_expansion_animations: true,
+        enable_hdr_bloom: false,
+        enable_territory_expansion_animations: false,
         enable_floating_labels: true,
     ),
     ui: (

@@ -35,6 +35,14 @@ pub struct Player {
     pub alive: bool,
     /// Whether the player has completed initial spawn.
     pub has_spawned: bool,
+    /// Sum of x coordinates of all owned tiles (for O(1) center calculation).
+    pub sum_x: u64,
+    /// Sum of y coordinates of all owned tiles (for O(1) center calculation).
+    pub sum_y: u64,
+    /// Number of tiles owned by the player.
+    pub tile_count: u32,
+    /// Deterministic cache of border tiles for O(1) access.
+    pub border_tiles: std::collections::BTreeSet<(u32, u32)>,
 }
 
 impl Player {
@@ -49,6 +57,10 @@ impl Player {
             color,
             alive: true,
             has_spawned: false,
+            sum_x: 0,
+            sum_y: 0,
+            tile_count: 0,
+            border_tiles: std::collections::BTreeSet::new(),
         }
     }
 
@@ -63,6 +75,10 @@ impl Player {
             color,
             alive: true,
             has_spawned: false,
+            sum_x: 0,
+            sum_y: 0,
+            tile_count: 0,
+            border_tiles: std::collections::BTreeSet::new(),
         }
     }
 

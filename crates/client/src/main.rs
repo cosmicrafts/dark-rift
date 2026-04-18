@@ -55,6 +55,7 @@ use ui_theme::*;
 use ui_lobby_browser::*;
 
 const TILE_SIZE: f32 = 8.0;
+const CHUNK_SIZE: u32 = 64;
 
 /// Native client: plain WebSocket to this `SocketAddr` (see `WebSocketScheme::Plain`).
 #[cfg(not(target_arch = "wasm32"))]
@@ -193,6 +194,37 @@ struct AttackRingMesh(Handle<Mesh>);
 #[derive(Resource, Default)]
 struct FreshlyPaintedTiles {
     tiles: HashMap<(u32, u32), f32>,
+}
+
+/// Identifies which spatial chunk a TilemapChunk entity corresponds to.
+#[derive(Component)]
+struct ChunkIndex {
+    /// Chunk column (0-based)
+    cx: u32,
+    /// Chunk row (0-based)
+    cy: u32,
+    /// Width of this chunk in tiles (last column may be shorter)
+    w: u32,
+    /// Height of this chunk in tiles (last row may be shorter)
+    h: u32,
+}
+
+/// Lookup resource: given a world tile (x,y), find the Entity of the chunk that owns it.
+#[derive(Resource, Default)]
+struct ChunkLookup {
+    /// Number of chunk columns
+    cols: u32,
+    /// Vec indexed by (chunk_cy * cols + chunk_cx)
+    entities: Vec<Entity>,
+}
+
+impl ChunkLookup {
+    fn entity_for_tile(&self, x: u32, y: u32) -> Option<Entity> {
+        let cx = x / CHUNK_SIZE;
+        let cy = y / CHUNK_SIZE;
+        let idx = (cy * self.cols + cx) as usize;
+        self.entities.get(idx).copied()
+    }
 }
 
 /// Troop fraction committed on each attack click (OpenFront `uiState.attackRatio` + ControlPanel slider 1–100%).
@@ -726,31 +758,8 @@ fn setup_offline(
         },
     );
 
-    let chunk_size = UVec2::new(director.record.config.map_width as u32, director.record.config.map_height as u32);
-    let tile_display_size = UVec2::splat(TILE_SIZE as u32);
-    let mut tile_data: Vec<Option<TileData>> = vec![None; (chunk_size.x * chunk_size.y) as usize];
-
-    for y in 0..game.map.height {
-        for x in 0..game.map.width {
-            let idx = (y * game.map.width + x) as usize;
-            tile_data[idx] = Some(openfront_tile_color(&game, x as i32, y as i32));
-        }
-    }
-
-    commands.spawn((
-        TilemapChunk {
-            chunk_size,
-            tile_display_size,
-            tileset,
-            ..default()
-        },
-        TilemapChunkTileData(tile_data),
-        Transform::from_xyz(
-            director.record.config.map_width as f32 * TILE_SIZE / 2.0,
-            director.record.config.map_height as f32 * TILE_SIZE / 2.0,
-            0.0
-        ),
-    ));
+    let lookup = spawn_chunked_tilemap(&mut commands, &game, &tileset, false);
+    commands.insert_resource(lookup);
 
     commands.insert_resource(game);
     ready.0 = true;
@@ -1311,32 +1320,8 @@ fn start_game_core(
                     },
                 );
 
-                let chunk_size = UVec2::new(msg.config.map_width as u32, msg.config.map_height as u32);
-                let tile_display_size = UVec2::splat(TILE_SIZE as u32);
-                let mut tile_data: Vec<Option<TileData>> = vec![None; (chunk_size.x * chunk_size.y) as usize];
-
-                for y in 0..game.map.height {
-                    for x in 0..game.map.width {
-                        let idx = (y * game.map.width + x) as usize;
-                        tile_data[idx] = Some(openfront_tile_color(&game, x as i32, y as i32));
-                    }
-                }
-
-                commands.spawn((
-                    TilemapChunk {
-                        chunk_size,
-                        tile_display_size,
-                        tileset,
-                        ..default()
-                    },
-                    InGameEntity,
-                    TilemapChunkTileData(tile_data),
-                    Transform::from_xyz(
-                        msg.config.map_width  as f32 * TILE_SIZE / 2.0,
-                        msg.config.map_height as f32 * TILE_SIZE / 2.0,
-                        0.0
-                    ),
-                ));
+                let lookup = spawn_chunked_tilemap(commands, &game, &tileset, true);
+                commands.insert_resource(lookup);
             }
 
             commands.insert_resource(game);
@@ -1611,17 +1596,17 @@ fn system_home_button(
 fn handle_tile_change(
     game_opt:    Option<ResMut<GameState>>,
     mut fresh_tiles: ResMut<FreshlyPaintedTiles>,
-    mut chunks:  Query<&mut TilemapChunkTileData>,
+    chunk_lookup: Option<Res<ChunkLookup>>,
+    mut chunks:  Query<(&ChunkIndex, &mut TilemapChunkTileData)>,
 ) {
     let Some(mut game) = game_opt else { return };
     if !game.is_changed() { return; }
+    let Some(lookup) = chunk_lookup else { return; };
 
     for ev in &game.events {
         if let GameEvent::TileCaptured { x, y, new_owner: _ } = ev {
-            // Push white flash maximum lerp state
             fresh_tiles.tiles.insert((*x, *y), 1.0);
 
-            // OpenFront: update the tile AND its 4 cardinal neighbors (they may flip border/interior)
             let coords = [
                 (*x as i32, *y as i32),
                 (*x as i32, *y as i32 - 1),
@@ -1629,45 +1614,46 @@ fn handle_tile_change(
                 (*x as i32 - 1, *y as i32),
                 (*x as i32 + 1, *y as i32),
             ];
-            for mut chunk_data in chunks.iter_mut() {
-                for (cx, cy) in coords {
-                    if game.map.is_valid_coord(cx, cy) {
-                        let idx = (cy as u32 * game.map.width as u32 + cx as u32) as usize;
-                        let mut t_data = openfront_tile_color(&game, cx, cy);
-                        
-                        // Boost freshly-painted tiles with their own core color (not white)
-                        if let Some(&val) = fresh_tiles.tiles.get(&(cx as u32, cy as u32)) {
-                            let srgba = t_data.color.to_srgba();
-                            let t = val.clamp(0.0, 1.0);
-                            let eased = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t); // cubic ease-out
-                            let boost = 1.0 + 4.0 * eased; // multiply core color up to 5x for HDR bloom
-                            
-                            let owner = game.map.owner_id(cx as u32, cy as u32);
-                            let is_border = [(cx, cy - 1), (cx + 1, cy), (cx, cy + 1), (cx - 1, cy)]
-                                .iter()
-                                .any(|&(nx, ny)| {
-                                    game.map.is_valid_coord(nx, ny)
-                                        && game.map.owner_id(nx as u32, ny as u32) != owner
-                                });
+            for (wx, wy) in coords {
+                if !game.map.is_valid_coord(wx, wy) { continue; }
+                let ux = wx as u32;
+                let uy = wy as u32;
+                let Some(chunk_entity) = lookup.entity_for_tile(ux, uy) else { continue; };
+                let Ok((ci, mut chunk_data)) = chunks.get_mut(chunk_entity) else { continue; };
 
-                            let white_flash = if is_border { 2.5 * eased } else { 0.0 };
+                let lx = ux - ci.cx * CHUNK_SIZE;
+                let ly = uy - ci.cy * CHUNK_SIZE;
+                let idx = (ly * ci.w + lx) as usize;
+                let mut t_data = openfront_tile_color(&game, wx, wy);
 
-                            t_data.color = Color::srgba(
-                                srgba.red * boost + white_flash,
-                                srgba.green * boost + white_flash,
-                                srgba.blue * boost + white_flash,
-                                srgba.alpha
-                            );
-                        }
+                if let Some(&val) = fresh_tiles.tiles.get(&(ux, uy)) {
+                    let srgba = t_data.color.to_srgba();
+                    let t = val.clamp(0.0, 1.0);
+                    let eased = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t);
+                    let boost = 1.0 + 4.0 * eased;
 
-                        chunk_data[idx] = Some(t_data);
-                    }
+                    let owner = game.map.owner_id(ux, uy);
+                    let is_border = [(wx, wy - 1), (wx + 1, wy), (wx, wy + 1), (wx - 1, wy)]
+                        .iter()
+                        .any(|&(nx, ny)| {
+                            game.map.is_valid_coord(nx, ny)
+                                && game.map.owner_id(nx as u32, ny as u32) != owner
+                        });
+
+                    let white_flash = if is_border { 2.5 * eased } else { 0.0 };
+                    t_data.color = Color::srgba(
+                        srgba.red * boost + white_flash,
+                        srgba.green * boost + white_flash,
+                        srgba.blue * boost + white_flash,
+                        srgba.alpha
+                    );
                 }
+
+                chunk_data[idx] = Some(t_data);
             }
         }
     }
-    
-    // Clear out events so we effectively operate visually in 'Batched' chunks per-frame independently of tick iterations
+
     game.events.clear();
 }
 
@@ -1677,7 +1663,8 @@ fn system_animate_tile_colors(
     time: Res<Time>,
     game_opt: Option<Res<GameState>>,
     mut fresh_tiles: ResMut<FreshlyPaintedTiles>,
-    mut chunks: Query<&mut TilemapChunkTileData>,
+    chunk_lookup: Option<Res<ChunkLookup>>,
+    mut chunks: Query<(&ChunkIndex, &mut TilemapChunkTileData)>,
     settings: Res<ClientSettings>,
 ) {
     if !settings.config.visuals.territory_expansion_animations_enabled() {
@@ -1686,9 +1673,10 @@ fn system_animate_tile_colors(
     }
     if fresh_tiles.tiles.is_empty() { return; }
     let Some(game) = game_opt else { return };
+    let Some(lookup) = chunk_lookup else { return; };
     
     let dt = time.delta_secs();
-    let lerp_speed = 0.85; // Lowered from 3.33 -> 0.85 to leave a much longer "burning" tail over the territory
+    let lerp_speed = 0.85;
     let mut finished = vec![];
     
     for (&(x, y), val) in fresh_tiles.tiles.iter_mut() {
@@ -1699,36 +1687,39 @@ fn system_animate_tile_colors(
         }
     }
     
-    for mut chunk_data in chunks.iter_mut() {
-        for (&(x, y), val) in fresh_tiles.tiles.iter() {
-            let cx = x as i32;
-            let cy = y as i32;
-            let mut t_data = openfront_tile_color(&game, cx, cy);
-            
-            let srgba = t_data.color.to_srgba();
-            let t = val.clamp(0.0, 1.0);
-            let eased = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t); // cubic ease-out
-            let boost = 1.0 + 4.0 * eased; // multiply core color up to 5x for HDR bloom
-            
-            let owner = game.map.owner_id(cx as u32, cy as u32);
-            let is_border = [(cx, cy - 1), (cx + 1, cy), (cx, cy + 1), (cx - 1, cy)]
-                .iter()
-                .any(|&(nx, ny)| {
-                    game.map.is_valid_coord(nx, ny)
-                        && game.map.owner_id(nx as u32, ny as u32) != owner
-                });
+    for (&(x, y), val) in fresh_tiles.tiles.iter() {
+        let Some(chunk_entity) = lookup.entity_for_tile(x, y) else { continue; };
+        let Ok((ci, mut chunk_data)) = chunks.get_mut(chunk_entity) else { continue; };
 
-            let white_flash = if is_border { 2.5 * eased } else { 0.0 };
+        let wx = x as i32;
+        let wy = y as i32;
+        let mut t_data = openfront_tile_color(&game, wx, wy);
+        
+        let srgba = t_data.color.to_srgba();
+        let t = val.clamp(0.0, 1.0);
+        let eased = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t);
+        let boost = 1.0 + 4.0 * eased;
+        
+        let owner = game.map.owner_id(x, y);
+        let is_border = [(wx, wy - 1), (wx + 1, wy), (wx, wy + 1), (wx - 1, wy)]
+            .iter()
+            .any(|&(nx, ny)| {
+                game.map.is_valid_coord(nx, ny)
+                    && game.map.owner_id(nx as u32, ny as u32) != owner
+            });
 
-            t_data.color = Color::srgba(
-                srgba.red * boost + white_flash,
-                srgba.green * boost + white_flash,
-                srgba.blue * boost + white_flash,
-                srgba.alpha
-            );
-            let idx = (cy as u32 * game.map.width as u32 + cx as u32) as usize;
-            chunk_data[idx] = Some(t_data);
-        }
+        let white_flash = if is_border { 2.5 * eased } else { 0.0 };
+        t_data.color = Color::srgba(
+            srgba.red * boost + white_flash,
+            srgba.green * boost + white_flash,
+            srgba.blue * boost + white_flash,
+            srgba.alpha
+        );
+
+        let lx = x - ci.cx * CHUNK_SIZE;
+        let ly = y - ci.cy * CHUNK_SIZE;
+        let idx = (ly * ci.w + lx) as usize;
+        chunk_data[idx] = Some(t_data);
     }
     
     for key in finished {
@@ -2126,6 +2117,65 @@ fn player_base_color(game: &GameState, owner: u16) -> [f32; 3] {
         .map(|p| p.color)
         .unwrap_or([0.3, 0.3, 0.3])
 }
+/// Spawn the map as a grid of 64×64 `TilemapChunk` entities.
+/// Returns a `ChunkLookup` resource for O(1) entity lookup by world tile coordinate.
+fn spawn_chunked_tilemap(
+    commands: &mut Commands,
+    game: &GameState,
+    tileset: &Handle<Image>,
+    in_game: bool,
+) -> ChunkLookup {
+    let map_w = game.map.width;
+    let map_h = game.map.height;
+    let cols = (map_w + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    let rows = (map_h + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    let tile_display_size = UVec2::splat(TILE_SIZE as u32);
+
+    let mut entities = Vec::with_capacity((cols * rows) as usize);
+
+    for cy in 0..rows {
+        for cx in 0..cols {
+            let x0 = cx * CHUNK_SIZE;
+            let y0 = cy * CHUNK_SIZE;
+            let cw = (map_w - x0).min(CHUNK_SIZE);
+            let ch = (map_h - y0).min(CHUNK_SIZE);
+
+            let mut tile_data: Vec<Option<TileData>> = vec![None; (cw * ch) as usize];
+            for ly in 0..ch {
+                for lx in 0..cw {
+                    let wx = x0 + lx;
+                    let wy = y0 + ly;
+                    let idx = (ly * cw + lx) as usize;
+                    tile_data[idx] = Some(openfront_tile_color(game, wx as i32, wy as i32));
+                }
+            }
+
+            // Chunk center in world space
+            let world_cx = (x0 as f32 + cw as f32 / 2.0) * TILE_SIZE;
+            let world_cy = (y0 as f32 + ch as f32 / 2.0) * TILE_SIZE;
+
+            let mut ecmd = commands.spawn((
+                TilemapChunk {
+                    chunk_size: UVec2::new(cw, ch),
+                    tile_display_size,
+                    tileset: tileset.clone(),
+                    ..default()
+                },
+                TilemapChunkTileData(tile_data),
+                ChunkIndex { cx, cy, w: cw, h: ch },
+                Transform::from_xyz(world_cx, world_cy, 0.0),
+            ));
+
+            if in_game {
+                ecmd.insert(InGameEntity);
+            }
+
+            entities.push(ecmd.id());
+        }
+    }
+
+    ChunkLookup { cols, entities }
+}
 
 /// OpenFront-style TileData:
 /// - Border (any cardinal neighbor has different owner) → `base * TERRITORY_BORDER_RGB_MULTIPLIER`, alpha 1
@@ -2232,7 +2282,7 @@ fn system_sync_player_labels(
         if !exists {
             let color = Color::WHITE;
             let base_font = ui.config.ui.font_size;
-            let tiles = game.map.tiles_owned_by(player.id);
+            let tiles = player.tile_count;
             let mul = player_label_scale(
                 tiles,
                 ui.config.ui.label_size_ref_tiles,
@@ -2280,22 +2330,9 @@ fn system_sync_player_labels(
             text.0 = new_text.clone();
         }
 
-        let mut sum_x = 0;
-        let mut sum_y = 0;
-        let mut count = 0;
-        for (idx, &owner) in game.map.state.iter().enumerate() {
-            if owner == player.id {
-                let y = idx as u32 / game.map.width;
-                let x = idx as u32 % game.map.width;
-                sum_x += x;
-                sum_y += y;
-                count += 1;
-            }
-        }
-
-        if count > 0 {
-            let cx = (sum_x as f32 / count as f32) * TILE_SIZE;
-            let cy = (sum_y as f32 / count as f32) * TILE_SIZE;
+        if player.tile_count > 0 {
+            let cx = (player.sum_x as f32 / player.tile_count as f32) * TILE_SIZE;
+            let cy = (player.sum_y as f32 / player.tile_count as f32) * TILE_SIZE;
             
             let target = Vec3::new(cx, cy + ui.config.ui.label_offset_y, 150.0);
             
@@ -2308,7 +2345,7 @@ fn system_sync_player_labels(
 
             let base_font = ui.config.ui.font_size;
             let mul = player_label_scale(
-                count,
+                player.tile_count,
                 ui.config.ui.label_size_ref_tiles,
                 ui.config.ui.label_max_scale,
             );
@@ -2589,15 +2626,15 @@ fn system_headless_bot_engine(
     let reserve_ratio = bot_state.profile.reserve_ratio;
     let expand_ratio = bot_state.profile.expand_ratio;
     
-    let borders = game.map.border_tiles_of(bot_id);
-    if borders.is_empty() {
+    let player = game.player(bot_id).unwrap();
+    if player.border_tiles.is_empty() {
         return;
     }
 
     let mut has_neutral = false;
     let mut player_targets = Vec::new();
 
-    for &(bx, by) in &borders {
+    for &(bx, by) in &player.border_tiles {
         for (nx, ny) in game.map.neighbors(bx, by) {
             let owner = game.map.owner_id(nx, ny);
             if owner != bot_id {

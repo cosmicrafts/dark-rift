@@ -89,7 +89,7 @@ pub fn system_player_income(game_opt: Option<ResMut<GameState>>) {
     let GameState { map, players, .. } = &mut *game;
 
     for player in players.iter_mut().filter(|p| p.alive) {
-        let tiles_owned = map.tiles_owned_by(player.id);
+        let tiles_owned = player.tile_count;
         if tiles_owned == 0 {
             player.alive = false; // Dead
             continue;
@@ -243,7 +243,7 @@ pub fn system_attack_execution(
                 // Apply change AFTER enqueuing neighbors, mimicking OpenFront's `this._owner.conquer`
                 // This ensures new neighbors don't artificially lower their priority by counting this tile as friendly yet!
                 // Guaranteed BFS spread without DFS spikes!
-                game.map.set_owner_id(target_tile.x, target_tile.y, execution.owner_id);
+                game.set_tile_owner(target_tile.x, target_tile.y, execution.owner_id);
 
                 // Send event
                 game.events.push(GameEvent::TileCaptured {

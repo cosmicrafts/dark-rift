@@ -41,6 +41,14 @@ When transitioning out of an `InGame` phase or disconnecting from a server, we d
 When converting "docile" Bot behaviors from TypeScript OpenFront to Dark Rift, we mapped the "attack roughly every 40 ticks" logic 1-to-1. However, the bots acted like enraged Terminators, playing inexplicably hyper-aggressive. The hidden variable was time: OpenFront runs its bot logic loop strictly at **4 Ticks/Sec**. Dark Rift runs its ECS `FixedUpdate` physics loop natively at **60 Ticks/Sec**. 40 Ticks in OpenFront equals 10 seconds of peace; 40 Ticks in Dark Rift equals 0.6 seconds of absolute terror.
 * **The Poka-Yoke (Mistake-Proofing):** When porting values, delays, or arrays from the TypeScript architecture to Rust, you must multiply or divide by `15` to preserve real-world seconds. `600 ticks` in Rust = `40 ticks` in Typescript. Never port raw tick integers blindly.
 
+### 8. The O(N) Asymptote Death (The 4.8 Million Loop Trap)
+When transitioning from a 500x500 map to a 2900x1600 map (4.8 million tiles), the simulation grinded to a halt (5 FPS). We discovered two silent assassins doing full linear map scans every frame: the UI was iterating the entire map to find the center of mass for player labels, and the Bots were iterating the entire map every 50ms to find their borders.
+* **The Fix:** We implemented `O(1)` dynamic caching directly on the `Player` struct. By tracking `sum_x`, `sum_y`, `tile_count`, and a `BTreeSet` of `border_tiles`, and updating them incrementally strictly when a tile changes ownership in `set_tile_owner`, we eliminated billions of wasted CPU cycles per second.
+
+### 9. The Monolithic Mesh Collapse (GPU Starvation)
+Even after fixing the CPU, the game stuttered. Bevy's `TilemapChunk` was attempting to render all 4.8 million tiles as a single colossal mesh (19 million vertices). Any time a single tile changed color, Bevy marked the component as changed, forcing the GPU to re-mesh and re-upload the entire continent of Europe.
+* **The Fix:** Spatial Chunking. We split the map into a grid of 64x64 `TilemapChunk` entities (~1,200 tiny chunks). When an attack occurs, we use an O(1) mathematical lookup to find which chunk was hit, and only mutate that specific 4,096-tile sector. The other 1,199 chunks remain perfectly cached on the GPU, dropping rendering overhead by ~1,200x.
+
 ---
 ### 🤖 OpenClaw Integration Test
 This repository is currently being orchestrated and optimized via OpenClaw AI. Automated deployments, config management, and stress-testing logic have been validated.

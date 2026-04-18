@@ -40,7 +40,8 @@ fn build_attack_frontier(
     insert_seq_counter: &mut u32,
 ) -> BinaryHeap<PrioritizedTile> {
     let mut to_conquer = BinaryHeap::new();
-    for (bx, by) in game.map.border_tiles_of(player_id) {
+    let player = game.player(player_id).expect("Player should exist");
+    for (bx, by) in player.border_tiles.iter().copied() {
         for (nx, ny) in game.map.neighbors(bx, by) {
             if game.map.owner_id(nx, ny) != target_owner {
                 continue;
@@ -285,8 +286,8 @@ pub fn system_bot_think(
             continue;
         }
 
-        let borders = game.map.border_tiles_of(bot_id);
-        if borders.is_empty() {
+        let player = game.player(bot_id).unwrap();
+        if player.border_tiles.is_empty() {
             continue;
         }
 
@@ -294,7 +295,7 @@ pub fn system_bot_think(
         let mut player_targets = Vec::new();
 
         // Terra Nullius Pacifism: Scan entire perimeter for ANY empty land
-        for &(bx, by) in &borders {
+        for &(bx, by) in &player.border_tiles {
             for (nx, ny) in game.map.neighbors(bx, by) {
                 let owner = game.map.owner_id(nx, ny);
                 if owner != bot_id {
