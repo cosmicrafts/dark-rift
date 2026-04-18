@@ -34,6 +34,7 @@ pub struct GameConfig {
     pub bot_difficulty: BotDifficulty,
 
     // Map Config
+    pub map_name: String,
     pub map_width: u32,
     pub map_height: u32,
 
@@ -50,8 +51,9 @@ impl Default for GameConfig {
             max_players: 2,
             bot_count: 4,
             bot_difficulty: BotDifficulty::Vanilla,
-            map_width: 200,
-            map_height: 200,
+            map_name: "europe".to_string(),
+            map_width: 2904,
+            map_height: 1672,
             random_spawn: false,
             base_income: 1.0,
             attack_cost: 0.15,

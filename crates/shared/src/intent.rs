@@ -54,10 +54,10 @@ fn build_attack_frontier(
 
             let terrain = game.map.terrain_type(nx, ny);
             let mag_x2 = match terrain {
-                TerrainType::Plains => 2,
+                TerrainType::Land => 2,
                 TerrainType::Highland => 3,
                 TerrainType::Mountain => 4,
-                _ => 2,
+                TerrainType::Water | TerrainType::Lake => 3, // Fallback, won't happen normally
             };
             let r = rng.next_int(0, 7) as i64;
             // Formula scaled by 4 to maintain OpenFront quartiles in integer space

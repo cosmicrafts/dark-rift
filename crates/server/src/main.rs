@@ -54,6 +54,8 @@ struct StatePhase(LobbyPhase);
 pub struct MatchMetadata {
     pub seed: u64,
     pub config: dark_rift_shared::game_config::GameConfig,
+    pub map_cache: Option<dark_rift_shared::map::GameMap>,
+    pub manifest_cache: Option<dark_rift_shared::map_loader::MapManifest>,
 }
 
 #[derive(Component)]
@@ -168,10 +170,17 @@ fn system_master_lobby(
         let lobby_id = id_gen.0;
         id_gen.0 += 1;
         
+        let config = dark_rift_shared::game_config::GameConfig::default();
+        let loaded = dark_rift_shared::map_loader::load_openfront_map(&config.map_name);
+        let (map_cache, manifest_cache) = match loaded {
+            Some((map, manifest)) => (Some(map), Some(manifest)),
+            None => (None, None),
+        };
+
         let new_lobby = commands.spawn((
             Lobby { id: lobby_id },
             StatePhase(LobbyPhase::Waiting),
-            MatchMetadata { seed: 42 + lobby_id, config: dark_rift_shared::game_config::GameConfig::default() },
+            MatchMetadata { seed: 42 + lobby_id, config, map_cache, manifest_cache },
             MatchRoster::default(),
             MatchTurnLog::default(),
             MatchIntentBuffer::default(),
@@ -339,10 +348,20 @@ fn handle_client_joins(
                 
                 let colors = player_colors();
                 let color = colors[(player_id as usize - 1) % colors.len()];
-                let (sx, sy) = pick_spawn(&roster, player_id, metadata.config.map_width, metadata.config.map_height);
+                let (sx, sy, nation_opt) = pick_spawn(&roster, player_id, metadata);
 
-                roster.0.push(PlayerInfo { id: player_id, name: msg.name.clone(), color, spawn_x: sx, spawn_y: sy });
-                info!("✅ {} (id={}) se unió al Match ID {:?} → spawn({},{})", msg.name, player_id, lobby.id, sx, sy);
+                let final_name = if let Some(nation_name) = nation_opt {
+                    if msg.name.starts_with("Bot") {
+                        nation_name
+                    } else {
+                        format!("{} ({})", msg.name, nation_name)
+                    }
+                } else {
+                    msg.name.clone()
+                };
+
+                roster.0.push(PlayerInfo { id: player_id, name: final_name.clone(), color, spawn_x: sx, spawn_y: sy });
+                info!("✅ {} (id={}) se unió al Match ID {:?} → spawn({},{})", final_name, player_id, lobby.id, sx, sy);
             }
             registry.clients.insert(client_entity, (match_entity, assigned_id));
             
@@ -485,9 +504,45 @@ fn system_end_turn(
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-fn pick_spawn(roster: &MatchRoster, _player_id: u16, w: u32, h: u32) -> (u32, u32) {
+fn pick_spawn(roster: &MatchRoster, player_id: u16, metadata: &MatchMetadata) -> (u32, u32, Option<String>) {
+    let w = metadata.config.map_width;
+    let h = metadata.config.map_height;
     let margin = config::SPAWN_RADIUS + 4;
 
+    let used: std::collections::HashSet<(u32, u32)> =
+        roster.0.iter().map(|p| (p.spawn_x, p.spawn_y)).collect();
+
+    // 1. Try to use predefined nations from the manifest
+    if let Some(manifest) = &metadata.manifest_cache {
+        // Simple deterministic allocation based on player_id (1-indexed)
+        if !manifest.nations.is_empty() {
+            let n_idx = ((player_id.saturating_sub(1)) as usize) % manifest.nations.len();
+            let coords = manifest.nations[n_idx].coordinates;
+            let nation_name = manifest.nations[n_idx].name.clone();
+            let sx = coords[0].clamp(margin, w.saturating_sub(margin));
+            let sy = coords[1].clamp(margin, h.saturating_sub(margin));
+            if !used.contains(&(sx, sy)) {
+                return (sx, sy, Some(nation_name));
+            }
+        }
+    }
+
+    // 2. Fallback: Search the map for a valid land tile using a deterministic spiral/hash
+    if let Some(map) = &metadata.map_cache {
+        let mut rng = dark_rift_shared::pseudo_random::PseudoRandom::new(metadata.seed + player_id as u64);
+        for _ in 0..1000 { // Attempt 1000 random probes
+            let sx = rng.next_int(margin as i32, w.saturating_sub(margin) as i32) as u32;
+            let sy = rng.next_int(margin as i32, h.saturating_sub(margin) as i32) as u32;
+            let r = map.ref_id(sx, sy);
+            if map.terrain[r].is_land() {
+                if !used.contains(&(sx, sy)) {
+                    return (sx, sy, None);
+                }
+            }
+        }
+    }
+
+    // 3. Ultimate Fallback (No map/manifest loaded or random probe failed)
     let candidates: [(u32, u32); 8] = [
         (w / 4,     h / 4),
         (3 * w / 4, h / 4),
@@ -499,18 +554,15 @@ fn pick_spawn(roster: &MatchRoster, _player_id: u16, w: u32, h: u32) -> (u32, u3
         (3 * w / 4, h / 2),
     ];
 
-    let used: std::collections::HashSet<(u32, u32)> =
-        roster.0.iter().map(|p| (p.spawn_x, p.spawn_y)).collect();
-
     for &(sx, sy) in &candidates {
         let sx = sx.clamp(margin, w.saturating_sub(margin));
         let sy = sy.clamp(margin, h.saturating_sub(margin));
         if !used.contains(&(sx, sy)) {
-            return (sx, sy);
+            return (sx, sy, None);
         }
     }
 
-    (w / 2, h / 2)
+    (w / 2, h / 2, None)
 }
 
 fn system_dump_replay(

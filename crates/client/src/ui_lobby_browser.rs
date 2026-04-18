@@ -141,6 +141,21 @@ pub fn setup_lobby_browser(
     });
 }
 
+/// Hide offline single-player while the player is in a multiplayer lobby queue (cards hidden).
+pub fn system_sync_single_player_button_visibility(
+    joined: Res<JoinedLobby>,
+    mut q: Query<&mut Node, With<SinglePlayerButton>>,
+) {
+    let show = joined.0.is_none();
+    for mut node in &mut q {
+        node.display = if show {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+}
+
 pub fn system_update_lobby_browser(
     mut commands: Commands,
     mut receivers: Query<&mut MessageReceiver<ServerLobbiesBroadcastMessage>>,

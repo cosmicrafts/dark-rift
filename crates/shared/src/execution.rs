@@ -68,10 +68,10 @@ pub struct AttackExecution {
 impl AttackExecution {
     pub fn calc_priority(&mut self, num_owned_by_me: u32, terrain: TerrainType, tick: u64) -> i64 {
         let mag_x2 = match terrain {
-            TerrainType::Plains => 2,
+            TerrainType::Land => 2,
             TerrainType::Highland => 3,
             TerrainType::Mountain => 4,
-            _ => 2,
+            TerrainType::Water | TerrainType::Lake => 3, // Won't happen normally, but just in case
         };
         let r = self.rng.next_int(0, 7) as i64;
         // Formula scaled by 4 to maintain OpenFront quartiles in integer space
@@ -191,6 +191,12 @@ pub fn system_attack_execution(
                 // Check if target tile still belongs to the exact target
                 if game.map.owner_id(target_tile.x, target_tile.y) != execution.target_owner {
                     continue; // Skip, no longer controlled by target
+                }
+
+                // Terrain Check: Water and Mountains are impassable for basic ground attacks
+                let terrain_type = game.map.terrain_type(target_tile.x, target_tile.y);
+                if terrain_type == TerrainType::Water || terrain_type == TerrainType::Mountain {
+                    continue; // Skip, impassable terrain
                 }
 
                 // Check adjacency: ensure it still borders the attacker

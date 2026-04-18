@@ -447,6 +447,7 @@ fn main() {
                 system_update_lobby_browser,
                 system_handle_join_clicks,
                 system_handle_cancel_join,
+                ui_lobby_browser::system_sync_single_player_button_visibility,
                 ui_lobby_browser::system_handle_single_player_click,
             ).run_if(|state: Res<State<AppState>>, cli: Res<Cli>| *state.get() == AppState::LobbyBrowser && !cli.bot))
             .add_systems(Update, (
@@ -1228,6 +1229,9 @@ fn start_game_core(
             }
 
             let mut game = GameState::new(msg.seed, msg.config.map_width, msg.config.map_height);
+            if let Some((map, _manifest)) = dark_rift_shared::map_loader::load_openfront_map(&msg.config.map_name) {
+                game.map = map;
+            }
             for info in &msg.players {
                 let player = Player::new_human(info.id, info.name.clone(), info.color);
                 game.spawn_player(player, info.spawn_x, info.spawn_y);
@@ -2137,9 +2141,15 @@ fn openfront_tile_color(game: &GameState, cx: i32, cy: i32) -> TileData {
                 && game.map.owner_id(nx as u32, ny as u32) != owner
         });
 
-    // Unowned tiles: always paint as dark void, no transparency effect needed
     let color = if owner == 0 {
-        Color::srgba(base[0], base[1], base[2], 1.0)
+        // Unowned tiles show the true terrain color
+        let terrain = game.map.terrain_type(cx as u32, cy as u32);
+        match terrain {
+            dark_rift_shared::map::TerrainType::Water | dark_rift_shared::map::TerrainType::Lake => Color::srgb(0.1, 0.3, 0.6), // Blue
+            dark_rift_shared::map::TerrainType::Land => Color::srgb(0.4, 0.7, 0.3), // Light Green
+            dark_rift_shared::map::TerrainType::Highland => Color::srgb(0.2, 0.5, 0.2), // Dark Green
+            dark_rift_shared::map::TerrainType::Mountain => Color::srgb(0.6, 0.5, 0.4), // Brown/Gray
+        }
     } else if is_border {
         let m = config::TERRITORY_BORDER_RGB_MULTIPLIER;
         Color::srgba(base[0] * m, base[1] * m, base[2] * m, 1.0)

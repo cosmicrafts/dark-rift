@@ -1,20 +1,56 @@
 use bevy::prelude::Resource;
 use serde::{Deserialize, Serialize};
+use bitfield::bitfield;
+
+bitfield! {
+    /// Represents immutable terrain data for a single map tile using a compact bitfield.
+    /// Matches the TypeScript implementation's bit layout.
+    #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct MapTile(u8);
+    impl Debug;
+    pub is_land, _: 7;           // Bit 7: Is this a land tile?
+    pub is_shoreline, _: 6;      // Bit 6: Is this on a shoreline?
+    pub is_ocean, _: 5;          // Bit 5: Is this ocean water?
+    pub u8, magnitude, _: 4, 0;  // Bits 0-4: Terrain magnitude (0-31)
+}
+
+impl MapTile {
+    pub fn from_byte(byte: u8) -> Self { MapTile(byte) }
+    pub fn as_byte(&self) -> u8 { self.0 }
+    pub fn is_water(&self) -> bool { !self.is_land() }
+    
+    pub fn terrain_type(&self) -> TerrainType {
+        if self.is_land() {
+            let magnitude = self.magnitude();
+            if magnitude < 10 {
+                TerrainType::Land
+            } else if magnitude < 20 {
+                TerrainType::Highland
+            } else {
+                TerrainType::Mountain
+            }
+        } else if self.is_ocean() {
+            TerrainType::Water
+        } else {
+            TerrainType::Lake
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerrainType {
-    Plains,
+    Water,
+    Lake,
+    Land,
     Highland,
     Mountain,
-    Lake,
-    Ocean,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Resource)]
 pub struct GameMap {
     pub width: u32,
     pub height: u32,
-    pub terrain: Vec<u8>,
+    pub terrain: Vec<MapTile>,
     pub state: Vec<u16>,
 }
 
@@ -26,7 +62,7 @@ impl GameMap {
         Self {
             width,
             height,
-            terrain: vec![0; size],
+            terrain: vec![MapTile::from_byte(0b10000000); size], // Default to Land
             state: vec![0; size],
         }
     }
@@ -37,13 +73,7 @@ impl GameMap {
 
     pub fn terrain_type(&self, x: u32, y: u32) -> TerrainType {
         let r = self.ref_id(x, y);
-        match self.terrain[r] {
-            1 => TerrainType::Highland,
-            2 => TerrainType::Mountain,
-            3 => TerrainType::Lake,
-            4 => TerrainType::Ocean,
-            _ => TerrainType::Plains,
-        }
+        self.terrain[r].terrain_type()
     }
 
     pub fn is_valid_coord(&self, x: i32, y: i32) -> bool {
