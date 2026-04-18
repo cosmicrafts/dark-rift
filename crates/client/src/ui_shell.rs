@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::ui_layers::HUD_SHELL;
 use crate::ui_theme::{BUTTON_RADIUS, PANEL_RADIUS, SPACE_2, SPACE_3, SPACE_4};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,6 +52,8 @@ pub struct HudBottomSheetRegion;
 #[derive(Component)]
 pub struct HudActionDockRegion;
 
+/// Spawns [`HudShellRoot`] at [`crate::ui_layers::HUD_SHELL`]. Child order under each region is
+/// paint order for that region only; cross-menu stacking uses `GlobalZIndex` in `ui_layers.rs`.
 pub fn setup_hud_shell(mut commands: Commands) {
     let root = commands
         .spawn((
@@ -63,7 +66,7 @@ pub fn setup_hud_shell(mut commands: Commands) {
                 bottom: Val::Px(0.0),
                 ..default()
             },
-            GlobalZIndex(800),
+            GlobalZIndex(HUD_SHELL),
         ))
         .id();
 
@@ -149,9 +152,14 @@ pub fn system_apply_ui_shell_layout(
     {
         let mut top_q = regions.p0();
         let Ok(mut top) = top_q.single_mut() else { return };
+        // Full-width top strip: diagnostics left, EXIT right (children use SpaceBetween).
+        top.left = Val::Px(state.inset_left);
         top.right = Val::Px(state.inset_right);
         top.top = Val::Px(state.inset_top);
-        top.max_width = Val::Px((state.width * 0.92).max(220.0).min(360.0));
+        top.flex_direction = FlexDirection::Row;
+        top.justify_content = JustifyContent::SpaceBetween;
+        top.align_items = AlignItems::Center;
+        top.column_gap = Val::Px(SPACE_2);
     }
 
     {

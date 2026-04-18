@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use dark_rift_shared::player::PlayerType;
 use dark_rift_shared::protocol::*;
+use crate::ui_layers::LOBBY_BROWSER;
 use crate::{ClientSettings, Cli, rand_client_id};
 use crate::ui_theme::*;
 use lightyear::prelude::{MessageReceiver, MessageSender};
@@ -51,7 +52,7 @@ pub fn setup_lobby_browser(
             align_items: AlignItems::Center,
             ..default()
         },
-        ZIndex(300),
+        GlobalZIndex(LOBBY_BROWSER),
         BackgroundColor(Color::srgba(0.01, 0.02, 0.05, 0.95)),
     )).with_children(|p| {
         p.spawn((

@@ -48,7 +48,7 @@ pub struct GameConfig {
 impl Default for GameConfig {
     fn default() -> Self {
         Self {
-            max_players: 2,
+            max_players: 150,
             bot_count: 150,
             bot_difficulty: BotDifficulty::Vanilla,
             map_name: "europe".to_string(),

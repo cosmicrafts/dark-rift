@@ -10,6 +10,7 @@
 //!   7. Tile visuals updated from game.events (event-driven, O(events) not O(map))
 
 use bevy::prelude::*;
+use bevy::app::AppExit;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::text::FontWeight;
 use bevy::ui::RelativeCursorPosition;
@@ -46,10 +47,12 @@ use dark_rift_shared::protocol::*;
 use dark_rift_shared::pseudo_random::PseudoRandom;
 
 mod settings;
+mod ui_layers;
 mod ui_shell;
 mod ui_theme;
 mod ui_lobby_browser;
 use settings::*;
+use ui_layers::GAME_OVER;
 use ui_shell::*;
 use ui_theme::*;
 use ui_lobby_browser::*;
@@ -94,7 +97,7 @@ const PERF_OVERLAY_NET_INTERVAL: Duration = Duration::from_millis(1600);
 
 /// Simulation ticks applied per Bevy frame while draining `PendingTicks`.
 /// Previously up to 100/frame caused multi‑second stalls and huge `GameEvent` batches.
-const CLIENT_CATCHUP_MAX_TICKS_PER_FRAME: u32 = 8;
+const CLIENT_CATCHUP_MAX_TICKS_PER_FRAME: u32 = 3;
 
 // ─── Resources ──────────────────────────────────────────────────────────────
 
@@ -135,6 +138,9 @@ struct TurnQueue(std::collections::VecDeque<Turn>);
 
 #[derive(Component)]
 struct HomeButton;
+
+#[derive(Component)]
+struct ExitButton;
 
 #[derive(Component)]
 struct HudText;
@@ -180,13 +186,19 @@ struct PlayerLabel(u16);
 #[derive(Component)]
 struct PlayerLabelRenderCache(f32);
 
-/// Ephemeral “command ping” mesh when issuing an attack (player-colored, pop-in scale).
+/// Root of the attack “ping”: scales as one unit; children are mesh + troop label.
 #[derive(Component)]
 struct AttackCommandRing {
     elapsed: f32,
     /// Territory RGB for the ring tint (matches `Player::color`).
     rgb: [f32; 3],
 }
+
+#[derive(Component)]
+struct AttackPingMesh;
+
+#[derive(Component)]
+struct AttackPingTroopLabel;
 
 #[derive(Resource)]
 struct AttackRingMesh(Handle<Mesh>);
@@ -506,6 +518,7 @@ fn main() {
             system_attack_ratio_keyboard,
             system_attack_ratio_slider_drag,
             player_click,
+            system_exit_button,
             system_home_button,
             handle_tile_change,
             system_animate_tile_colors,
@@ -700,20 +713,22 @@ fn setup_offline(
     mut overlay: ResMut<OverlayDiagnostics>,
     shell: Res<HudShellRegions>,
 ) {
-    commands.spawn((
+    let mut cam = commands.spawn((
         Camera2d,
         Tonemapping::TonyMcMapface,
-        Bloom {
-            intensity: 0.15,
-            composite_mode: BloomCompositeMode::Additive,
-            ..default()
-        },
         Transform::from_xyz(
             director.record.config.map_width as f32 * TILE_SIZE / 2.0,
             director.record.config.map_height as f32 * TILE_SIZE / 2.0,
             999.0
         ),
     ));
+    if settings.config.visuals.hdr_bloom_enabled() {
+        cam.insert(Bloom {
+            intensity: 0.15,
+            composite_mode: BloomCompositeMode::Additive,
+            ..default()
+        });
+    }
 
     overlay.status_line = "Replay Mode".to_string();
     overlay.ping_value = "offline".to_string();
@@ -722,8 +737,10 @@ fn setup_offline(
         .spawn((
             ChildOf(shell.top_bar),
             Node {
+                align_self: AlignSelf::FlexStart,
                 width: Val::Auto,
-                min_width: Val::Px(228.0),
+                min_width: Val::Px(200.0),
+                max_width: Val::Percent(72.0),
                 padding: UiRect::all(Val::Px(8.0)),
                 border: UiRect::all(Val::Px(1.0)),
                 border_radius: BorderRadius::all(Val::Px(8.0)),
@@ -742,6 +759,36 @@ fn setup_offline(
                     ..default()
                 },
                 TextColor(text_secondary()),
+            ));
+        });
+
+    commands
+        .spawn((
+            ChildOf(shell.top_bar),
+            Node {
+                align_self: AlignSelf::FlexStart,
+                width: Val::Px(100.0),
+                height: Val::Px(60.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(Val::Px(4.0)),
+                border_radius: BorderRadius::all(Val::Px(12.0)),
+                ..default()
+            },
+            Button,
+            ExitButton,
+            BackgroundColor(accent_danger()),
+            BorderColor::all(accent_danger_border()),
+        ))
+        .with_children(|b| {
+            b.spawn((
+                Text::new("EXIT"),
+                TextFont {
+                    font: settings.font.clone(),
+                    font_size: 22.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
             ));
         });
 
@@ -767,7 +814,7 @@ fn setup_offline(
 
 fn setup_live(
     mut commands: Commands,
-    cli: Res<Cli>,
+    _cli: Res<Cli>,
     settings: Res<ClientSettings>,
     mut overlay: ResMut<OverlayDiagnostics>,
     shell: Res<HudShellRegions>,
@@ -793,8 +840,10 @@ fn setup_live(
         .spawn((
             ChildOf(shell.top_bar),
             Node {
+                align_self: AlignSelf::FlexStart,
                 width: Val::Auto,
-                min_width: Val::Px(228.0),
+                min_width: Val::Px(200.0),
+                max_width: Val::Percent(72.0),
                 padding: UiRect::all(Val::Px(8.0)),
                 border: UiRect::all(Val::Px(1.0)),
                 border_radius: BorderRadius::all(Val::Px(8.0)),
@@ -816,7 +865,37 @@ fn setup_live(
             ));
         });
 
-    // Home Button
+    commands
+        .spawn((
+            ChildOf(shell.top_bar),
+            Node {
+                align_self: AlignSelf::FlexStart,
+                width: Val::Px(100.0),
+                height: Val::Px(60.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(Val::Px(4.0)),
+                border_radius: BorderRadius::all(Val::Px(12.0)),
+                ..default()
+            },
+            Button,
+            ExitButton,
+            BackgroundColor(accent_danger()),
+            BorderColor::all(accent_danger_border()),
+        ))
+        .with_children(|b| {
+            b.spawn((
+                Text::new("EXIT"),
+                TextFont {
+                    font: settings.font.clone(),
+                    font_size: 22.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            ));
+        });
+
+    // Home Button (gameplay dock)
     commands.spawn((
         ChildOf(shell.action_dock),
         Node {
@@ -832,10 +911,15 @@ fn setup_live(
         HomeButton,
         BackgroundColor(accent_home()),
         BorderColor::all(Color::WHITE),
-    )).with_children(|b| {
+    ))
+    .with_children(|b| {
         b.spawn((
             Text::new("HOME"),
-            TextFont { font_size: 24.0, ..default() },
+            TextFont {
+                font: settings.font.clone(),
+                font_size: 24.0,
+                ..default()
+            },
             TextColor(Color::WHITE),
         ));
     });
@@ -1411,6 +1495,7 @@ fn player_click(
     game_opt:    Option<Res<GameState>>,
     my_id:       Res<MyPlayerId>,
     attack_ratio: Res<AttackRatio>,
+    settings:    Res<ClientSettings>,
     bottom_hud_hit: Query<&RelativeCursorPosition, With<BottomHudRoot>>,
     mut senders: Query<&mut MessageSender<ClientGameplayMessage>>,
     local_buf: Option<ResMut<LocalIntentBuffer>>,
@@ -1435,27 +1520,52 @@ fn player_click(
     let target_owner = game.map.owner_id(x, y);
     if target_owner == pid { return; }
 
-    let wx = (x as f32 + 0.5) * TILE_SIZE;
-    let wy = (y as f32 + 0.5) * TILE_SIZE;
-    let [r, g, b] = player.color;
-    let mat = materials.add(ColorMaterial::from_color(Color::srgba(r, g, b, 0.97)));
-    commands.spawn((
-        AttackCommandRing {
-            elapsed: 0.0,
-            rgb: player.color,
-        },
-        InGameEntity,
-        Mesh2d(ring_mesh.0.clone()),
-        MeshMaterial2d(mat),
-        Transform::from_xyz(wx, wy, 260.0).with_scale(Vec3::ZERO),
-    ));
-
     let ratio = attack_ratio.0.clamp(0.01, 1.0) as f64;
     let send_floor = (player.troops * ratio).floor();
     let send = send_floor.max(0.0).min(player.troops);
     if send < config::EXPAND_COST {
         return;
     }
+
+    let wx = (x as f32 + 0.5) * TILE_SIZE;
+    let wy = (y as f32 + 0.5) * TILE_SIZE;
+    let [r, g, b] = player.color;
+    let mat = materials.add(ColorMaterial::from_color(Color::srgba(r, g, b, 0.97)));
+    let label = format!("{:.0}", send);
+    let ox = TILE_SIZE * 1.75;
+    let oy = TILE_SIZE * 0.35;
+
+    // One root transform (same pop as before): mesh + Text2d as children so the number inherits scale.
+    commands
+        .spawn((
+            AttackCommandRing {
+                elapsed: 0.0,
+                rgb: player.color,
+            },
+            InGameEntity,
+            Transform::from_xyz(wx, wy, 260.0).with_scale(Vec3::ZERO),
+        ))
+        .with_children(|root| {
+            root.spawn((
+                AttackPingMesh,
+                Mesh2d(ring_mesh.0.clone()),
+                MeshMaterial2d(mat),
+                Transform::default(),
+            ));
+            root.spawn((
+                AttackPingTroopLabel,
+                Text2d::new(label),
+                TextFont {
+                    font: settings.font.clone(),
+                    font_size: 28.0,
+                    weight: FontWeight::BOLD,
+                    ..default()
+                },
+                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.98)),
+                TextLayout::new_with_justify(Justify::Left),
+                Transform::from_xyz(ox, oy, 2.0),
+            ));
+        });
 
     let intent = GameplayIntent::Attack(AttackIntent {
         target_owner,
@@ -1485,16 +1595,13 @@ const ATTACK_COMMAND_RING_LIFETIME: f32 = 0.38;
 fn system_animate_attack_command_rings(
     time: Res<Time>,
     mut commands: Commands,
-    mut q: Query<(
-        Entity,
-        &mut AttackCommandRing,
-        &mut Transform,
-        &MeshMaterial2d<ColorMaterial>,
-    )>,
+    mut q: Query<(Entity, &mut AttackCommandRing, &mut Transform, &Children)>,
+    mesh_q: Query<&MeshMaterial2d<ColorMaterial>, With<AttackPingMesh>>,
+    mut text_color_q: Query<&mut TextColor, With<AttackPingTroopLabel>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     let dt = time.delta_secs();
-    for (entity, mut ring, mut transform, mat_h) in &mut q {
+    for (entity, mut ring, mut transform, children) in &mut q {
         ring.elapsed += dt;
         let t = ring.elapsed;
         if t >= ATTACK_COMMAND_RING_LIFETIME {
@@ -1513,8 +1620,44 @@ fn system_animate_attack_command_rings(
 
         let fade = damp.powf(1.15);
         let [r, g, b] = ring.rgb;
-        if let Some(mat) = materials.get_mut(&mat_h.0) {
-            mat.color = Color::srgba(r, g, b, 0.97 * fade);
+
+        for child in children.iter() {
+            if let Ok(mat_h) = mesh_q.get(child) {
+                if let Some(mat) = materials.get_mut(&mat_h.0) {
+                    mat.color = Color::srgba(r, g, b, 0.97 * fade);
+                }
+            }
+            if let Ok(mut tc) = text_color_q.get_mut(child) {
+                *tc = TextColor(Color::srgba(
+                    1.0,
+                    1.0,
+                    1.0,
+                    (0.25 + 0.75 * fade).clamp(0.0, 1.0),
+                ));
+            }
+        }
+    }
+}
+
+fn system_exit_button(
+    mut interaction_q: Query<
+        (&Interaction, &mut BackgroundColor),
+        (Changed<Interaction>, With<ExitButton>),
+    >,
+    mut exit: MessageWriter<AppExit>,
+) {
+    for (interaction, mut color) in interaction_q.iter_mut() {
+        match *interaction {
+            Interaction::Pressed => {
+                *color = Color::srgb(0.28, 0.1, 0.08).into();
+                exit.write(AppExit::Success);
+            }
+            Interaction::Hovered => {
+                *color = Color::srgb(0.72, 0.28, 0.24).into();
+            }
+            Interaction::None => {
+                *color = accent_danger().into();
+            }
         }
     }
 }
@@ -1559,19 +1702,28 @@ fn system_home_button(
 
 // ─── Visual ──────────────────────────────────────────────────────────────────
 
+/// Max fresh tiles tracked for expansion glow. Prevents GPU thrash when 200+ bots expand simultaneously.
+const MAX_FRESH_TILES: usize = 512;
+
 fn handle_tile_change(
     game_opt:    Option<ResMut<GameState>>,
     mut fresh_tiles: ResMut<FreshlyPaintedTiles>,
     chunk_lookup: Option<Res<ChunkLookup>>,
     mut chunks:  Query<(&ChunkIndex, &mut TilemapChunkTileData)>,
+    settings: Res<ClientSettings>,
 ) {
     let Some(mut game) = game_opt else { return };
     if !game.is_changed() { return; }
     let Some(lookup) = chunk_lookup else { return; };
 
+    let animations_on = settings.config.visuals.territory_expansion_animations_enabled();
+
     for ev in &game.events {
         if let GameEvent::TileCaptured { x, y, new_owner: _ } = ev {
-            fresh_tiles.tiles.insert((*x, *y), 1.0);
+            // Only track fresh tiles when animations are enabled and under the cap
+            if animations_on && fresh_tiles.tiles.len() < MAX_FRESH_TILES {
+                fresh_tiles.tiles.insert((*x, *y), 1.0);
+            }
 
             let coords = [
                 (*x as i32, *y as i32),
@@ -1718,6 +1870,7 @@ fn system_apply_responsive_hud_layout(
         Query<&mut Node, With<AttackRatioTrack>>,
         Query<&mut Node, With<OutgoingRowsContainer>>,
         Query<&mut Node, (With<HomeButton>, With<Button>)>,
+        Query<&mut Node, (With<ExitButton>, With<Button>)>,
     )>,
 ) {
     let compact = matches!(ui_shell.breakpoint, UiBreakpoint::Compact);
@@ -1746,12 +1899,23 @@ fn system_apply_responsive_hud_layout(
         outgoing_node.max_height = Val::Px(if compact { 180.0 } else { 220.0 });
     }
 
-    let mut home_q = nodes.p3();
-    if let Ok(mut home_node) = home_q.single_mut() {
-        let size = home_button_size_for_breakpoint(ui_shell.breakpoint);
-        home_node.width = Val::Px(home_button_width_for_breakpoint(ui_shell.breakpoint));
-        home_node.height = Val::Px(size);
-        home_node.border_radius = BorderRadius::all(Val::Px(if compact { 10.0 } else { 12.0 }));
+    {
+        let mut home_q = nodes.p3();
+        if let Ok(mut home_node) = home_q.single_mut() {
+            let size = home_button_size_for_breakpoint(ui_shell.breakpoint);
+            home_node.width = Val::Px(home_button_width_for_breakpoint(ui_shell.breakpoint));
+            home_node.height = Val::Px(size);
+            home_node.border_radius = BorderRadius::all(Val::Px(if compact { 10.0 } else { 12.0 }));
+        }
+    }
+    {
+        let mut exit_q = nodes.p4();
+        if let Ok(mut exit_node) = exit_q.single_mut() {
+            let size = home_button_size_for_breakpoint(ui_shell.breakpoint);
+            exit_node.width = Val::Px(home_button_width_for_breakpoint(ui_shell.breakpoint));
+            exit_node.height = Val::Px(size);
+            exit_node.border_radius = BorderRadius::all(Val::Px(if compact { 10.0 } else { 12.0 }));
+        }
     }
 }
 
@@ -2490,7 +2654,7 @@ fn system_evaluate_game_over(
                 align_items: AlignItems::Center,
                 ..default()
             },
-            ZIndex(500),
+            GlobalZIndex(GAME_OVER),
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.8)),
         )).with_children(|p| {
             p.spawn((

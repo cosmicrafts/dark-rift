@@ -30,7 +30,7 @@ use dark_rift_shared::protocol::*;
 const TURN_INTERVAL_MS: f32 = 40.0;
 
 /// Auto-start timer when lobby reaches top of queue 
-const LOBBY_COUNTDOWN_SECS: f32 = 10.0;
+const LOBBY_COUNTDOWN_SECS: f32 = 15.0;
 
 // ─── Componentes del Lobby (Phase 1) ────────────────────────────────────────
 
@@ -223,7 +223,7 @@ fn system_master_lobby(
                         let prefixes = ["Akkadian", "Scythian", "Roman", "Greek", "Spartan", "Persian", "Minoan", "Etruscan", "Celtic", "Gallic", "Thracian", "Dacian", "Sumerian"];
                         let suffixes = ["Tribe", "Empire", "Kingdom", "Horde", "Clan", "Legion"];
                         
-                        for i in 0..bot_count {
+                        for _i in 0..bot_count {
                             let player_id = (roster.0.len() + 1) as u16;
                             let color = dark_rift_shared::player::bot_territory_color(meta.seed, player_id);
                             
@@ -287,7 +287,7 @@ fn system_lobby_gc(
 fn system_broadcast_lobbies(
     time: Res<Time>,
     mut next_broadcast: Local<f32>,
-    q_lobbies: Query<(&Lobby, &StatePhase, &MatchRoster, Option<&CountdownTimer>)>,
+    q_lobbies: Query<(&Lobby, &StatePhase, &MatchRoster, &MatchMetadata, Option<&CountdownTimer>)>,
     mut senders: Query<&mut MessageSender<ServerLobbiesBroadcastMessage>>,
 ) {
     *next_broadcast += time.delta_secs();
@@ -295,7 +295,7 @@ fn system_broadcast_lobbies(
     *next_broadcast -= 0.5;
     
     let mut infos = Vec::new();
-    for (lobby, phase, roster, timer) in q_lobbies.iter() {
+    for (lobby, phase, roster, meta, timer) in q_lobbies.iter() {
         if phase.0 == LobbyPhase::Active || phase.0 == LobbyPhase::Finished { continue; }
         
         let timer_secs = if let Some(t) = timer {
@@ -309,7 +309,7 @@ fn system_broadcast_lobbies(
         infos.push(LobbyInfo {
             id: lobby.id,
             num_players: roster.0.len() as u8,
-            max_players: 4,
+            max_players: meta.config.max_players as u8,
             is_counting_down: phase.0 == LobbyPhase::CountingDown,
             timer_secs,
             player_names,
