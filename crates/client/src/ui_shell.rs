@@ -157,13 +157,14 @@ pub fn system_apply_ui_shell_layout(
     {
         let mut bottom_q = regions.p1();
         let Ok(mut bottom) = bottom_q.single_mut() else { return };
+        // Same bottom inset as the action dock so combat HUD sits flush with HOME vertically.
+        // Reserve the bottom-right corner so the centered column does not sit under the HOME button.
+        let home_reserve = home_button_width_for_breakpoint(state.breakpoint) + SPACE_2;
         bottom.left = Val::Px(state.inset_left);
-        bottom.right = Val::Px(state.inset_right);
-        bottom.bottom = Val::Px(match state.breakpoint {
-            UiBreakpoint::Compact => state.inset_bottom + 56.0,
-            UiBreakpoint::Medium => state.inset_bottom + 72.0,
-            UiBreakpoint::Wide => state.inset_bottom + 86.0,
-        });
+        bottom.right = Val::Px(state.inset_right + home_reserve);
+        bottom.bottom = Val::Px(state.inset_bottom);
+        bottom.flex_direction = FlexDirection::Column;
+        bottom.justify_content = JustifyContent::FlexEnd;
         bottom.align_items = AlignItems::Center;
     }
 
@@ -172,6 +173,22 @@ pub fn system_apply_ui_shell_layout(
         let Ok(mut dock) = dock_q.single_mut() else { return };
         dock.right = Val::Px(state.inset_right);
         dock.bottom = Val::Px(state.inset_bottom);
+    }
+}
+
+/// HOME hit box width (matches `system_apply_responsive_hud_layout` in `main.rs`).
+#[inline]
+pub fn home_button_width_for_breakpoint(bp: UiBreakpoint) -> f32 {
+    home_button_size_for_breakpoint(bp) * 1.6
+}
+
+/// HOME hit box height (square side used for width = side × 1.6).
+#[inline]
+pub fn home_button_size_for_breakpoint(bp: UiBreakpoint) -> f32 {
+    match bp {
+        UiBreakpoint::Compact => 44.0,
+        UiBreakpoint::Medium => 52.0,
+        UiBreakpoint::Wide => 60.0,
     }
 }
 

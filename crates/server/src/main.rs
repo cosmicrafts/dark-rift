@@ -155,18 +155,19 @@ fn system_master_lobby(
     mut commands: Commands,
     mut id_gen: ResMut<MasterLobbyIdGen>,
     time: Res<Time>,
-    mut q_lobbies: Query<(Entity, &Lobby, &mut StatePhase, &MatchRoster, Option<&mut CountdownTimer>)>,
+    mut q_lobbies: Query<(Entity, &Lobby, &mut StatePhase, &mut MatchRoster, &MatchMetadata, Option<&mut CountdownTimer>)>,
 ) {
     let mut lobby_phases = Vec::new();
     
-    for (entity, _lobby, phase, _roster, _timer) in q_lobbies.iter() {
+    for (entity, _lobby, phase, _roster, _meta, _timer) in q_lobbies.iter() {
         if phase.0 == LobbyPhase::Waiting || phase.0 == LobbyPhase::CountingDown {
             lobby_phases.push((entity, phase.0));
         }
     }
     
-    // Regla 1: Asegurar exactamente 2 lobbies
-    while lobby_phases.len() < 2 {
+    // Regla 1: Un solo lobby en cola (Waiting / CountingDown). Evita duplicar tarjetas en el cliente
+    // y coincide con el join que prioriza una sala canónica.
+    while lobby_phases.len() < 1 {
         let lobby_id = id_gen.0;
         id_gen.0 += 1;
         
@@ -196,7 +197,7 @@ fn system_master_lobby(
     if !has_counting_down {
         if let Some((first_waiting_entity, _)) = lobby_phases.iter().find(|(_, p)| *p == LobbyPhase::Waiting) {
             commands.entity(*first_waiting_entity).insert(CountdownTimer(Timer::from_seconds(LOBBY_COUNTDOWN_SECS, TimerMode::Once)));
-            if let Ok((_, _, mut phase, _, _)) = q_lobbies.get_mut(*first_waiting_entity) {
+            if let Ok((_, _, mut phase, _, _, _)) = q_lobbies.get_mut(*first_waiting_entity) {
                 phase.0 = LobbyPhase::CountingDown;
             }
             info!("⏳  [Master] Lobby Promovido a CountingDown (comienza la cuenta regresiva)");
@@ -204,17 +205,50 @@ fn system_master_lobby(
     }
     
     // Tick y progreso a Active
-    for (entity, lobby, mut phase, roster, timer_opt) in q_lobbies.iter_mut() {
+    for (entity, lobby, mut phase, mut roster, meta, timer_opt) in q_lobbies.iter_mut() {
         if phase.0 == LobbyPhase::CountingDown {
             if let Some(mut timer) = timer_opt {
                 timer.0.tick(time.delta());
                 
-                // Si el timer termina o se llena el lobby (4 max)
-                if timer.0.just_finished() || roster.0.len() >= 4 {
+                // Si el timer termina o se llena el lobby (150 max)
+                if timer.0.just_finished() || roster.0.len() >= 150 {
                     phase.0 = LobbyPhase::Active;
                     commands.entity(entity).remove::<CountdownTimer>();
                     commands.entity(entity).insert(ActiveEmptyTimer(Timer::from_seconds(30.0, TimerMode::Once)));
-                    info!("⚔️  [Master] Lobby {} es ahora ACTIVE con {} jugadores!", lobby.id, roster.0.len());
+                    
+                    // Spawn Tribal Bots locally in the server
+                    let bot_count = meta.config.bot_count;
+                    if bot_count > 0 {
+                        info!("🤖 Spawning {} Tribal Bots into Lobby {}...", bot_count, lobby.id);
+                        let prefixes = ["Akkadian", "Scythian", "Roman", "Greek", "Spartan", "Persian", "Minoan", "Etruscan", "Celtic", "Gallic", "Thracian", "Dacian", "Sumerian"];
+                        let suffixes = ["Tribe", "Empire", "Kingdom", "Horde", "Clan", "Legion"];
+                        
+                        for i in 0..bot_count {
+                            let player_id = (roster.0.len() + 1) as u16;
+                            let color = dark_rift_shared::player::bot_territory_color(meta.seed, player_id);
+                            
+                            let mut rng = dark_rift_shared::pseudo_random::PseudoRandom::new(meta.seed.wrapping_add(player_id as u64));
+                            let p_idx = rng.next_int(0, prefixes.len() as i32) as usize;
+                            let s_idx = rng.next_int(0, suffixes.len() as i32) as usize;
+                            let mut bot_name = format!("👤 {} {}", prefixes[p_idx], suffixes[s_idx]);
+                            
+                            let (sx, sy, nation_opt) = pick_spawn(&roster, player_id, meta);
+                            if let Some(nation_name) = nation_opt {
+                                bot_name = nation_name;
+                            }
+                            
+                            roster.0.push(PlayerInfo {
+                                id: player_id,
+                                name: bot_name,
+                                player_type: dark_rift_shared::player::PlayerType::Bot,
+                                color,
+                                spawn_x: sx,
+                                spawn_y: sy,
+                            });
+                        }
+                    }
+                    
+                    info!("⚔️  [Master] Lobby {} es ahora ACTIVE con {} jugadores (incluyendo bots)!", lobby.id, roster.0.len());
                 }
             }
         }
@@ -281,6 +315,8 @@ fn system_broadcast_lobbies(
             player_names,
         });
     }
+
+    infos.sort_by_key(|l| l.id);
     
     let msg = ServerLobbiesBroadcastMessage { lobbies: infos };
     for mut sender in senders.iter_mut() {
@@ -360,7 +396,7 @@ fn handle_client_joins(
                     msg.name.clone()
                 };
 
-                roster.0.push(PlayerInfo { id: player_id, name: final_name.clone(), color, spawn_x: sx, spawn_y: sy });
+                roster.0.push(PlayerInfo { id: player_id, name: final_name.clone(), player_type: dark_rift_shared::player::PlayerType::Human, color, spawn_x: sx, spawn_y: sy });
                 info!("✅ {} (id={}) se unió al Match ID {:?} → spawn({},{})", final_name, player_id, lobby.id, sx, sy);
             }
             registry.clients.insert(client_entity, (match_entity, assigned_id));

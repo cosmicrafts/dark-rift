@@ -98,6 +98,7 @@ pub struct ReplayFile {
 pub struct PlayerInfo {
     pub id: u16,
     pub name: String,
+    pub player_type: crate::player::PlayerType,
     pub color: [f32; 3],
     pub spawn_x: u32,
     pub spawn_y: u32,

@@ -49,7 +49,7 @@ impl Default for GameConfig {
     fn default() -> Self {
         Self {
             max_players: 2,
-            bot_count: 4,
+            bot_count: 150,
             bot_difficulty: BotDifficulty::Vanilla,
             map_name: "europe".to_string(),
             map_width: 2904,

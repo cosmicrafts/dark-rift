@@ -1242,49 +1242,15 @@ fn start_game_core(
                 game.map = map;
             }
             for info in &msg.players {
-                let player = Player::new_human(info.id, info.name.clone(), info.color);
-                game.spawn_player(player, info.spawn_x, info.spawn_y);
-            }
-
-            // Spawn deterministic bots (Tribes)
-            let mut rng = PseudoRandom::new(msg.seed);
-            for i in 0..msg.config.bot_count {
-                let bot_id = 100 + i as u16;
-                let mut tries = 0;
-                let (mut sx, mut sy) = (0, 0);
-                
-                while tries < 1000 {
-                    sx = rng.next_int(0, msg.config.map_width as i32) as u32;
-                    sy = rng.next_int(0, msg.config.map_height as i32) as u32;
-                    let mut valid = true;
-                    
-                    // Check radius 15 clearance from map edge and any owned tiles
-                    for dy in -15..=15 {
-                        for dx in -15..=15 {
-                            let nx = sx as i32 + dx;
-                            let ny = sy as i32 + dy;
-                            if !game.map.is_valid_coord(nx, ny) || game.map.owner_id(nx as u32, ny as u32) != 0 {
-                                valid = false;
-                                break;
-                            }
-                        }
-                        if !valid { break; }
+                let player = match info.player_type {
+                    dark_rift_shared::player::PlayerType::Human => {
+                        Player::new_human(info.id, info.name.clone(), info.color)
                     }
-                    if valid { break; }
-                    tries += 1;
-                }
-
-                if tries < 1000 {
-                    let player = Player::new_bot(
-                        bot_id,
-                        format!("Tribe {}", i + 1),
-                        bot_territory_color(msg.seed, bot_id),
-                    );
-                    game.spawn_player(player, sx, sy);
-                    info!("🤖 Spawned Tribe {} at {},{}", bot_id, sx, sy);
-                } else {
-                    warn!("⚠️ Failed to spawn Tribe {} (no space)", bot_id);
-                }
+                    dark_rift_shared::player::PlayerType::Bot => {
+                        Player::new_bot(info.id, info.name.clone(), info.color)
+                    }
+                };
+                game.spawn_player(player, info.spawn_x, info.spawn_y);
             }
 
             // Replay missed turns (late-join) — identical behavior to OpenFront
@@ -1782,12 +1748,8 @@ fn system_apply_responsive_hud_layout(
 
     let mut home_q = nodes.p3();
     if let Ok(mut home_node) = home_q.single_mut() {
-        let size = match ui_shell.breakpoint {
-            UiBreakpoint::Compact => 44.0,
-            UiBreakpoint::Medium => 52.0,
-            UiBreakpoint::Wide => 60.0,
-        };
-        home_node.width = Val::Px(size * 1.6);
+        let size = home_button_size_for_breakpoint(ui_shell.breakpoint);
+        home_node.width = Val::Px(home_button_width_for_breakpoint(ui_shell.breakpoint));
         home_node.height = Val::Px(size);
         home_node.border_radius = BorderRadius::all(Val::Px(if compact { 10.0 } else { 12.0 }));
     }

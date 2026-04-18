@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use dark_rift_shared::player::PlayerType;
 use dark_rift_shared::protocol::*;
 use crate::{ClientSettings, Cli, rand_client_id};
 use crate::ui_theme::*;
@@ -142,6 +143,22 @@ pub fn setup_lobby_browser(
 }
 
 /// Hide offline single-player while the player is in a multiplayer lobby queue (cards hidden).
+/// Which lobby to show in the browser: same priority as server `handle_client_joins`
+/// (countdown first, else lowest id among waiting). Stable if the server ever sends more than one.
+fn primary_lobby_for_browser(lobbies: &[LobbyInfo]) -> Option<LobbyInfo> {
+    if lobbies.is_empty() {
+        return None;
+    }
+    let mut counting: Vec<&LobbyInfo> = lobbies.iter().filter(|l| l.is_counting_down).collect();
+    if !counting.is_empty() {
+        counting.sort_by_key(|l| l.id);
+        return Some(counting[0].clone());
+    }
+    let mut waiting: Vec<&LobbyInfo> = lobbies.iter().collect();
+    waiting.sort_by_key(|l| l.id);
+    Some(waiting[0].clone())
+}
+
 pub fn system_sync_single_player_button_visibility(
     joined: Res<JoinedLobby>,
     mut q: Query<&mut Node, With<SinglePlayerButton>>,
@@ -205,14 +222,14 @@ pub fn system_update_lobby_browser(
                     }
                 }
                 
-                for lobby in msg.lobbies {
+                if let Some(lobby) = primary_lobby_for_browser(&msg.lobbies) {
                     let font = settings.font.clone();
                     let status_text = if lobby.is_counting_down {
                         format!("STARTING IN {:.0}s", lobby.timer_secs)
                     } else {
                         format!("WAITING FOR PLAYERS")
                     };
-                    
+
                     let is_counting = lobby.is_counting_down;
                     let bg_color = if is_counting { accent_primary() } else { panel_bg() };
 
@@ -232,14 +249,18 @@ pub fn system_update_lobby_browser(
                             },
                             BackgroundColor(bg_color),
                             BorderColor::all(panel_border()),
-                        )).with_children(|card| {
+                        ))
+                        .with_children(|card| {
                             card.spawn((
                                 Text::new(format!("LOBBY {}", lobby.id)),
                                 TextFont { font: font.clone(), font_size: 28.0, ..default() },
                                 TextColor(Color::WHITE),
                             ));
                             card.spawn((
-                                Text::new(format!("{}/{} Players Connected", lobby.num_players, lobby.max_players)),
+                                Text::new(format!(
+                                    "{}/{} Players Connected",
+                                    lobby.num_players, lobby.max_players
+                                )),
                                 TextFont { font: font.clone(), font_size: 16.0, ..default() },
                                 TextColor(text_primary()),
                             ));
@@ -250,11 +271,16 @@ pub fn system_update_lobby_browser(
                                     ..default()
                                 },
                                 BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
-                            )).with_children(|badge| {
+                            ))
+                            .with_children(|badge| {
                                 badge.spawn((
                                     Text::new(status_text),
                                     TextFont { font: font.clone(), font_size: 14.0, ..default() },
-                                    TextColor(if is_counting { Color::WHITE } else { text_secondary() }),
+                                    TextColor(if is_counting {
+                                        Color::WHITE
+                                    } else {
+                                        text_secondary()
+                                    }),
                                 ));
                             });
                         });
@@ -324,7 +350,14 @@ pub fn system_handle_single_player_click(
                     config,
                     my_player_id: Some(1),
                     seed: 42069,
-                    players: vec![PlayerInfo { id: 1, name: "LocalPlayer".to_string(), color: [1.0, 0.2, 0.2], spawn_x, spawn_y }],
+                    players: vec![PlayerInfo {
+                        id: 1,
+                        name: "LocalPlayer".to_string(),
+                        player_type: PlayerType::Human,
+                        color: [1.0, 0.2, 0.2],
+                        spawn_x,
+                        spawn_y,
+                    }],
                     missed_turns: vec![],
                 };
 
