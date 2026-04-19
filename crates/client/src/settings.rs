@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 fn default_true() -> bool { true }
@@ -99,7 +100,23 @@ impl Default for ProfileConfig {
 
 impl ProfileConfig {
     pub const NICKNAME_MAX_CHARS: usize = 24;
-    pub const FALLBACK_NICKNAME: &'static str = "Pilot";
+}
+
+/// Random default like `Anon318` (`Anon000`–`Anon999`). Safe on **wasm32** via workspace `getrandom` / `rand`.
+#[must_use]
+pub fn generate_default_anon_nickname() -> String {
+    let n = rand::thread_rng().gen_range(0..1000u32);
+    format!("Anon{n:03}")
+}
+
+/// If `profile.nickname` is empty/whitespace, assigns [`generate_default_anon_nickname`]. Returns whether it changed.
+pub fn assign_default_anon_if_nickname_empty(config: &mut ClientSettingsConfig) -> bool {
+    if config.profile.nickname.trim().is_empty() {
+        config.profile.nickname = generate_default_anon_nickname();
+        true
+    } else {
+        false
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -118,7 +135,7 @@ impl ClientSettingsConfig {
     pub fn display_nickname_for_play(&self) -> String {
         let trimmed = self.profile.nickname.trim();
         if trimmed.is_empty() {
-            return ProfileConfig::FALLBACK_NICKNAME.to_string();
+            return generate_default_anon_nickname();
         }
         trimmed
             .chars()
@@ -142,6 +159,7 @@ impl ClientSettingsConfig {
 
 /// Path to `assets/settings.ron` relative to the client crate (native read/write).
 #[must_use]
+#[allow(dead_code)]
 pub fn settings_ron_path() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/settings.ron")
 }
@@ -176,35 +194,48 @@ pub struct ClientSettings {
 }
 
 /// Builds config from disk (or defaults). No Bevy required — safe to call before app.run().
+///
+/// Empty `profile.nickname` becomes a random `Anon###` once; on **native** that value is written back to `settings.ron`.
 pub fn build_client_settings_config() -> ClientSettingsConfig {
-    #[cfg(target_arch = "wasm32")]
-    {
-        const EMBEDDED_SETTINGS: &str = include_str!("../../../assets/settings.ron");
-        match ron::from_str::<ClientSettingsConfig>(EMBEDDED_SETTINGS) {
-            Ok(c) => c,
-            Err(e) => {
-                bevy::log::warn!("embedded settings.ron parse error: {e}; using defaults");
-                ClientSettingsConfig::default()
-            }
-        }
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let ron_path = settings_ron_path();
-        match std::fs::read_to_string(&ron_path) {
-            Ok(s) => match ron::from_str::<ClientSettingsConfig>(&s) {
+    let mut config = {
+        #[cfg(target_arch = "wasm32")]
+        {
+            const EMBEDDED_SETTINGS: &str = include_str!("../../../assets/settings.ron");
+            match ron::from_str::<ClientSettingsConfig>(EMBEDDED_SETTINGS) {
                 Ok(c) => c,
                 Err(e) => {
-                    bevy::log::warn!("settings.ron parse error ({}): {}", ron_path.display(), e);
+                    bevy::log::warn!("embedded settings.ron parse error: {e}; using defaults");
                     ClientSettingsConfig::default()
                 }
-            },
-            Err(e) => {
-                bevy::log::warn!("Could not read {}: {}; using defaults", ron_path.display(), e);
-                ClientSettingsConfig::default()
             }
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let ron_path = settings_ron_path();
+            match std::fs::read_to_string(&ron_path) {
+                Ok(s) => match ron::from_str::<ClientSettingsConfig>(&s) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        bevy::log::warn!("settings.ron parse error ({}): {}", ron_path.display(), e);
+                        ClientSettingsConfig::default()
+                    }
+                },
+                Err(e) => {
+                    bevy::log::warn!("Could not read {}: {}; using defaults", ron_path.display(), e);
+                    ClientSettingsConfig::default()
+                }
+            }
+        }
+    };
+
+    if assign_default_anon_if_nickname_empty(&mut config) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Err(e) = save_client_settings_config(&config) {
+            bevy::log::warn!("Could not persist default Anon### nickname: {e}");
+        }
     }
+
+    config
 }
 
 /// System that patches the real font Handle into ClientSettings once Assets<Font> is available.

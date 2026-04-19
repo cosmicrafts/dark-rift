@@ -56,6 +56,7 @@ pub struct MatchMetadata {
     pub config: dark_rift_shared::game_config::GameConfig,
     pub map_cache: Option<dark_rift_shared::map::GameMap>,
     pub manifest_cache: Option<dark_rift_shared::map_loader::MapManifest>,
+
 }
 
 #[derive(Component)]
@@ -322,6 +323,7 @@ fn system_broadcast_lobbies(
             max_players: meta.config.max_players,
             is_counting_down: phase.0 == LobbyPhase::CountingDown,
             timer_secs,
+            map_name: meta.config.map_name.clone(),
             player_names,
         });
     }
@@ -402,7 +404,7 @@ fn handle_client_joins(
                 
                 let colors = player_colors();
                 let color = colors[(player_id as usize - 1) % colors.len()];
-                let (sx, sy, nation_opt) = pick_spawn(&roster, player_id, metadata);
+                let (sx, sy, _nation_opt) = pick_spawn(&roster, player_id, metadata);
 
                 let final_name = msg.name.clone();
 
@@ -419,6 +421,7 @@ fn handle_client_joins(
                         seed: metadata.seed,
                         players: roster.0.clone(),
                         missed_turns: log.turns.clone(),
+                        map_data: None,
                     };
                     info!("📨  Enviando ServerStartMessage (late-join) a {:?}", assigned_id);
                     let _ = sender.send::<ReliableChannel>(start_msg);
@@ -484,6 +487,7 @@ fn system_start_matches(
                             seed: meta.seed,
                             players: roster.0.clone(),
                             missed_turns: log.turns.clone(),
+                            map_data: None,
                         };
                         let _ = sender.send::<ReliableChannel>(start_msg);
                     }

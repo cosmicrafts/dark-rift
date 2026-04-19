@@ -137,7 +137,7 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                 BorderColor::all(menu_panel_border_glow()),
             ))
             .with_children(|panel| {
-                // ── Header: title (center) + profile (right) ─────────────────
+                // ── Header: title + version (centered) ───────────────────────
                 panel
                     .spawn(Node {
                         width: Val::Percent(100.0),
@@ -183,109 +183,11 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                                 ));
                             });
 
-                        header
-                            .spawn(Node {
-                                flex_grow: 1.0,
-                                min_width: Val::Px(0.0),
-                                flex_direction: FlexDirection::Row,
-                                justify_content: JustifyContent::FlexEnd,
-                                align_items: AlignItems::Center,
-                                ..default()
-                            })
-                            .with_children(|profile| {
-                                profile
-                                    .spawn((
-                                        Node {
-                                            flex_direction: FlexDirection::Row,
-                                            align_items: AlignItems::Center,
-                                            column_gap: Val::Px(12.0),
-                                            padding: UiRect::axes(Val::Px(16.0), Val::Px(10.0)),
-                                            border_radius: BorderRadius::all(Val::Px(999.0)),
-                                            border: UiRect::all(Val::Px(1.0)),
-                                            ..default()
-                                        },
-                                        BackgroundColor(Color::srgba(0.08, 0.1, 0.14, 0.9)),
-                                        BorderColor::all(panel_border()),
-                                    ))
-                                    .with_children(|capsule| {
-                                        capsule.spawn((
-                                            Node {
-                                                width: Val::Px(44.0),
-                                                height: Val::Px(44.0),
-                                                border_radius: BorderRadius::all(Val::Px(999.0)),
-                                                align_items: AlignItems::Center,
-                                                justify_content: JustifyContent::Center,
-                                                ..default()
-                                            },
-                                            BackgroundColor(Color::srgba(0.2, 0.22, 0.28, 1.0)),
-                                        ))
-                                        .with_children(|av| {
-                                            av.spawn((
-                                                Text::new("?"),
-                                                TextFont {
-                                                    font: font.clone(),
-                                                    font_size: 22.0,
-                                                    ..default()
-                                                },
-                                                TextColor(text_secondary()),
-                                            ));
-                                        });
-
-                                        capsule
-                                            .spawn((
-                                                Node {
-                                                    flex_direction: FlexDirection::Column,
-                                                    row_gap: Val::Px(6.0),
-                                                    min_width: Val::Px(160.0),
-                                                    ..default()
-                                                },
-                                            ))
-                                            .with_children(|nick_col| {
-                                                nick_col.spawn((
-                                                    Text::new("NICKNAME"),
-                                                    TextFont {
-                                                        font: font.clone(),
-                                                        font_size: 11.0,
-                                                        ..default()
-                                                    },
-                                                    TextColor(text_secondary()),
-                                                ));
-                                                nick_col
-                                                    .spawn((
-                                                        Button,
-                                                        NicknameFieldRoot,
-                                                        Node {
-                                                            width: Val::Percent(100.0),
-                                                            min_height: Val::Px(36.0),
-                                                            padding: UiRect::axes(
-                                                                Val::Px(10.0),
-                                                                Val::Px(6.0),
-                                                            ),
-                                                            border_radius: BorderRadius::all(
-                                                                Val::Px(8.0),
-                                                            ),
-                                                            border: UiRect::all(Val::Px(1.0)),
-                                                            justify_content: JustifyContent::Center,
-                                                            ..default()
-                                                        },
-                                                        BackgroundColor(nickname_field_bg()),
-                                                        BorderColor::all(nickname_field_border()),
-                                                    ))
-                                                    .with_children(|field| {
-                                                        field.spawn((
-                                                            Text::new(nick_display.clone()),
-                                                            NicknameFieldText,
-                                                            TextFont {
-                                                                font: font.clone(),
-                                                                font_size: 18.0,
-                                                                ..default()
-                                                            },
-                                                            TextColor(text_primary()),
-                                                        ));
-                                                    });
-                                            });
-                                    });
-                            });
+                        header.spawn(Node {
+                            flex_grow: 1.0,
+                            min_width: Val::Px(0.0),
+                            ..default()
+                        });
                     });
 
                 // ── Body: lobby list (left) + mode buttons (right) ───────────
@@ -311,34 +213,33 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                         ))
                         .with_children(|left| {
                             left.spawn((
+                                Button,
+                                NicknameFieldRoot,
                                 Node {
                                     width: Val::Percent(100.0),
-                                    padding: UiRect::axes(Val::Px(12.0), Val::Px(10.0)),
-                                    border_radius: BorderRadius::all(Val::Px(10.0)),
+                                    height: Val::Px(32.0),
+                                    min_height: Val::Px(30.0),
+                                    max_height: Val::Px(36.0),
+                                    padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
+                                    border_radius: BorderRadius::all(Val::Px(8.0)),
                                     border: UiRect::all(Val::Px(1.0)),
+                                    justify_content: JustifyContent::FlexStart,
+                                    align_items: AlignItems::Center,
                                     ..default()
                                 },
-                                BackgroundColor(Color::srgba(0.05, 0.06, 0.08, 0.95)),
-                                BorderColor::all(panel_border()),
+                                BackgroundColor(nickname_field_bg()),
+                                BorderColor::all(nickname_field_border()),
                             ))
-                            .with_children(|search| {
-                                search.spawn((
-                                    Text::new("SECTOR SEARCH  (coming soon)"),
+                            .with_children(|field| {
+                                field.spawn((
+                                    Text::new(nick_display.clone()),
+                                    NicknameFieldText,
                                     TextFont {
                                         font: font.clone(),
                                         font_size: 14.0,
                                         ..default()
                                     },
-                                    TextColor(text_secondary()),
-                                ));
-                                search.spawn((
-                                    Text::new("TAG: xeon-sector"),
-                                    TextFont {
-                                        font: font.clone(),
-                                        font_size: 12.0,
-                                        ..default()
-                                    },
-                                    TextColor(Color::srgba(0.45, 0.5, 0.55, 1.0)),
+                                    TextColor(text_primary()),
                                 ));
                             });
 
@@ -764,6 +665,7 @@ pub fn system_update_lobby_browser(
     children_q: Query<&Children>,
     settings: Res<ClientSettings>,
     joined_lobby: Option<Res<JoinedLobby>>,
+    mut preloaded: Option<ResMut<crate::MapCache>>,
 ) {
     let Some((cards_ent, mut cards_node)) = container_q.iter_mut().next() else {
         return;
@@ -784,6 +686,16 @@ pub fn system_update_lobby_browser(
                 cards_node.display = Display::None;
 
                 if let Some(lobby) = msg.lobbies.iter().find(|l| l.id == target) {
+                    
+                    // Prefetch the map for this lobby using the unified MapCache
+                    if let Some(ref mut cache) = preloaded {
+                        cache.request(&lobby.map_name, &mut commands);
+                    } else {
+                        let mut cache = crate::MapCache::default();
+                        cache.request(&lobby.map_name, &mut commands);
+                        commands.insert_resource(cache);
+                    }
+                    
                     if let Some(mut status) = status_text_q.iter_mut().next() {
                         if lobby.is_counting_down {
                             **status = format!("STARTING IN {:.0}s", lobby.timer_secs);
@@ -838,6 +750,7 @@ pub fn system_update_lobby_browser(
                     // Try to update existing card
                     if let Some((_, mut bg, mut bd, mut jlb)) = card_root_q.iter_mut().next() {
                         jlb.0 = lobby.id;
+                        *bg = BackgroundColor(bg_color);
                         *bd = BorderColor::all(bd_color);
                         
                         if let Some(mut t) = card_title_q.iter_mut().next() {
@@ -846,8 +759,9 @@ pub fn system_update_lobby_browser(
                         if let Some(mut t) = card_players_q.iter_mut().next() {
                             t.0 = format!("{}/{} players", lobby.num_players, lobby.max_players);
                         }
-                        if let Some((mut t, _)) = card_status_q.iter_mut().next() {
+                        if let Some((mut t, mut tc)) = card_status_q.iter_mut().next() {
                             t.0 = status_text;
+                            tc.0 = text_clr;
                         }
                     } else {
                         // Spawn if it doesn't exist
@@ -1113,6 +1027,7 @@ pub fn system_handle_single_player_click(
                         spawn_y,
                     }],
                     missed_turns: vec![],
+                    map_data: None,
                 };
 
                 commands.insert_resource(crate::MockSinglePlayerStart(mock_msg));

@@ -1,5 +1,10 @@
+# Rust / web bundle output (WASM, JS, brotli siblings, full dist — regenerated each deploy)
 target/
 dist/
+
+# Loader shell: edit web/index.html.template (tracked); deploy injects BUILD_TS into dist/index.html
+web/.loader-preview/
+
 .DS_Store
 latest_replay.json
 server.log

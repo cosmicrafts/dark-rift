@@ -18,14 +18,21 @@ lightyear = { workspace = true, features = ["websocket", "client", "netcode"] }
 aeronet_io = { workspace = true }
 aeronet_websocket = { workspace = true }
 ron = "0.8.1"
+miniz_oxide = "0.8"
 bevy_enoki = "0.6.0"
+crossbeam-channel = "0.5"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 bevy = { version = "0.18", features = ["dynamic_linking"] }
+ureq = "2.9"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 bevy = { version = "0.18" }
 getrandom = { version = "0.2", features = ["js"] }
 js-sys = "0.3"
 wasm-bindgen = "0.2"
+
+[target.wasm32-unknown-unknown.dependencies]
+gloo-net = "0.3"
+wasm-bindgen-futures = "0.4"
 

@@ -114,7 +114,7 @@ def main():
         time.sleep(2)
 
         bot_profiles = ["agresivo", "suicida", "tortuga"]
-        num_bots = 120
+        num_bots = 36
         
         print(f"🤖 Launching {num_bots} Network Bots concurrently...")
         for i in range(num_bots):
@@ -124,7 +124,7 @@ def main():
             name = f"BOT-{i+1}"
             processes.append((name, bot_p))
             # We suppress the output of the 120 bots so the terminal doesn't become pure spam
-            threading.Thread(target=stream_output, args=(bot_p, name, "BOT", True), daemon=True).start()
+            threading.Thread(target=stream_output, args=(bot_p, name, "BOT", False), daemon=True).start()
             # 0.01 seconds stagger = 1.2 seconds total to launch 120 bots
             time.sleep(0.01)
 

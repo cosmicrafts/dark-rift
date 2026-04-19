@@ -10,7 +10,6 @@
 //!   7. Tile visuals updated from game.events (event-driven, O(events) not O(map))
 
 use bevy::prelude::*;
-use bevy::app::AppExit;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::text::FontWeight;
 use bevy::ui::RelativeCursorPosition;
@@ -46,12 +45,14 @@ use dark_rift_shared::intent::{apply_stamped_intent, system_bot_think};
 use dark_rift_shared::protocol::*;
 use dark_rift_shared::pseudo_random::PseudoRandom;
 
+mod map_fetch;
 mod settings;
 mod ui_layers;
 mod ui_shell;
 mod ui_theme;
 mod ui_lobby_browser;
 mod ui_leaderboard;
+pub use map_fetch::{MapCache, MapFetchChannel};
 use settings::*;
 use ui_layers::GAME_OVER;
 use ui_shell::*;
@@ -61,7 +62,7 @@ use ui_lobby_browser::*;
 const TILE_SIZE: f32 = 8.0;
 /// Native client: plain WebSocket to this `SocketAddr` (see `WebSocketScheme::Plain`).
 #[cfg(not(target_arch = "wasm32"))]
-const NATIVE_NETCODE_SOCKET: &str = "127.0.0.1:25565";
+pub const NATIVE_NETCODE_SOCKET: &str = "127.0.0.1:25565";
 
 /// WASM: browser needs **WSS** through your TLS reverse proxy (Nginx).
 #[cfg(target_arch = "wasm32")]
@@ -106,10 +107,18 @@ pub struct GameReady(pub bool);
 #[derive(Resource, Default)]
 pub struct MyPlayerId(pub u16);
 
+#[derive(Resource)]
+pub struct PendingServerStart(pub dark_rift_shared::protocol::ServerStartMessage);
+
+
+#[derive(Resource)]
+pub struct LoadingMapTimeout(pub Timer);
+
 #[derive(Clone, Copy, Default, Eq, PartialEq, Debug, Hash, States)]
 pub enum AppState {
     #[default]
     LobbyBrowser,
+    LoadingMap,
     InGame,
 }
 
@@ -378,7 +387,7 @@ fn main() {
                 ..default()
             }),
             ..default()
-        }).disable::<bevy::audio::AudioPlugin>());
+        }));
 
         app.insert_resource(bevy::winit::WinitSettings {
             focused_mode: bevy::winit::UpdateMode::Continuous,
@@ -487,7 +496,11 @@ fn main() {
                handle_server_turns,
                system_evaluate_game_over,
                system_handle_go_back,
-           ).chain().run_if(in_state(AppState::InGame)));
+           ).chain().run_if(in_state(AppState::InGame)))
+            .add_systems(PreUpdate, auto_inject_visibility)
+            .add_systems(Update, map_fetch::system_poll_map_fetch)
+            .add_systems(OnEnter(AppState::LoadingMap), setup_loading_map_timeout)
+            .add_systems(Update, system_loading_map.run_if(in_state(AppState::LoadingMap)));
     }
     } // end if !cli.bot
 
@@ -591,6 +604,19 @@ fn decrement_pending(mut pending: ResMut<PendingTicks>) {
     pending.0 = pending.0.saturating_sub(1);
 }
 
+fn auto_inject_visibility(
+    mut commands: Commands,
+    q: Query<Entity, (Or<(With<Transform>, With<Node>)>, Without<InheritedVisibility>)>,
+) {
+    for entity in q.iter() {
+        commands.entity(entity).insert((
+            Visibility::default(),
+            InheritedVisibility::default(),
+            ViewVisibility::default(),
+        ));
+    }
+}
+
 // ─── Camera Controls ────────────────────────────────────────────────────────
 
 fn camera_movement_and_zoom(
@@ -634,7 +660,7 @@ fn camera_movement_and_zoom(
         }
         
         if zoom != 0.0 {
-            ortho.scale = (ortho.scale * (1.0 + zoom)).clamp(0.1, 10.0);
+            ortho.scale = (ortho.scale * (1.0 + zoom)).clamp(0.1, 20.0);
         }
         
         // Pan
@@ -1262,25 +1288,15 @@ fn spawn_bottom_combat_hud(commands: &mut Commands, shell: &HudShellRegions, obs
 /// Mirrors OpenFront's message.type === "start" handler in ClientGameRunner.
 fn handle_server_start(
     mut receivers: Query<&mut MessageReceiver<ServerStartMessage>>,
-    mut ready:     ResMut<GameReady>,
-    mut my_id:     ResMut<MyPlayerId>,
-    mut cam_q:     Query<&mut Transform, With<Camera2d>>,
     mut commands:  Commands,
-    mut queue:     ResMut<TurnQueue>,
-    mut pending:   ResMut<PendingTicks>,
-    mut highest:   ResMut<HighestReceivedTurn>,
     mut net:       ResMut<NetTiming>,
-    mut overlay:   Option<ResMut<OverlayDiagnostics>>,
-    shell:         Option<Res<HudShellRegions>>,
-    mut images:    ResMut<Assets<Image>>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
     for mut receiver in receivers.iter_mut() {
         for msg in receiver.receive() {
-            start_game_core(
-                msg, &mut ready, &mut my_id, &mut cam_q, &mut commands,
-                &mut queue, &mut pending, &mut highest, &mut overlay, &shell, &mut images, &mut next_state
-            );
+            commands.insert_resource(PendingServerStart(msg.clone()));
+            next_state.set(AppState::LoadingMap);
+            
             if net.handshake_ms.is_none() {
                 if let Some(t0) = net.connect_started.take() {
                     net.handshake_ms = Some(t0.elapsed().as_secs_f32() * 1000.0);
@@ -1289,6 +1305,77 @@ fn handle_server_start(
         }
     }
 }
+
+fn setup_loading_map_timeout(mut commands: Commands) {
+    commands.insert_resource(LoadingMapTimeout(Timer::from_seconds(15.0, TimerMode::Once)));
+}
+
+fn system_loading_map(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut timeout: ResMut<LoadingMapTimeout>,
+    mut cache: Option<ResMut<MapCache>>,
+    pending_msg: Option<ResMut<PendingServerStart>>,
+    mut ready: ResMut<GameReady>,
+    mut my_id: ResMut<MyPlayerId>,
+    mut cam_q: Query<&mut Transform, With<Camera2d>>,
+    mut queue: ResMut<TurnQueue>,
+    mut pending: ResMut<PendingTicks>,
+    mut highest: ResMut<HighestReceivedTurn>,
+    mut overlay: Option<ResMut<OverlayDiagnostics>>,
+    shell: Option<Res<HudShellRegions>>,
+    mut images: Option<ResMut<Assets<Image>>>,
+    mut next_state: ResMut<NextState<AppState>>,
+) {
+    timeout.0.tick(time.delta());
+    if timeout.0.just_finished() {
+        bevy::log::error!("Map load timeout! Returning to lobby.");
+        next_state.set(AppState::LobbyBrowser);
+        commands.remove_resource::<PendingServerStart>();
+        return;
+    }
+
+    let Some(mut p_msg) = pending_msg else { return; };
+
+    // Ensure MapCache exists
+    if cache.is_none() {
+        commands.insert_resource(MapCache::default());
+        return; // Wait one frame for it to be available
+    }
+    let cache = cache.as_mut().unwrap();
+
+    let map_name = &p_msg.0.config.map_name;
+
+    // If cache doesn't have the right map, request it
+    if !cache.is_ready() || cache.map_name != *map_name {
+        if !cache.is_fetching() || cache.map_name != *map_name {
+            cache.request(map_name, &mut commands);
+        }
+        return; // Wait for fetch to complete
+    }
+
+    // Map is ready — start the game
+    let cached_bytes = cache.take_data();
+    p_msg.0.map_data = cached_bytes;
+
+    start_game_core(
+        p_msg.0.clone(),
+        &mut ready,
+        &mut my_id,
+        &mut cam_q,
+        &mut commands,
+        &mut queue,
+        &mut pending,
+        &mut highest,
+        &mut overlay,
+        &shell,
+        &mut images,
+        &mut next_state,
+    );
+
+    commands.remove_resource::<PendingServerStart>();
+}
+
 
 fn system_mock_single_player_start(
     mock:      Option<ResMut<MockSinglePlayerStart>>,
@@ -1301,7 +1388,7 @@ fn system_mock_single_player_start(
     mut highest:   ResMut<HighestReceivedTurn>,
     mut overlay:   Option<ResMut<OverlayDiagnostics>>,
     shell:         Option<Res<HudShellRegions>>,
-    mut images:    ResMut<Assets<Image>>,
+    mut images:    Option<ResMut<Assets<Image>>>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
     if let Some(m) = mock {
@@ -1353,7 +1440,7 @@ fn start_game_core(
     highest:       &mut ResMut<HighestReceivedTurn>,
     overlay:       &mut Option<ResMut<OverlayDiagnostics>>,
     shell:         &Option<Res<HudShellRegions>>,
-    images:        &mut ResMut<Assets<Image>>,
+    images:        &mut Option<ResMut<Assets<Image>>>,
     next_state:    &mut ResMut<NextState<AppState>>,
 ) {
             if ready.0 { return; }
@@ -1367,9 +1454,8 @@ fn start_game_core(
             }
 
             let mut game = GameState::new(msg.seed, msg.config.map_width, msg.config.map_height);
-            if let Some((map, _manifest)) = dark_rift_shared::map_loader::load_openfront_map(&msg.config.map_name) {
-                game.map = map;
-            }
+            map_fetch::apply_map_to_game(&mut game, &msg.config.map_name, msg.map_data.clone());
+
             for info in &msg.players {
                 let player = match info.player_type {
                     dark_rift_shared::player::PlayerType::Human => {
@@ -1400,15 +1486,17 @@ fn start_game_core(
             if my_id.0 != 0 {
                 if let Some(me) = msg.players.iter().find(|p| p.id == my_id.0) {
                     cx = me.spawn_x as f32 * TILE_SIZE;
-                    cy = (game.map.height as f32 - me.spawn_y as f32) * TILE_SIZE;
+                    cy = (game.map.height as f32 - 1.0 - me.spawn_y as f32) * TILE_SIZE;
                 }
             }
 
             if let Ok(mut cam) = cam_q.single_mut() {
                 cam.translation = Vec3::new(cx, cy, 999.0);
             }
-            let handle = spawn_single_texture_tilemap(commands, &game, images, true);
-            commands.insert_resource(MapImageHandle(handle));
+            if let Some(images_res) = images.as_mut() {
+                let handle = spawn_single_texture_tilemap(commands, &game, images_res, true);
+                commands.insert_resource(MapImageHandle(handle));
+            }
 
             commands.insert_resource(game);
             ready.0 = true;
@@ -1512,7 +1600,7 @@ fn hover_system(
     let Ok(world) = camera.viewport_to_world_2d(cam_t, cursor) else { return };
 
     let gx = (world.x / TILE_SIZE).round() as i32;
-    let gy = (game.map.height as f32 - (world.y / TILE_SIZE)).round() as i32;
+    let gy = game.map.height as i32 - 1 - (world.y / TILE_SIZE).round() as i32;
     if game.map.is_valid_coord(gx, gy) {
         hovered.0 = Some((gx as u32, gy as u32));
     }
@@ -1580,6 +1668,9 @@ fn player_click(
             },
             InGameEntity,
             Transform::from_xyz(wx, wy, 260.0).with_scale(Vec3::ZERO),
+            Visibility::default(),
+            InheritedVisibility::default(),
+            ViewVisibility::default(),
         ))
         .with_children(|root| {
             root.spawn((
@@ -1680,13 +1771,21 @@ fn system_exit_button(
         (&Interaction, &mut BackgroundColor),
         (Changed<Interaction>, With<ExitButton>),
     >,
-    mut exit: MessageWriter<AppExit>,
+    mut next_state: ResMut<NextState<AppState>>,
+    mut senders: Query<&mut MessageSender<ClientLeaveMessage>>,
+    mut joined_lobby: Option<ResMut<JoinedLobby>>,
 ) {
     for (interaction, mut color) in interaction_q.iter_mut() {
         match *interaction {
             Interaction::Pressed => {
                 *color = Color::srgb(0.28, 0.1, 0.08).into();
-                exit.write(AppExit::Success);
+                if let Some(jl) = joined_lobby.as_mut() {
+                    jl.0 = None;
+                }
+                for mut sender in senders.iter_mut() {
+                    let _ = sender.send::<ReliableChannel>(ClientLeaveMessage);
+                }
+                next_state.set(AppState::LobbyBrowser);
             }
             Interaction::Hovered => {
                 *color = Color::srgb(0.72, 0.28, 0.24).into();
@@ -1755,7 +1854,6 @@ fn handle_tile_change(
 
     let animations_on = settings.config.visuals.territory_expansion_animations_enabled();
     let map_w = game.map.width;
-    let map_h = game.map.height;
 
     for ev in &game.events {
         if let GameEvent::TileCaptured { x, y, new_owner: _ } = ev {
@@ -1800,8 +1898,7 @@ fn handle_tile_change(
                     );
                 }
 
-                let flipped_uy = map_h as u32 - 1 - uy;
-                let idx = ((flipped_uy * map_w as u32 + ux) * 4) as usize;
+                let idx = ((uy * map_w as u32 + ux) * 4) as usize;
                 if let Some(data) = &mut image.data {
                     if idx + 3 < data.len() {
                         let srgba = color.to_srgba();
@@ -1850,7 +1947,6 @@ fn system_animate_tile_colors(
     }
     
     let map_w = game.map.width;
-    let map_h = game.map.height;
     for (&(x, y), val) in fresh_tiles.tiles.iter() {
         let wx = x as i32;
         let wy = y as i32;
@@ -2318,6 +2414,7 @@ fn spawn_single_texture_tilemap(
         RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
     );
     image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST;
+    image.sampler = bevy::image::ImageSampler::nearest();
 
     for y in 0..map_h {
         for x in 0..map_w {
@@ -2337,7 +2434,7 @@ fn spawn_single_texture_tilemap(
     let mut ecmd = commands.spawn((
         Sprite {
             image: handle.clone(),
-            custom_size: Some(Vec2::new((map_w * TILE_SIZE as u32) as f32, (map_h * TILE_SIZE as u32) as f32)),
+            custom_size: Some(Vec2::new(map_w as f32 * TILE_SIZE, map_h as f32 * TILE_SIZE)),
             ..default()
         },
         Transform::from_xyz(
@@ -2509,7 +2606,7 @@ fn system_sync_player_labels(
 
         if player.tile_count > 0 {
             let cx = (player.sum_x as f32 / player.tile_count as f32) * TILE_SIZE;
-            let cy = (game.map.height as f32 - (player.sum_y as f32 / player.tile_count as f32)) * TILE_SIZE;
+            let cy = (game.map.height as f32 - 1.0 - (player.sum_y as f32 / player.tile_count as f32)) * TILE_SIZE;
             
             let target = Vec3::new(cx, cy + ui.config.ui.label_offset_y, 150.0);
             
@@ -2592,6 +2689,9 @@ fn system_spawn_attack_vfx(
             },
             InGameEntity,
             Transform::from_xyz(spawn_pos.x, spawn_pos.y, 110.0),
+            Visibility::default(),
+            InheritedVisibility::default(),
+            ViewVisibility::default(),
             ParticleSpawner::<ColorParticle2dMaterial>::default(),
             ParticleEffectHandle(vfx_cache.0.clone()),
         ));
@@ -2860,3 +2960,5 @@ fn system_headless_bot_engine(
         }),
     });
 }
+
+

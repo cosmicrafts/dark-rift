@@ -52,6 +52,7 @@ pub struct LobbyInfo {
     pub max_players: u32,
     pub is_counting_down: bool,
     pub timer_secs: f32,
+    pub map_name: String,
     pub player_names: Vec<String>,
 }
 
@@ -78,6 +79,7 @@ pub struct ServerStartMessage {
     pub seed: u64,
     pub players: Vec<PlayerInfo>,
     pub missed_turns: Vec<Turn>,
+    pub map_data: Option<Vec<u8>>, // deflate compressed map.bin data
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, bevy::prelude::Resource)]

@@ -23,3 +23,9 @@ aeronet_websocket = "0.19.1"
 # Enable optimizations for dependencies (incl. Bevy ECS and math) in debug mode
 [profile.dev.package."*"]
 opt-level = 3
+
+[profile.release]
+opt-level = 's'      # Optimizar para tamaño
+lto = true           # Link Time Optimization (corta código muerto)
+codegen-units = 1    # Compilación más lenta pero binario más chico
+strip = "debuginfo"  # Quitar símbolos de debug

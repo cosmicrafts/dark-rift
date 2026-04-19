@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <title>Dark Rift</title>
+  <link rel="modulepreload" href="./dark_rift_client.js?v=__BUILD_TS__" />
+  <link rel="preload" href="./dark_rift_client_bg.wasm?v=__BUILD_TS__" as="fetch" crossorigin />
+  <style>
+    html, body { margin: 0; height: 100%; background: #050508; }
+    canvas { display: block; position: relative; z-index: 1; }
+
+    #splash-stack {
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      overflow: hidden;
+      box-sizing: border-box;
+      background: #050508;
+    }
+
+    /* Fill viewport height always; width follows aspect ratio (no vertical letterboxing). */
+    #splash-art {
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 0;
+      height: 100%;
+      width: auto;
+      max-width: none;
+      display: block;
+      pointer-events: none;
+    }
+
+    .loader-ui {
+      position: absolute;
+      top: max(2vh, calc(12px + env(safe-area-inset-top, 0px)));
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(88vw, 360px);
+      z-index: 2;
+      box-sizing: border-box;
+      padding: 0 min(3vw, 16px);
+    }
+
+    .loader-bar-track {
+      height: 5px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.1);
+      overflow: hidden;
+    }
+
+    .loader-bar-fill {
+      height: 100%;
+      width: 100%;
+      transform-origin: left center;
+      transform: scaleX(0);
+      background: linear-gradient(90deg, #5a8a7e, #c5e4dc);
+      border-radius: 3px;
+    }
+
+    #splash-stack.is-gone {
+      opacity: 0;
+      transition: opacity 0.38s ease;
+    }
+
+    #splash-stack.is-gone.is-removed {
+      display: none;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #splash-stack.is-gone { transition: opacity 0.2s ease; }
+      .loader-bar-fill { transition: transform 0.12s linear; }
+    }
+  </style>
+</head>
+<body>
+  <div id="splash-stack" aria-live="polite" role="status" aria-busy="true">
+    <img
+      id="splash-art"
+      src="./assets/ui/darkrift.webp?v=__BUILD_TS__"
+      alt=""
+      decoding="async"
+      fetchpriority="high"
+    />
+    <div class="loader-ui">
+      <div class="loader-bar-track">
+        <div class="loader-bar-fill" id="loader-bar-fill"></div>
+      </div>
+    </div>
+  </div>
+  <script type="module">
+    import init from "./dark_rift_client.js?v=__BUILD_TS__";
+
+    const V = "__BUILD_TS__";
+    const q = (path) => path + "?v=" + V;
+
+    function filterWasmBindgenNoise(promise) {
+      return promise.catch((error) => {
+        const msg = error && error.message ? error.message : String(error);
+        if (msg.startsWith("Using exceptions for control flow")) return;
+        throw error;
+      });
+    }
+
+    const initPromise = filterWasmBindgenNoise(init(q("./dark_rift_client_bg.wasm")));
+
+    const stack = document.getElementById("splash-stack");
+    const barFill = document.getElementById("loader-bar-fill");
+
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const EXIT_FADE_MS = reduceMotion ? 200 : 380;
+    const PROGRESS_CAP = 0.9;
+    const MIN_SPLASH_MS = reduceMotion ? 450 : 1400;
+
+    const splashStart = performance.now();
+
+    function sleep(ms) {
+      return new Promise((r) => setTimeout(r, ms));
+    }
+
+    function setBarScale(t) {
+      const x = Math.max(0, Math.min(1, t));
+      barFill.style.transform = "scaleX(" + x + ")";
+    }
+
+    async function runProgressUntilInit() {
+      let settled = false;
+      initPromise.finally(() => {
+        settled = true;
+      });
+
+      let shown = 0;
+      while (!settled) {
+        shown = Math.min(
+          PROGRESS_CAP,
+          shown + (PROGRESS_CAP - shown) * 0.045 + 0.0022
+        );
+        setBarScale(shown);
+        await new Promise((r) => requestAnimationFrame(r));
+      }
+
+      await initPromise;
+      setBarScale(1);
+      await sleep(reduceMotion ? 80 : 140);
+    }
+
+    async function ensureMinSplash() {
+      const elapsed = performance.now() - splashStart;
+      if (elapsed < MIN_SPLASH_MS) await sleep(MIN_SPLASH_MS - elapsed);
+    }
+
+    async function teardownSplash() {
+      stack.classList.add("is-gone");
+      await sleep(EXIT_FADE_MS);
+      stack.classList.add("is-removed");
+      stack.remove();
+    }
+
+    try {
+      setBarScale(0);
+      await runProgressUntilInit();
+      await ensureMinSplash();
+      await teardownSplash();
+    } catch (e) {
+      stack.classList.add("is-gone", "is-removed");
+      stack.remove();
+      throw e;
+    }
+  </script>
+</body>
+</html>

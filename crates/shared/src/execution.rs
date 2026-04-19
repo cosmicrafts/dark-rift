@@ -195,7 +195,7 @@ pub fn system_attack_execution(
 
                 // Terrain Check: Water and Mountains are impassable for basic ground attacks
                 let terrain_type = game.map.terrain_type(target_tile.x, target_tile.y);
-                if terrain_type == TerrainType::Water || terrain_type == TerrainType::Mountain {
+                if terrain_type == TerrainType::Water {
                     continue; // Skip, impassable terrain
                 }
 

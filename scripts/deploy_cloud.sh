@@ -48,30 +48,15 @@ wasm-bindgen --out-dir dist --target web --out-name "${OUT_NAME}" --no-typescrip
 
 cp -a assets dist/assets
 
-cat > dist/index.html <<'HTML'
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Dark Rift</title>
-  <style>
-    html, body { margin: 0; height: 100%; background: #050508; }
-    canvas { display: block; }
-  </style>
-</head>
-<body>
-  <script type="module">
-    import init from "./dark_rift_client.js";
-    init().catch((error) => {
-      const msg = error && error.message ? error.message : String(error);
-      if (msg.startsWith("Using exceptions for control flow")) return;
-      throw error;
-    });
-  </script>
-</body>
-</html>
-HTML
+# Generar timestamp para cache busting
+BUILD_TS=$(date +%s)
+
+LOADER_TEMPLATE="${ROOT}/web/index.html.template"
+if [[ ! -f "${LOADER_TEMPLATE}" ]]; then
+  red "Missing loader template: ${LOADER_TEMPLATE}"
+  exit 1
+fi
+sed "s/__BUILD_TS__/${BUILD_TS}/g" "${LOADER_TEMPLATE}" > dist/index.html
 
 cyan "==> 3. Comprimiendo archivos estáticos (Brotli)..."
 # Comprimir en paralelo
@@ -94,13 +79,20 @@ cyan "==> 4. [PARALELO] Subiendo archivos al VPS..."
 rsync -avz --delete dist/ ${VPS_USER}@${VPS_IP}:${WEB_DEST_DIR}/ &
 RSYNC_WEB_PID=$!
 
-# Subir Server
+# Subir Server binary + assets (el servidor necesita los manifiestos de mapas para dimensiones correctas)
 ssh ${VPS_USER}@${VPS_IP} "mkdir -p ${BACKEND_DEST_DIR}"
 rsync -avz target/x86_64-unknown-linux-musl/release/dark-rift-server ${VPS_USER}@${VPS_IP}:${BACKEND_DEST_DIR}/ &
 RSYNC_SERVER_PID=$!
 
+# Subir assets de mapas al directorio de trabajo del servidor (manifest.json + map.bin)
+# NOTA: systemd WorkingDirectory=/home/bizkit/dark-rift-prod, assets/ se buscan relativo a CWD
+ssh ${VPS_USER}@${VPS_IP} "mkdir -p /home/bizkit/dark-rift-prod/assets/maps"
+rsync -avz assets/maps/ ${VPS_USER}@${VPS_IP}:/home/bizkit/dark-rift-prod/assets/maps/ &
+RSYNC_ASSETS_PID=$!
+
 wait $RSYNC_WEB_PID || { red "❌ Error subiendo Frontend"; exit 1; }
 wait $RSYNC_SERVER_PID || { red "❌ Error subiendo Backend"; exit 1; }
+wait $RSYNC_ASSETS_PID || { red "❌ Error subiendo Assets del servidor"; exit 1; }
 green "✅ Archivos sincronizados en el VPS."
 
 # 4. Reinicio de Servicios
