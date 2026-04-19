@@ -1,5 +1,8 @@
+use bevy::color::prelude::*;
+use bevy::ecs::system::SystemParam;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
+use bevy::ui::{UiTransform, Val2};
 use dark_rift_shared::player::PlayerType;
 use dark_rift_shared::protocol::*;
 use crate::settings::{save_client_settings_config, ProfileConfig};
@@ -87,6 +90,207 @@ pub enum ComingSoonKind {
     Secondary,
 }
 
+/// Phase for main lobby menu motion (intro / idle / exit / stub re-entry).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LobbyMenuAnimPhase {
+    Entering,
+    Idle,
+    Exiting,
+    StubReentering,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PendingNavigate {
+    None,
+    SinglePlayer,
+    JoinLobby(u64),
+    Stub,
+}
+
+#[derive(Resource)]
+pub struct LobbyMainMenuAnim {
+    pub phase: LobbyMenuAnimPhase,
+    pub phase_time: f32,
+    pub pending: PendingNavigate,
+    pub clicked: Option<Entity>,
+    /// Set from cancel join so the anim system restores chrome after waiting overlay.
+    pub force_visual_reset: bool,
+}
+
+impl LobbyMainMenuAnim {
+    #[inline]
+    pub fn is_idle(&self) -> bool {
+        self.phase == LobbyMenuAnimPhase::Idle
+    }
+}
+
+/// Root backdrop (full screen behind panel).
+#[derive(Component)]
+pub struct LobbyMenuAnimBackdrop;
+
+/// Main framed panel (background + border fade).
+#[derive(Component)]
+pub struct LobbyMenuAnimPanel;
+
+#[derive(Component)]
+pub struct LobbyMenuAnimLeftColumn;
+
+#[derive(Component)]
+pub struct LobbyMenuAnimRightColumn;
+
+#[derive(Component)]
+pub struct LobbyMenuAnimHeaderRow;
+
+#[derive(Component)]
+pub struct LobbyMenuAnimFooterBar;
+
+#[derive(Clone, Copy, Debug)]
+pub enum LobbyMenuTextRole {
+    TitleMain,
+    Version,
+    NicknameField,
+    SoloPrimary,
+    SoloSecondary,
+    FooterLinks,
+    FooterNews,
+    StubRanked,
+    StubSecondary,
+}
+
+/// Text nodes that fade with the menu (chrome only; not waiting overlay).
+#[derive(Component, Clone, Copy)]
+pub struct LobbyMenuAnimatedText(pub LobbyMenuTextRole);
+
+#[inline]
+fn base_text_color(role: LobbyMenuTextRole) -> Color {
+    match role {
+        LobbyMenuTextRole::TitleMain => accent_solo_cyan(),
+        LobbyMenuTextRole::Version => text_secondary(),
+        LobbyMenuTextRole::NicknameField => text_primary(),
+        LobbyMenuTextRole::SoloPrimary => Color::srgba(0.02, 0.05, 0.08, 1.0),
+        LobbyMenuTextRole::SoloSecondary => Color::srgba(0.05, 0.12, 0.16, 0.85),
+        LobbyMenuTextRole::FooterLinks => text_secondary(),
+        LobbyMenuTextRole::FooterNews => text_primary(),
+        LobbyMenuTextRole::StubRanked => Color::srgba(0.06, 0.05, 0.04, 1.0),
+        LobbyMenuTextRole::StubSecondary => text_primary(),
+    }
+}
+
+/// Bundles mutable UI queries for lobby menu motion.
+///
+/// Bevy B0001 treats multiple mutable queries for the same component type inside one
+/// `#[derive(SystemParam)]` as conflicting unless they are wrapped in a `ParamSet`, even when the
+/// marker components are logically disjoint. Keep color writers and transform writers in separate
+/// sets so the animation system can mutate both safely.
+#[derive(SystemParam)]
+pub struct LobbyMenuAnimVisualQueries<'w, 's> {
+    pub color_set: ParamSet<
+        'w,
+        's,
+        (
+            Query<'w, 's, &'static mut BackgroundColor, With<LobbyMenuAnimBackdrop>>,
+            Query<
+                'w,
+                's,
+                (&'static mut BackgroundColor, &'static mut BorderColor),
+                With<LobbyMenuAnimPanel>,
+            >,
+            Query<'w, 's, &'static mut BackgroundColor, With<LobbyMenuAnimFooterBar>>,
+            Query<
+                'w,
+                's,
+                (&'static mut BackgroundColor, &'static mut BorderColor),
+                With<NicknameFieldRoot>,
+            >,
+            Query<
+                'w,
+                's,
+                (&'static mut BackgroundColor, &'static mut BorderColor),
+                With<SinglePlayerButton>,
+            >,
+            Query<
+                'w,
+                's,
+                (
+                    Entity,
+                    &'static mut BackgroundColor,
+                    &'static mut BorderColor,
+                    &'static ComingSoonKind,
+                ),
+                With<ComingSoonMenuButton>,
+            >,
+        ),
+    >,
+    pub transform_set: ParamSet<
+        'w,
+        's,
+        (
+            Query<'w, 's, &'static mut UiTransform, With<LobbyMenuAnimHeaderRow>>,
+            Query<'w, 's, &'static mut UiTransform, With<LobbyMenuAnimLeftColumn>>,
+            Query<'w, 's, &'static mut UiTransform, With<LobbyMenuAnimRightColumn>>,
+            Query<'w, 's, &'static mut UiTransform, With<SinglePlayerButton>>,
+            Query<
+                'w,
+                's,
+                (Entity, &'static mut UiTransform),
+                With<ComingSoonMenuButton>,
+            >,
+            Query<'w, 's, (Entity, &'static mut UiTransform), With<LobbyCardRoot>>,
+        ),
+    >,
+    pub anim_text: Query<'w, 's, (&'static mut TextColor, &'static LobbyMenuAnimatedText)>,
+}
+
+#[inline]
+fn set_clicked_menu_scale(q: &mut LobbyMenuAnimVisualQueries, ce: Entity, scale: Vec2) {
+    if let Ok(mut tr) = q.transform_set.p3().get_mut(ce) {
+        tr.scale = scale;
+        return;
+    }
+    if let Ok((_, mut tr)) = q.transform_set.p4().get_mut(ce) {
+        tr.scale = scale;
+        return;
+    }
+    if let Ok((_, mut tr)) = q.transform_set.p5().get_mut(ce) {
+        tr.scale = scale;
+    }
+}
+
+const MENU_INTRO_DURATION: f32 = 0.48;
+const MENU_EXIT_DURATION: f32 = 0.58;
+const MENU_STUB_REENTER_DURATION: f32 = 0.24;
+
+const INTRO_SLIDE_LEFT_PX: f32 = -110.0;
+const INTRO_SLIDE_RIGHT_PX: f32 = 110.0;
+const INTRO_HEADER_Y_PX: f32 = -48.0;
+
+#[inline]
+fn ease_out_cubic(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
+}
+
+#[inline]
+fn ease_in_out_cubic(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    if t < 0.5 {
+        4.0 * t * t * t
+    } else {
+        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+    }
+}
+
+#[inline]
+fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+    let t = ((x - edge0) / (edge1 - edge0).max(1e-6)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+#[inline]
+fn solo_button_border_color() -> Color {
+    Color::srgba(0.4, 0.95, 1.0, 0.65)
+}
+
 #[inline]
 fn is_printable_char(chr: char) -> bool {
     let is_in_private_use_area = ('\u{e000}'..='\u{f8ff}').contains(&chr)
@@ -106,6 +310,7 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
     commands
         .spawn((
             LobbyBrowserRoot,
+            LobbyMenuAnimBackdrop,
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
@@ -117,11 +322,12 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                 ..default()
             },
             GlobalZIndex(LOBBY_BROWSER),
-            BackgroundColor(menu_backdrop()),
+            BackgroundColor(menu_backdrop().with_alpha(0.0)),
         ))
         .with_children(|root| {
             root.spawn((
                 LobbyBrowserMainChrome,
+                LobbyMenuAnimPanel,
                 Node {
                     width: Val::Percent(94.0),
                     height: Val::Percent(90.0),
@@ -133,19 +339,23 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                     border: UiRect::all(Val::Px(2.0)),
                     ..default()
                 },
-                BackgroundColor(menu_panel_bg()),
-                BorderColor::all(menu_panel_border_glow()),
+                BackgroundColor(menu_panel_bg().with_alpha(0.0)),
+                BorderColor::all(menu_panel_border_glow().with_alpha(0.0)),
             ))
             .with_children(|panel| {
                 // ── Header: title + version (centered) ───────────────────────
                 panel
-                    .spawn(Node {
-                        width: Val::Percent(100.0),
-                        flex_direction: FlexDirection::Row,
-                        align_items: AlignItems::Center,
-                        column_gap: Val::Px(12.0),
-                        ..default()
-                    })
+                    .spawn((
+                        LobbyMenuAnimHeaderRow,
+                        UiTransform::from_translation(Val2::px(0.0, INTRO_HEADER_Y_PX)),
+                        Node {
+                            width: Val::Percent(100.0),
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(12.0),
+                            ..default()
+                        },
+                    ))
                     .with_children(|header| {
                         header.spawn(Node {
                             flex_grow: 1.0,
@@ -165,21 +375,23 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                             .with_children(|title_col| {
                                 title_col.spawn((
                                     Text::new("DARK RIFT"),
+                                    LobbyMenuAnimatedText(LobbyMenuTextRole::TitleMain),
                                     TextFont {
                                         font: font.clone(),
                                         font_size: 42.0,
                                         ..default()
                                     },
-                                    TextColor(accent_solo_cyan()),
+                                    TextColor(base_text_color(LobbyMenuTextRole::TitleMain).with_alpha(0.0)),
                                 ));
                                 title_col.spawn((
                                     Text::new(format!("v{GAME_VERSION_LABEL}")),
+                                    LobbyMenuAnimatedText(LobbyMenuTextRole::Version),
                                     TextFont {
                                         font: font.clone(),
                                         font_size: 16.0,
                                         ..default()
                                     },
-                                    TextColor(text_secondary()),
+                                    TextColor(base_text_color(LobbyMenuTextRole::Version).with_alpha(0.0)),
                                 ));
                             });
 
@@ -203,6 +415,8 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                     })
                     .with_children(|body| {
                         body.spawn((
+                            LobbyMenuAnimLeftColumn,
+                            UiTransform::from_translation(Val2::px(INTRO_SLIDE_LEFT_PX, 0.0)),
                             Node {
                                 width: Val::Percent(40.0),
                                 min_width: Val::Px(260.0),
@@ -227,19 +441,20 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                                     align_items: AlignItems::Center,
                                     ..default()
                                 },
-                                BackgroundColor(nickname_field_bg()),
-                                BorderColor::all(nickname_field_border()),
+                                BackgroundColor(nickname_field_bg().with_alpha(0.0)),
+                                BorderColor::all(nickname_field_border().with_alpha(0.0)),
                             ))
                             .with_children(|field| {
                                 field.spawn((
                                     Text::new(nick_display.clone()),
                                     NicknameFieldText,
+                                    LobbyMenuAnimatedText(LobbyMenuTextRole::NicknameField),
                                     TextFont {
                                         font: font.clone(),
                                         font_size: 14.0,
                                         ..default()
                                     },
-                                    TextColor(text_primary()),
+                                    TextColor(base_text_color(LobbyMenuTextRole::NicknameField).with_alpha(0.0)),
                                 ));
                             });
 
@@ -260,6 +475,8 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                         });
 
                         body.spawn((
+                            LobbyMenuAnimRightColumn,
+                            UiTransform::from_translation(Val2::px(INTRO_SLIDE_RIGHT_PX, 0.0)),
                             Node {
                                 width: Val::Percent(34.0),
                                 min_width: Val::Px(220.0),
@@ -274,6 +491,7 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                             right.spawn((
                                 Button,
                                 SinglePlayerButton,
+                                UiTransform::default(),
                                 Node {
                                     width: Val::Percent(100.0),
                                     min_height: Val::Px(56.0),
@@ -284,27 +502,29 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                                     align_items: AlignItems::Center,
                                     ..default()
                                 },
-                                BackgroundColor(accent_solo_cyan()),
-                                BorderColor::all(Color::srgba(0.4, 0.95, 1.0, 0.65)),
+                                BackgroundColor(accent_solo_cyan().with_alpha(0.0)),
+                                BorderColor::all(solo_button_border_color().with_alpha(0.0)),
                             ))
                             .with_children(|btn| {
                                 btn.spawn((
                                     Text::new("SOLO"),
+                                    LobbyMenuAnimatedText(LobbyMenuTextRole::SoloPrimary),
                                     TextFont {
                                         font: font.clone(),
                                         font_size: 22.0,
                                         ..default()
                                     },
-                                    TextColor(Color::srgba(0.02, 0.05, 0.08, 1.0)),
+                                    TextColor(base_text_color(LobbyMenuTextRole::SoloPrimary).with_alpha(0.0)),
                                 ));
                                 btn.spawn((
                                     Text::new("Single player"),
+                                    LobbyMenuAnimatedText(LobbyMenuTextRole::SoloSecondary),
                                     TextFont {
                                         font: font.clone(),
                                         font_size: 13.0,
                                         ..default()
                                     },
-                                    TextColor(Color::srgba(0.05, 0.12, 0.16, 0.85)),
+                                    TextColor(base_text_color(LobbyMenuTextRole::SoloSecondary).with_alpha(0.0)),
                                 ));
                             });
 
@@ -317,6 +537,7 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                 // ── Footer ───────────────────────────────────────────────────
                 panel
                     .spawn((
+                        LobbyMenuAnimFooterBar,
                         Node {
                             width: Val::Percent(100.0),
                             min_height: Val::Px(44.0),
@@ -327,26 +548,28 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                             border_radius: BorderRadius::all(Val::Px(10.0)),
                             ..default()
                         },
-                        BackgroundColor(menu_footer_bg()),
+                        BackgroundColor(menu_footer_bg().with_alpha(0.0)),
                     ))
                     .with_children(|footer| {
                         footer.spawn((
                             Text::new("GitHub   Discord   Web"),
+                            LobbyMenuAnimatedText(LobbyMenuTextRole::FooterLinks),
                             TextFont {
                                 font: font.clone(),
                                 font_size: 12.0,
                                 ..default()
                             },
-                            TextColor(text_secondary()),
+                            TextColor(base_text_color(LobbyMenuTextRole::FooterLinks).with_alpha(0.0)),
                         ));
                         footer.spawn((
                             Text::new("NEWS"),
+                            LobbyMenuAnimatedText(LobbyMenuTextRole::FooterNews),
                             TextFont {
                                 font: font.clone(),
                                 font_size: 12.0,
                                 ..default()
                             },
-                            TextColor(text_primary()),
+                            TextColor(base_text_color(LobbyMenuTextRole::FooterNews).with_alpha(0.0)),
                         ));
                     });
             });
@@ -415,6 +638,14 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                 });
             });
         });
+
+    commands.insert_resource(LobbyMainMenuAnim {
+        phase: LobbyMenuAnimPhase::Entering,
+        phase_time: 0.0,
+        pending: PendingNavigate::None,
+        clicked: None,
+        force_visual_reset: false,
+    });
 }
 
 fn spawn_stub_button(parent: &mut ChildSpawnerCommands<'_>, font: &Handle<Font>, label: &str, kind: ComingSoonKind) {
@@ -426,6 +657,7 @@ fn spawn_stub_button(parent: &mut ChildSpawnerCommands<'_>, font: &Handle<Font>,
         Button,
         ComingSoonMenuButton,
         kind,
+        UiTransform::default(),
         Node {
             width: Val::Percent(100.0),
             min_height: Val::Px(44.0),
@@ -436,22 +668,24 @@ fn spawn_stub_button(parent: &mut ChildSpawnerCommands<'_>, font: &Handle<Font>,
             align_items: AlignItems::Center,
             ..default()
         },
-        BackgroundColor(base),
-        BorderColor::all(panel_border()),
+        BackgroundColor(base.with_alpha(0.0)),
+        BorderColor::all(panel_border().with_alpha(0.0)),
     ))
     .with_children(|btn| {
+        let role = if matches!(kind, ComingSoonKind::Ranked) {
+            LobbyMenuTextRole::StubRanked
+        } else {
+            LobbyMenuTextRole::StubSecondary
+        };
         btn.spawn((
             Text::new(label),
+            LobbyMenuAnimatedText(role),
             TextFont {
                 font: font.clone(),
                 font_size: 16.0,
                 ..default()
             },
-            TextColor(if matches!(kind, ComingSoonKind::Ranked) {
-                Color::srgba(0.06, 0.05, 0.04, 1.0)
-            } else {
-                text_primary()
-            }),
+            TextColor(base_text_color(role).with_alpha(0.0)),
         ));
     });
 }
@@ -602,11 +836,15 @@ pub fn system_nickname_autosave_tick(
 
 pub fn system_handle_coming_soon_click(
     mut q: Query<
-        (&Interaction, &mut BackgroundColor, &ComingSoonKind),
+        (Entity, &Interaction, &mut BackgroundColor, &ComingSoonKind),
         (Changed<Interaction>, With<ComingSoonMenuButton>),
     >,
+    mut anim: ResMut<LobbyMainMenuAnim>,
 ) {
-    for (interaction, mut bg, kind) in &mut q {
+    for (ent, interaction, mut bg, kind) in &mut q {
+        if !anim.is_idle() {
+            continue;
+        }
         match *interaction {
             Interaction::Pressed => {
                 let label = match kind {
@@ -618,6 +856,10 @@ pub fn system_handle_coming_soon_click(
                     ComingSoonKind::Ranked => accent_ranked_gold_pressed().into(),
                     ComingSoonKind::Secondary => Color::srgba(0.1, 0.11, 0.14, 1.0).into(),
                 };
+                anim.phase = LobbyMenuAnimPhase::Exiting;
+                anim.phase_time = 0.0;
+                anim.pending = PendingNavigate::Stub;
+                anim.clicked = Some(ent);
             }
             Interaction::Hovered => {
                 *bg = match kind {
@@ -770,6 +1012,7 @@ pub fn system_update_lobby_browser(
                                 LobbyCardRoot,
                                 Button,
                                 JoinLobbyButton(lobby.id),
+                                UiTransform::default(),
                                 Node {
                                     width: Val::Percent(100.0),
                                     min_height: Val::Px(180.0),
@@ -947,29 +1190,22 @@ pub fn system_update_lobby_browser(
 
 pub fn system_handle_join_clicks(
     mut interaction_q: Query<
-        (&Interaction, &mut BackgroundColor, &JoinLobbyButton),
-        (Changed<Interaction>, With<Button>),
+        (Entity, &Interaction, &mut BackgroundColor, &JoinLobbyButton),
+        (Changed<Interaction>, With<Button>, With<LobbyCardRoot>),
     >,
-    mut senders: Query<&mut MessageSender<ClientJoinMessage>>,
-    cli: Res<Cli>,
-    settings: Res<ClientSettings>,
-    mut joined_lobby: ResMut<JoinedLobby>,
+    mut anim: ResMut<LobbyMainMenuAnim>,
 ) {
-    for (interaction, mut bg, btn) in interaction_q.iter_mut() {
+    for (ent, interaction, mut bg, btn) in interaction_q.iter_mut() {
+        if !anim.is_idle() {
+            continue;
+        }
         match *interaction {
             Interaction::Pressed => {
-                let name = settings.config.display_nickname_for_play();
-                for mut sender in senders.iter_mut() {
-                    let msg = ClientJoinMessage {
-                        name: name.clone(),
-                        is_observer: cli.observer,
-                        target_lobby_id: Some(btn.0),
-                    };
-                    let _ = sender.send::<ReliableChannel>(msg);
-                    info!("✅ Requested to join Lobby ID {}", btn.0);
-                }
                 *bg = accent_solo_cyan_pressed().into();
-                joined_lobby.0 = Some(btn.0);
+                anim.phase = LobbyMenuAnimPhase::Exiting;
+                anim.phase_time = 0.0;
+                anim.pending = PendingNavigate::JoinLobby(btn.0);
+                anim.clicked = Some(ent);
             }
             Interaction::Hovered => {
                 *bg = accent_solo_cyan_hover().into();
@@ -983,55 +1219,23 @@ pub fn system_handle_join_clicks(
 
 pub fn system_handle_single_player_click(
     mut interaction_q: Query<
-        (&Interaction, &mut BackgroundColor),
+        (Entity, &Interaction, &mut BackgroundColor),
         (Changed<Interaction>, With<SinglePlayerButton>),
     >,
-    mut commands: Commands,
-    mut next_state: ResMut<NextState<crate::AppState>>,
-    settings: Res<ClientSettings>,
+    mut anim: ResMut<LobbyMainMenuAnim>,
 ) {
-    for (interaction, mut bg) in interaction_q.iter_mut() {
+    for (ent, interaction, mut bg) in interaction_q.iter_mut() {
+        if !anim.is_idle() {
+            continue;
+        }
         match *interaction {
             Interaction::Pressed => {
                 info!("🎮 Iniciando Single Player...");
                 *bg = accent_solo_cyan_pressed().into();
-
-                let mut config = dark_rift_shared::game_config::GameConfig::default();
-
-                if let Ok(content) = std::fs::read_to_string("assets/configs/default_single_player.ron")
-                {
-                    if let Ok(parsed) = ron::from_str(&content) {
-                        config = parsed;
-                        info!("✅ Loaded Single Player config from .ron template!");
-                    } else {
-                        warn!("⚠️ Failed to parse .ron template, using fallback defaults.");
-                    }
-                } else {
-                    config.bot_count = 7;
-                }
-
-                let spawn_x = config.map_width / 2;
-                let spawn_y = config.map_height / 2;
-                let player_name = settings.config.display_nickname_for_play();
-
-                let mock_msg = ServerStartMessage {
-                    config,
-                    my_player_id: Some(1),
-                    seed: 42069,
-                    players: vec![PlayerInfo {
-                        id: 1,
-                        name: player_name,
-                        player_type: PlayerType::Human,
-                        color: [1.0, 0.2, 0.2],
-                        spawn_x,
-                        spawn_y,
-                    }],
-                    missed_turns: vec![],
-                    map_data: None,
-                };
-
-                commands.insert_resource(crate::MockSinglePlayerStart(mock_msg));
-                next_state.set(crate::AppState::InGame);
+                anim.phase = LobbyMenuAnimPhase::Exiting;
+                anim.phase_time = 0.0;
+                anim.pending = PendingNavigate::SinglePlayer;
+                anim.clicked = Some(ent);
             }
             Interaction::Hovered => *bg = accent_solo_cyan_hover().into(),
             Interaction::None => *bg = accent_solo_cyan().into(),
@@ -1043,6 +1247,7 @@ pub fn system_handle_cancel_join(
     mut interaction_q: Query<&Interaction, (Changed<Interaction>, With<CancelJoinButton>)>,
     mut senders: Query<&mut MessageSender<ClientLeaveMessage>>,
     mut joined_lobby: ResMut<JoinedLobby>,
+    mut anim: ResMut<LobbyMainMenuAnim>,
 ) {
     for interaction in interaction_q.iter_mut() {
         if *interaction == Interaction::Pressed {
@@ -1051,7 +1256,418 @@ pub fn system_handle_cancel_join(
                 let _ = sender.send::<dark_rift_shared::protocol::ReliableChannel>(ClientLeaveMessage);
                 info!("🚫 Cancelled join. Sending ClientLeaveMessage.");
             }
+            anim.force_visual_reset = true;
         }
+    }
+}
+
+fn insert_mock_single_player_start(commands: &mut Commands, settings: &ClientSettings) {
+    let mut config = dark_rift_shared::game_config::GameConfig::default();
+
+    if let Ok(content) = std::fs::read_to_string("assets/configs/default_single_player.ron") {
+        if let Ok(parsed) = ron::from_str(&content) {
+            config = parsed;
+            info!("✅ Loaded Single Player config from .ron template!");
+        } else {
+            warn!("⚠️ Failed to parse .ron template, using fallback defaults.");
+        }
+    } else {
+        config.bot_count = 7;
+    }
+
+    let spawn_x = config.map_width / 2;
+    let spawn_y = config.map_height / 2;
+    let player_name = settings.config.display_nickname_for_play();
+
+    let mock_msg = ServerStartMessage {
+        config,
+        my_player_id: Some(1),
+        seed: 42069,
+        players: vec![PlayerInfo {
+            id: 1,
+            name: player_name,
+            player_type: PlayerType::Human,
+            color: [1.0, 0.2, 0.2],
+            spawn_x,
+            spawn_y,
+        }],
+        missed_turns: vec![],
+        map_data: None,
+    };
+
+    commands.insert_resource(crate::MockSinglePlayerStart(mock_msg));
+}
+
+/// Snap all animated chrome widgets back to theme defaults (used after cancel-from-waiting and stub bounce).
+pub fn apply_lobby_main_menu_idle_visuals(q: &mut LobbyMenuAnimVisualQueries) {
+    if let Ok(mut bg) = q.color_set.p0().single_mut() {
+        *bg = menu_backdrop().into();
+    }
+    if let Ok((mut pbg, mut pbd)) = q.color_set.p1().single_mut() {
+        *pbg = menu_panel_bg().into();
+        *pbd = BorderColor::all(menu_panel_border_glow());
+    }
+    if let Ok(mut h) = q.transform_set.p0().single_mut() {
+        *h = UiTransform::default();
+    }
+    if let Ok(mut l) = q.transform_set.p1().single_mut() {
+        *l = UiTransform::from_translation(Val2::px(0.0, 0.0));
+    }
+    if let Ok(mut r) = q.transform_set.p2().single_mut() {
+        *r = UiTransform::from_translation(Val2::px(0.0, 0.0));
+    }
+    if let Ok(mut f) = q.color_set.p2().single_mut() {
+        *f = menu_footer_bg().into();
+    }
+    if let Ok((mut nbg, mut nbd)) = q.color_set.p3().single_mut() {
+        *nbg = nickname_field_bg().into();
+        *nbd = BorderColor::all(nickname_field_border());
+    }
+    if let Ok((mut sbg, mut sbd)) = q.color_set.p4().single_mut() {
+        *sbg = accent_solo_cyan().into();
+        *sbd = BorderColor::all(solo_button_border_color());
+    }
+    if let Ok(mut str) = q.transform_set.p3().single_mut() {
+        *str = UiTransform::default();
+    }
+    for (_, mut sbg, mut sbd, kind) in q.color_set.p5().iter_mut() {
+        match kind {
+            ComingSoonKind::Ranked => *sbg = accent_ranked_gold().into(),
+            ComingSoonKind::Secondary => *sbg = menu_secondary_button().into(),
+        }
+        *sbd = BorderColor::all(panel_border());
+    }
+    for (_, mut tr) in q.transform_set.p4().iter_mut() {
+        *tr = UiTransform::default();
+    }
+    for (_, mut tr) in q.transform_set.p5().iter_mut() {
+        *tr = UiTransform::default();
+    }
+    for (mut tc, role) in q.anim_text.iter_mut() {
+        tc.0 = base_text_color(role.0);
+    }
+}
+
+const EXIT_SLIDE_LEFT_PX: f32 = -440.0;
+const EXIT_SLIDE_RIGHT_PX: f32 = 440.0;
+const EXIT_HEADER_Y_PX: f32 = -76.0;
+
+#[inline]
+fn lerp_f(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
+
+/// Drive intro / exit / stub re-entry motion for the lobby main chrome.
+pub fn system_lobby_main_menu_anim(
+    time: Res<Time>,
+    mut anim: ResMut<LobbyMainMenuAnim>,
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<crate::AppState>>,
+    settings: Res<ClientSettings>,
+    cli: Res<Cli>,
+    mut joined: ResMut<JoinedLobby>,
+    mut join_senders: Query<&mut MessageSender<ClientJoinMessage>>,
+    mut q: LobbyMenuAnimVisualQueries,
+) {
+    let dt = time.delta_secs();
+    if anim.force_visual_reset {
+        apply_lobby_main_menu_idle_visuals(&mut q);
+        anim.force_visual_reset = false;
+        anim.phase = LobbyMenuAnimPhase::Idle;
+        anim.phase_time = 0.0;
+        anim.pending = PendingNavigate::None;
+        anim.clicked = None;
+        return;
+    }
+
+    match anim.phase {
+        LobbyMenuAnimPhase::Entering => {
+            anim.phase_time += dt;
+            let u = (anim.phase_time / MENU_INTRO_DURATION).min(1.0);
+            let e = ease_out_cubic(u);
+            apply_intro_frame(e, &mut q);
+            if u >= 1.0 {
+                anim.phase = LobbyMenuAnimPhase::Idle;
+                anim.phase_time = 0.0;
+            }
+        }
+        LobbyMenuAnimPhase::Idle => {}
+        LobbyMenuAnimPhase::Exiting => {
+            anim.phase_time += dt;
+            let u = (anim.phase_time / MENU_EXIT_DURATION).min(1.0);
+            let exit_e = ease_in_out_cubic(u);
+            let fade = 1.0 - smoothstep(0.12, 1.0, u);
+            let scale_u = (u / 0.42).min(1.0);
+            let click_scale = 1.0 + 0.12 * ease_out_cubic(scale_u);
+
+            if let Ok(mut l) = q.transform_set.p1().single_mut() {
+                *l = UiTransform::from_translation(Val2::px(
+                    lerp_f(0.0, EXIT_SLIDE_LEFT_PX, exit_e),
+                    0.0,
+                ));
+            }
+            if let Ok(mut r) = q.transform_set.p2().single_mut() {
+                *r = UiTransform::from_translation(Val2::px(
+                    lerp_f(0.0, EXIT_SLIDE_RIGHT_PX, exit_e),
+                    0.0,
+                ));
+            }
+            if let Ok(mut h) = q.transform_set.p0().single_mut() {
+                *h = UiTransform::from_translation(Val2::px(0.0, lerp_f(0.0, EXIT_HEADER_Y_PX, exit_e)));
+            }
+
+            if let Some(ce) = anim.clicked {
+                set_clicked_menu_scale(&mut q, ce, Vec2::splat(click_scale));
+            }
+
+            if let Ok(mut bg) = q.color_set.p0().single_mut() {
+                *bg = menu_backdrop()
+                    .with_alpha(menu_backdrop().alpha() * fade)
+                    .into();
+            }
+            if let Ok((mut pbg, mut pbd)) = q.color_set.p1().single_mut() {
+                *pbg = menu_panel_bg()
+                    .with_alpha(menu_panel_bg().alpha() * fade)
+                    .into();
+                *pbd = BorderColor::all(
+                    menu_panel_border_glow()
+                        .with_alpha(menu_panel_border_glow().alpha() * fade),
+                );
+            }
+            if let Ok(mut f) = q.color_set.p2().single_mut() {
+                *f = menu_footer_bg()
+                    .with_alpha(menu_footer_bg().alpha() * fade)
+                    .into();
+            }
+            if let Ok((mut nbg, mut nbd)) = q.color_set.p3().single_mut() {
+                *nbg = nickname_field_bg()
+                    .with_alpha(nickname_field_bg().alpha() * fade)
+                    .into();
+                *nbd = BorderColor::all(
+                    nickname_field_border()
+                        .with_alpha(nickname_field_border().alpha() * fade),
+                );
+            }
+            if let Ok((mut sbg, mut sbd)) = q.color_set.p4().single_mut() {
+                *sbg = accent_solo_cyan()
+                    .with_alpha(accent_solo_cyan().alpha() * fade)
+                    .into();
+                *sbd = BorderColor::all(
+                    solo_button_border_color()
+                        .with_alpha(solo_button_border_color().alpha() * fade),
+                );
+            }
+            for (_, mut sbg, mut sbd, kind) in q.color_set.p5().iter_mut() {
+                let base = match kind {
+                    ComingSoonKind::Ranked => accent_ranked_gold(),
+                    ComingSoonKind::Secondary => menu_secondary_button(),
+                };
+                *sbg = base.with_alpha(base.alpha() * fade).into();
+                *sbd = BorderColor::all(panel_border().with_alpha(panel_border().alpha() * fade));
+            }
+            for (mut tc, role) in q.anim_text.iter_mut() {
+                let b = base_text_color(role.0);
+                tc.0 = b.with_alpha(b.alpha() * fade);
+            }
+
+            if u < 1.0 {
+                return;
+            }
+
+            match anim.pending {
+                PendingNavigate::SinglePlayer => {
+                    insert_mock_single_player_start(&mut commands, &settings);
+                    next_state.set(crate::AppState::InGame);
+                }
+                PendingNavigate::JoinLobby(id) => {
+                    let name = settings.config.display_nickname_for_play();
+                    for mut sender in join_senders.iter_mut() {
+                        let msg = ClientJoinMessage {
+                            name: name.clone(),
+                            is_observer: cli.observer,
+                            target_lobby_id: Some(id),
+                        };
+                        let _ = sender.send::<ReliableChannel>(msg);
+                        info!("✅ Requested to join Lobby ID {} (after menu anim)", id);
+                    }
+                    joined.0 = Some(id);
+                }
+                PendingNavigate::Stub => {
+                    anim.phase = LobbyMenuAnimPhase::StubReentering;
+                    anim.phase_time = 0.0;
+                    anim.pending = PendingNavigate::None;
+                    return;
+                }
+                PendingNavigate::None => {}
+            }
+            anim.phase = LobbyMenuAnimPhase::Idle;
+            anim.phase_time = 0.0;
+            anim.pending = PendingNavigate::None;
+            anim.clicked = None;
+        }
+        LobbyMenuAnimPhase::StubReentering => {
+            anim.phase_time += dt;
+            let u = (anim.phase_time / MENU_STUB_REENTER_DURATION).min(1.0);
+            let e = ease_in_out_cubic(u);
+            let slide_l = lerp_f(EXIT_SLIDE_LEFT_PX, 0.0, e);
+            let slide_r = lerp_f(EXIT_SLIDE_RIGHT_PX, 0.0, e);
+            let slide_h = lerp_f(EXIT_HEADER_Y_PX, 0.0, e);
+            if let Ok(mut l) = q.transform_set.p1().single_mut() {
+                *l = UiTransform::from_translation(Val2::px(slide_l, 0.0));
+            }
+            if let Ok(mut r) = q.transform_set.p2().single_mut() {
+                *r = UiTransform::from_translation(Val2::px(slide_r, 0.0));
+            }
+            if let Ok(mut h) = q.transform_set.p0().single_mut() {
+                *h = UiTransform::from_translation(Val2::px(0.0, slide_h));
+            }
+            if let Some(ce) = anim.clicked {
+                set_clicked_menu_scale(
+                    &mut q,
+                    ce,
+                    Vec2::splat(lerp_f(click_scale_at_exit_end(), 1.0, e)),
+                );
+            }
+            if let Ok(mut bg) = q.color_set.p0().single_mut() {
+                *bg = menu_backdrop()
+                    .with_alpha(menu_backdrop().alpha() * e)
+                    .into();
+            }
+            if let Ok((mut pbg, mut pbd)) = q.color_set.p1().single_mut() {
+                *pbg = menu_panel_bg()
+                    .with_alpha(menu_panel_bg().alpha() * e)
+                    .into();
+                *pbd = BorderColor::all(
+                    menu_panel_border_glow()
+                        .with_alpha(menu_panel_border_glow().alpha() * e),
+                );
+            }
+            if let Ok(mut f) = q.color_set.p2().single_mut() {
+                *f = menu_footer_bg()
+                    .with_alpha(menu_footer_bg().alpha() * e)
+                    .into();
+            }
+            if let Ok((mut nbg, mut nbd)) = q.color_set.p3().single_mut() {
+                *nbg = nickname_field_bg()
+                    .with_alpha(nickname_field_bg().alpha() * e)
+                    .into();
+                *nbd = BorderColor::all(
+                    nickname_field_border()
+                        .with_alpha(nickname_field_border().alpha() * e),
+                );
+            }
+            if let Ok((mut sbg, mut sbd)) = q.color_set.p4().single_mut() {
+                *sbg = accent_solo_cyan()
+                    .with_alpha(accent_solo_cyan().alpha() * e)
+                    .into();
+                *sbd = BorderColor::all(
+                    solo_button_border_color()
+                        .with_alpha(solo_button_border_color().alpha() * e),
+                );
+            }
+            if let Ok(mut str) = q.transform_set.p3().single_mut() {
+                *str = UiTransform::default();
+            }
+            for (_, mut sbg, mut sbd, kind) in q.color_set.p5().iter_mut() {
+                let base = match kind {
+                    ComingSoonKind::Ranked => accent_ranked_gold(),
+                    ComingSoonKind::Secondary => menu_secondary_button(),
+                };
+                *sbg = base.with_alpha(base.alpha() * e).into();
+                *sbd = BorderColor::all(panel_border().with_alpha(panel_border().alpha() * e));
+            }
+            for (ent, mut str) in q.transform_set.p4().iter_mut() {
+                if anim.clicked != Some(ent) {
+                    *str = UiTransform::default();
+                }
+            }
+            for (mut tc, role) in q.anim_text.iter_mut() {
+                let b = base_text_color(role.0);
+                tc.0 = b.with_alpha(b.alpha() * e);
+            }
+            if u < 1.0 {
+                return;
+            }
+            apply_lobby_main_menu_idle_visuals(&mut q);
+            anim.phase = LobbyMenuAnimPhase::Idle;
+            anim.phase_time = 0.0;
+            anim.clicked = None;
+        }
+    }
+}
+
+#[inline]
+fn click_scale_at_exit_end() -> f32 {
+    1.0 + 0.12
+}
+
+fn apply_intro_frame(e: f32, q: &mut LobbyMenuAnimVisualQueries) {
+    if let Ok(mut bg) = q.color_set.p0().single_mut() {
+        *bg = menu_backdrop()
+            .with_alpha(menu_backdrop().alpha() * e)
+            .into();
+    }
+    if let Ok((mut pbg, mut pbd)) = q.color_set.p1().single_mut() {
+        *pbg = menu_panel_bg()
+            .with_alpha(menu_panel_bg().alpha() * e)
+            .into();
+        *pbd = BorderColor::all(
+            menu_panel_border_glow()
+                .with_alpha(menu_panel_border_glow().alpha() * e),
+        );
+    }
+    if let Ok(mut h) = q.transform_set.p0().single_mut() {
+        *h = UiTransform::from_translation(Val2::px(
+            0.0,
+            lerp_f(INTRO_HEADER_Y_PX, 0.0, e),
+        ));
+    }
+    if let Ok(mut l) = q.transform_set.p1().single_mut() {
+        *l = UiTransform::from_translation(Val2::px(
+            lerp_f(INTRO_SLIDE_LEFT_PX, 0.0, e),
+            0.0,
+        ));
+    }
+    if let Ok(mut r) = q.transform_set.p2().single_mut() {
+        *r = UiTransform::from_translation(Val2::px(
+            lerp_f(INTRO_SLIDE_RIGHT_PX, 0.0, e),
+            0.0,
+        ));
+    }
+    if let Ok(mut f) = q.color_set.p2().single_mut() {
+        *f = menu_footer_bg()
+            .with_alpha(menu_footer_bg().alpha() * e)
+            .into();
+    }
+    if let Ok((mut nbg, mut nbd)) = q.color_set.p3().single_mut() {
+        *nbg = nickname_field_bg()
+            .with_alpha(nickname_field_bg().alpha() * e)
+            .into();
+        *nbd = BorderColor::all(
+            nickname_field_border()
+                .with_alpha(nickname_field_border().alpha() * e),
+        );
+    }
+    if let Ok((mut sbg, mut sbd)) = q.color_set.p4().single_mut() {
+        *sbg = accent_solo_cyan()
+            .with_alpha(accent_solo_cyan().alpha() * e)
+            .into();
+        *sbd = BorderColor::all(
+            solo_button_border_color()
+                .with_alpha(solo_button_border_color().alpha() * e),
+        );
+    }
+    for (_, mut sbg, mut sbd, kind) in q.color_set.p5().iter_mut() {
+        let base = match kind {
+            ComingSoonKind::Ranked => accent_ranked_gold(),
+            ComingSoonKind::Secondary => menu_secondary_button(),
+        };
+        *sbg = base.with_alpha(base.alpha() * e).into();
+        *sbd = BorderColor::all(panel_border().with_alpha(panel_border().alpha() * e));
+    }
+    for (mut tc, role) in q.anim_text.iter_mut() {
+        let b = base_text_color(role.0);
+        tc.0 = b.with_alpha(b.alpha() * e);
     }
 }
 
@@ -1059,4 +1675,5 @@ pub fn system_cleanup_lobby_browser(mut commands: Commands, q_root: Query<Entity
     if let Some(ent) = q_root.iter().next() {
         commands.entity(ent).despawn();
     }
+    commands.remove_resource::<LobbyMainMenuAnim>();
 }

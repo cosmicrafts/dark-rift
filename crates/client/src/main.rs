@@ -483,6 +483,7 @@ fn main() {
                 ui_lobby_browser::system_nickname_keyboard_when_focused
                     .run_if(|f: Res<LobbyNicknameFocused>| f.0),
                 ui_lobby_browser::system_nickname_autosave_tick,
+                system_lobby_main_menu_anim,
             ).run_if(|state: Res<State<AppState>>, cli: Res<Cli>| *state.get() == AppState::LobbyBrowser && !cli.bot))
             .add_systems(Update, (
                 handle_server_start,
