@@ -113,8 +113,8 @@ pub struct LobbyMainMenuAnim {
     pub phase_time: f32,
     pub pending: PendingNavigate,
     pub clicked: Option<Entity>,
-    /// Set from cancel join so the anim system restores chrome after waiting overlay.
-    pub force_visual_reset: bool,
+    /// After cancel-from-waiting: replay main-menu intro (slide/fade) instead of snapping idle.
+    pub play_main_menu_intro_after_cancel: bool,
 }
 
 impl LobbyMainMenuAnim {
@@ -181,20 +181,26 @@ fn base_text_color(role: LobbyMenuTextRole) -> Color {
 /// Bevy B0001 treats multiple mutable queries for the same component type inside one
 /// `#[derive(SystemParam)]` as conflicting unless they are wrapped in a `ParamSet`, even when the
 /// marker components are logically disjoint. Keep color writers and transform writers in separate
-/// sets so the animation system can mutate both safely.
+/// sets so the animation system can mutate both safely. All `Node` mutators for the lobby chrome
+/// live in `layout_node_set` so they never alias `Node` with `color_set`.
 #[derive(SystemParam)]
 pub struct LobbyMenuAnimVisualQueries<'w, 's> {
+    /// Panel chrome (includes `Node` for `display`) plus waiting/cards layout roots — one `ParamSet`
+    /// so `Node` is never aliased with the panel tuple (Bevy B0001).
+    pub layout_node_set: ParamSet<
+        'w,
+        's,
+        (
+            Query<'w, 's, &'static mut Node, With<LobbyMenuAnimPanel>>,
+            Query<'w, 's, &'static mut Node, With<WaitingQueueContainer>>,
+            Query<'w, 's, &'static mut Node, With<LobbyCardsContainer>>,
+        ),
+    >,
     pub color_set: ParamSet<
         'w,
         's,
         (
             Query<'w, 's, &'static mut BackgroundColor, With<LobbyMenuAnimBackdrop>>,
-            Query<
-                'w,
-                's,
-                (&'static mut BackgroundColor, &'static mut BorderColor),
-                With<LobbyMenuAnimPanel>,
-            >,
             Query<'w, 's, &'static mut BackgroundColor, With<LobbyMenuAnimFooterBar>>,
             Query<
                 'w,
@@ -218,6 +224,12 @@ pub struct LobbyMenuAnimVisualQueries<'w, 's> {
                     &'static ComingSoonKind,
                 ),
                 With<ComingSoonMenuButton>,
+            >,
+            Query<
+                'w,
+                's,
+                (&'static mut BackgroundColor, &'static mut BorderColor),
+                With<LobbyMenuAnimPanel>,
             >,
         ),
     >,
@@ -256,9 +268,34 @@ fn set_clicked_menu_scale(q: &mut LobbyMenuAnimVisualQueries, ce: Entity, scale:
     }
 }
 
-const MENU_INTRO_DURATION: f32 = 0.48;
-const MENU_EXIT_DURATION: f32 = 0.58;
-const MENU_STUB_REENTER_DURATION: f32 = 0.24;
+fn reset_main_menu_click_transforms(q: &mut LobbyMenuAnimVisualQueries) {
+    if let Ok(mut tr) = q.transform_set.p3().single_mut() {
+        *tr = UiTransform::default();
+    }
+    for (_, mut tr) in q.transform_set.p4().iter_mut() {
+        *tr = UiTransform::default();
+    }
+    for (_, mut tr) in q.transform_set.p5().iter_mut() {
+        *tr = UiTransform::default();
+    }
+}
+
+#[inline]
+fn apply_lobby_waiting_overlay_layout(q: &mut LobbyMenuAnimVisualQueries) {
+    if let Ok(mut panel_node) = q.layout_node_set.p0().single_mut() {
+        panel_node.display = Display::None;
+    }
+    if let Ok(mut n) = q.layout_node_set.p1().single_mut() {
+        n.display = Display::Flex;
+    }
+    if let Ok(mut n) = q.layout_node_set.p2().single_mut() {
+        n.display = Display::None;
+    }
+}
+
+const MENU_INTRO_DURATION: f32 = 0.22;
+const MENU_EXIT_DURATION: f32 = 0.24;
+const MENU_STUB_REENTER_DURATION: f32 = 0.18;
 
 const INTRO_SLIDE_LEFT_PX: f32 = -110.0;
 const INTRO_SLIDE_RIGHT_PX: f32 = 110.0;
@@ -644,7 +681,7 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
         phase_time: 0.0,
         pending: PendingNavigate::None,
         clicked: None,
-        force_visual_reset: false,
+        play_main_menu_intro_after_cancel: false,
     });
 }
 
@@ -1256,7 +1293,7 @@ pub fn system_handle_cancel_join(
                 let _ = sender.send::<dark_rift_shared::protocol::ReliableChannel>(ClientLeaveMessage);
                 info!("🚫 Cancelled join. Sending ClientLeaveMessage.");
             }
-            anim.force_visual_reset = true;
+            anim.play_main_menu_intro_after_cancel = true;
         }
     }
 }
@@ -1303,7 +1340,10 @@ pub fn apply_lobby_main_menu_idle_visuals(q: &mut LobbyMenuAnimVisualQueries) {
     if let Ok(mut bg) = q.color_set.p0().single_mut() {
         *bg = menu_backdrop().into();
     }
-    if let Ok((mut pbg, mut pbd)) = q.color_set.p1().single_mut() {
+    if let Ok(mut panel_node) = q.layout_node_set.p0().single_mut() {
+        panel_node.display = Display::Flex;
+    }
+    if let Ok((mut pbg, mut pbd)) = q.color_set.p5().single_mut() {
         *pbg = menu_panel_bg().into();
         *pbd = BorderColor::all(menu_panel_border_glow());
     }
@@ -1316,21 +1356,21 @@ pub fn apply_lobby_main_menu_idle_visuals(q: &mut LobbyMenuAnimVisualQueries) {
     if let Ok(mut r) = q.transform_set.p2().single_mut() {
         *r = UiTransform::from_translation(Val2::px(0.0, 0.0));
     }
-    if let Ok(mut f) = q.color_set.p2().single_mut() {
+    if let Ok(mut f) = q.color_set.p1().single_mut() {
         *f = menu_footer_bg().into();
     }
-    if let Ok((mut nbg, mut nbd)) = q.color_set.p3().single_mut() {
+    if let Ok((mut nbg, mut nbd)) = q.color_set.p2().single_mut() {
         *nbg = nickname_field_bg().into();
         *nbd = BorderColor::all(nickname_field_border());
     }
-    if let Ok((mut sbg, mut sbd)) = q.color_set.p4().single_mut() {
+    if let Ok((mut sbg, mut sbd)) = q.color_set.p3().single_mut() {
         *sbg = accent_solo_cyan().into();
         *sbd = BorderColor::all(solo_button_border_color());
     }
     if let Ok(mut str) = q.transform_set.p3().single_mut() {
         *str = UiTransform::default();
     }
-    for (_, mut sbg, mut sbd, kind) in q.color_set.p5().iter_mut() {
+    for (_, mut sbg, mut sbd, kind) in q.color_set.p4().iter_mut() {
         match kind {
             ComingSoonKind::Ranked => *sbg = accent_ranked_gold().into(),
             ComingSoonKind::Secondary => *sbg = menu_secondary_button().into(),
@@ -1370,14 +1410,23 @@ pub fn system_lobby_main_menu_anim(
     mut q: LobbyMenuAnimVisualQueries,
 ) {
     let dt = time.delta_secs();
-    if anim.force_visual_reset {
-        apply_lobby_main_menu_idle_visuals(&mut q);
-        anim.force_visual_reset = false;
-        anim.phase = LobbyMenuAnimPhase::Idle;
+    if anim.play_main_menu_intro_after_cancel {
+        anim.play_main_menu_intro_after_cancel = false;
+        if let Ok(mut panel_node) = q.layout_node_set.p0().single_mut() {
+            panel_node.display = Display::Flex;
+        }
+        if let Ok(mut n) = q.layout_node_set.p1().single_mut() {
+            n.display = Display::None;
+        }
+        if let Ok(mut n) = q.layout_node_set.p2().single_mut() {
+            n.display = Display::Flex;
+        }
+        apply_intro_frame(0.0, &mut q);
+        reset_main_menu_click_transforms(&mut q);
+        anim.phase = LobbyMenuAnimPhase::Entering;
         anim.phase_time = 0.0;
         anim.pending = PendingNavigate::None;
         anim.clicked = None;
-        return;
     }
 
     match anim.phase {
@@ -1396,8 +1445,8 @@ pub fn system_lobby_main_menu_anim(
             anim.phase_time += dt;
             let u = (anim.phase_time / MENU_EXIT_DURATION).min(1.0);
             let exit_e = ease_in_out_cubic(u);
-            let fade = 1.0 - smoothstep(0.12, 1.0, u);
-            let scale_u = (u / 0.42).min(1.0);
+            let fade = 1.0 - smoothstep(0.06, 1.0, u);
+            let scale_u = (u / 0.28).min(1.0);
             let click_scale = 1.0 + 0.12 * ease_out_cubic(scale_u);
 
             if let Ok(mut l) = q.transform_set.p1().single_mut() {
@@ -1425,7 +1474,7 @@ pub fn system_lobby_main_menu_anim(
                     .with_alpha(menu_backdrop().alpha() * fade)
                     .into();
             }
-            if let Ok((mut pbg, mut pbd)) = q.color_set.p1().single_mut() {
+            if let Ok((mut pbg, mut pbd)) = q.color_set.p5().single_mut() {
                 *pbg = menu_panel_bg()
                     .with_alpha(menu_panel_bg().alpha() * fade)
                     .into();
@@ -1434,12 +1483,12 @@ pub fn system_lobby_main_menu_anim(
                         .with_alpha(menu_panel_border_glow().alpha() * fade),
                 );
             }
-            if let Ok(mut f) = q.color_set.p2().single_mut() {
+            if let Ok(mut f) = q.color_set.p1().single_mut() {
                 *f = menu_footer_bg()
                     .with_alpha(menu_footer_bg().alpha() * fade)
                     .into();
             }
-            if let Ok((mut nbg, mut nbd)) = q.color_set.p3().single_mut() {
+            if let Ok((mut nbg, mut nbd)) = q.color_set.p2().single_mut() {
                 *nbg = nickname_field_bg()
                     .with_alpha(nickname_field_bg().alpha() * fade)
                     .into();
@@ -1448,7 +1497,7 @@ pub fn system_lobby_main_menu_anim(
                         .with_alpha(nickname_field_border().alpha() * fade),
                 );
             }
-            if let Ok((mut sbg, mut sbd)) = q.color_set.p4().single_mut() {
+            if let Ok((mut sbg, mut sbd)) = q.color_set.p3().single_mut() {
                 *sbg = accent_solo_cyan()
                     .with_alpha(accent_solo_cyan().alpha() * fade)
                     .into();
@@ -1457,7 +1506,7 @@ pub fn system_lobby_main_menu_anim(
                         .with_alpha(solo_button_border_color().alpha() * fade),
                 );
             }
-            for (_, mut sbg, mut sbd, kind) in q.color_set.p5().iter_mut() {
+            for (_, mut sbg, mut sbd, kind) in q.color_set.p4().iter_mut() {
                 let base = match kind {
                     ComingSoonKind::Ranked => accent_ranked_gold(),
                     ComingSoonKind::Secondary => menu_secondary_button(),
@@ -1491,6 +1540,7 @@ pub fn system_lobby_main_menu_anim(
                         info!("✅ Requested to join Lobby ID {} (after menu anim)", id);
                     }
                     joined.0 = Some(id);
+                    apply_lobby_waiting_overlay_layout(&mut q);
                 }
                 PendingNavigate::Stub => {
                     anim.phase = LobbyMenuAnimPhase::StubReentering;
@@ -1533,7 +1583,7 @@ pub fn system_lobby_main_menu_anim(
                     .with_alpha(menu_backdrop().alpha() * e)
                     .into();
             }
-            if let Ok((mut pbg, mut pbd)) = q.color_set.p1().single_mut() {
+            if let Ok((mut pbg, mut pbd)) = q.color_set.p5().single_mut() {
                 *pbg = menu_panel_bg()
                     .with_alpha(menu_panel_bg().alpha() * e)
                     .into();
@@ -1542,12 +1592,12 @@ pub fn system_lobby_main_menu_anim(
                         .with_alpha(menu_panel_border_glow().alpha() * e),
                 );
             }
-            if let Ok(mut f) = q.color_set.p2().single_mut() {
+            if let Ok(mut f) = q.color_set.p1().single_mut() {
                 *f = menu_footer_bg()
                     .with_alpha(menu_footer_bg().alpha() * e)
                     .into();
             }
-            if let Ok((mut nbg, mut nbd)) = q.color_set.p3().single_mut() {
+            if let Ok((mut nbg, mut nbd)) = q.color_set.p2().single_mut() {
                 *nbg = nickname_field_bg()
                     .with_alpha(nickname_field_bg().alpha() * e)
                     .into();
@@ -1556,7 +1606,7 @@ pub fn system_lobby_main_menu_anim(
                         .with_alpha(nickname_field_border().alpha() * e),
                 );
             }
-            if let Ok((mut sbg, mut sbd)) = q.color_set.p4().single_mut() {
+            if let Ok((mut sbg, mut sbd)) = q.color_set.p3().single_mut() {
                 *sbg = accent_solo_cyan()
                     .with_alpha(accent_solo_cyan().alpha() * e)
                     .into();
@@ -1568,7 +1618,7 @@ pub fn system_lobby_main_menu_anim(
             if let Ok(mut str) = q.transform_set.p3().single_mut() {
                 *str = UiTransform::default();
             }
-            for (_, mut sbg, mut sbd, kind) in q.color_set.p5().iter_mut() {
+            for (_, mut sbg, mut sbd, kind) in q.color_set.p4().iter_mut() {
                 let base = match kind {
                     ComingSoonKind::Ranked => accent_ranked_gold(),
                     ComingSoonKind::Secondary => menu_secondary_button(),
@@ -1607,7 +1657,7 @@ fn apply_intro_frame(e: f32, q: &mut LobbyMenuAnimVisualQueries) {
             .with_alpha(menu_backdrop().alpha() * e)
             .into();
     }
-    if let Ok((mut pbg, mut pbd)) = q.color_set.p1().single_mut() {
+    if let Ok((mut pbg, mut pbd)) = q.color_set.p5().single_mut() {
         *pbg = menu_panel_bg()
             .with_alpha(menu_panel_bg().alpha() * e)
             .into();
@@ -1634,12 +1684,12 @@ fn apply_intro_frame(e: f32, q: &mut LobbyMenuAnimVisualQueries) {
             0.0,
         ));
     }
-    if let Ok(mut f) = q.color_set.p2().single_mut() {
+    if let Ok(mut f) = q.color_set.p1().single_mut() {
         *f = menu_footer_bg()
             .with_alpha(menu_footer_bg().alpha() * e)
             .into();
     }
-    if let Ok((mut nbg, mut nbd)) = q.color_set.p3().single_mut() {
+    if let Ok((mut nbg, mut nbd)) = q.color_set.p2().single_mut() {
         *nbg = nickname_field_bg()
             .with_alpha(nickname_field_bg().alpha() * e)
             .into();
@@ -1648,7 +1698,7 @@ fn apply_intro_frame(e: f32, q: &mut LobbyMenuAnimVisualQueries) {
                 .with_alpha(nickname_field_border().alpha() * e),
         );
     }
-    if let Ok((mut sbg, mut sbd)) = q.color_set.p4().single_mut() {
+    if let Ok((mut sbg, mut sbd)) = q.color_set.p3().single_mut() {
         *sbg = accent_solo_cyan()
             .with_alpha(accent_solo_cyan().alpha() * e)
             .into();
@@ -1657,7 +1707,7 @@ fn apply_intro_frame(e: f32, q: &mut LobbyMenuAnimVisualQueries) {
                 .with_alpha(solo_button_border_color().alpha() * e),
         );
     }
-    for (_, mut sbg, mut sbd, kind) in q.color_set.p5().iter_mut() {
+    for (_, mut sbg, mut sbd, kind) in q.color_set.p4().iter_mut() {
         let base = match kind {
             ComingSoonKind::Ranked => accent_ranked_gold(),
             ComingSoonKind::Secondary => menu_secondary_button(),

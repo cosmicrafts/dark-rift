@@ -38,20 +38,21 @@
 
     .loader-ui {
       position: absolute;
-      top: max(2vh, calc(12px + env(safe-area-inset-top, 0px)));
+      bottom: max(3vh, calc(16px + env(safe-area-inset-bottom, 0px)));
       left: 50%;
       transform: translateX(-50%);
-      width: min(88vw, 360px);
+      width: min(94vw, 920px);
       z-index: 2;
       box-sizing: border-box;
-      padding: 0 min(3vw, 16px);
+      padding: 0 min(2vw, 12px);
     }
 
     .loader-bar-track {
-      height: 5px;
-      border-radius: 3px;
-      background: rgba(255, 255, 255, 0.1);
+      height: clamp(18px, 5vh, 40px);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.12);
       overflow: hidden;
+      box-shadow: 0 2px 16px rgba(0, 0, 0, 0.35);
     }
 
     .loader-bar-fill {
@@ -60,7 +61,7 @@
       transform-origin: left center;
       transform: scaleX(0);
       background: linear-gradient(90deg, #5a8a7e, #c5e4dc);
-      border-radius: 3px;
+      border-radius: 999px;
     }
 
     #splash-stack.is-gone {
@@ -83,10 +84,12 @@
     <img
       id="splash-art"
       src="./assets/ui/darkrift.webp?v=__BUILD_TS__"
-      alt=""
-      decoding="async"
-      fetchpriority="high"
-    />
+      autoplay
+      muted
+      loop
+      playsinline
+      preload="auto"
+    ></img>
     <div class="loader-ui">
       <div class="loader-bar-track">
         <div class="loader-bar-fill" id="loader-bar-fill"></div>

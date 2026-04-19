@@ -32,7 +32,8 @@ sed "s/__BUILD_TS__/${BUILD_TS}/g" "${TEMPLATE}" \
   | sed '/rel="preload" href="\.\/dark_rift_client_bg\.wasm/d' \
   > "${OUT}/index.html"
 
-echo "Loader preview (stub init ${STUB_DELAY_MS} ms, change with STUB_DELAY_MS=8000 $0)"
+echo "Loader preview (stub init ${STUB_DELAY_MS} ms; STUB_DELAY_MS=8000 $0)"
 echo "  http://127.0.0.1:${PORT}/"
+echo "  Edita web/index.html.template y vuelve a ejecutar este script (no hay hot-reload)."
 echo "  (Ctrl+C to stop)"
 exec python3 -m http.server "${PORT}" --bind 127.0.0.1 --directory "${OUT}"

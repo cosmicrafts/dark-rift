@@ -3,7 +3,7 @@
 # Orquesta compilaciones en paralelo y comprime sin bloquear el hilo principal.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 
 VPS_IP="74.208.246.177"

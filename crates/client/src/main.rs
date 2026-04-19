@@ -219,8 +219,39 @@ struct FreshlyPaintedTiles {
     tiles: HashMap<(u32, u32), f32>,
 }
 
+
+const CHUNK_SIZE: u32 = 256;
+
+/// Spatial texture chunking: the map is split into a grid of 256×256 Images.
+/// When a tile changes, only its chunk's Image gets `get_mut` → only ~256 KB
+/// is re-uploaded to the GPU instead of the full 8-19 MB monolithic texture.
 #[derive(Resource)]
-struct MapImageHandle(Handle<Image>);
+struct MapChunkGrid {
+    chunks_x: u32,
+    chunks_y: u32,
+    map_width: u32,
+    map_height: u32,
+    /// Flattened grid: chunk (cx, cy) is at index cy * chunks_x + cx.
+    handles: Vec<Handle<Image>>,
+}
+
+impl MapChunkGrid {
+    #[inline]
+    fn chunk_index(&self, tile_x: u32, tile_y: u32) -> usize {
+        let cx = tile_x / CHUNK_SIZE;
+        let cy = tile_y / CHUNK_SIZE;
+        (cy * self.chunks_x + cx) as usize
+    }
+    #[inline]
+    fn chunk_handle(&self, tile_x: u32, tile_y: u32) -> &Handle<Image> {
+        &self.handles[self.chunk_index(tile_x, tile_y)]
+    }
+    /// Width of the chunk at column cx (edge chunks may be smaller).
+    #[inline]
+    fn chunk_width(&self, cx: u32) -> u32 {
+        (self.map_width - cx * CHUNK_SIZE).min(CHUNK_SIZE)
+    }
+}
 
 /// Troop fraction committed on each attack click (OpenFront `uiState.attackRatio` + ControlPanel slider 1–100%).
 #[derive(Resource)]
@@ -473,7 +504,6 @@ fn main() {
             .add_systems(OnEnter(AppState::InGame), ui_leaderboard::setup_leaderboard.run_if(|cli: Res<Cli>| !cli.bot))
             .add_systems(OnExit(AppState::InGame), system_cleanup_ingame_entities.run_if(|cli: Res<Cli>| !cli.bot))
             .add_systems(Update, (
-                system_update_lobby_browser,
                 system_handle_join_clicks,
                 system_handle_cancel_join,
                 ui_lobby_browser::system_handle_coming_soon_click,
@@ -484,6 +514,7 @@ fn main() {
                     .run_if(|f: Res<LobbyNicknameFocused>| f.0),
                 ui_lobby_browser::system_nickname_autosave_tick,
                 system_lobby_main_menu_anim,
+                system_update_lobby_browser,
             ).run_if(|state: Res<State<AppState>>, cli: Res<Cli>| *state.get() == AppState::LobbyBrowser && !cli.bot))
             .add_systems(Update, (
                 handle_server_start,
@@ -515,14 +546,17 @@ fn main() {
             player_click,
             system_exit_button,
             system_home_button,
-            handle_tile_change,
-            system_animate_tile_colors,
             update_hud,
             system_apply_responsive_hud_layout,
             system_sync_bottom_combat_hud,
             system_sync_outgoing_attack_rows,
             system_handle_cancel_click,
             ui_leaderboard::system_update_leaderboard,
+        ).run_if(in_state(AppState::InGame)))
+        // ── Tile rendering: direct chunk painting ──
+        .add_systems(Update, (
+            handle_tile_change,
+            system_animate_tile_colors.after(handle_tile_change),
         ).run_if(in_state(AppState::InGame)))
         .add_systems(
             Update,
@@ -839,8 +873,8 @@ fn setup_offline(
         game.spawn_player(player, info.spawn_x, info.spawn_y);
     }
 
-    let handle = spawn_single_texture_tilemap(&mut commands, &game, &mut images, false);
-    commands.insert_resource(MapImageHandle(handle));
+    let grid = spawn_chunked_texture_tilemap(&mut commands, &game, &mut images, false);
+    commands.insert_resource(grid);
 
     commands.insert_resource(game);
     ready.0 = true;
@@ -1495,8 +1529,8 @@ fn start_game_core(
                 cam.translation = Vec3::new(cx, cy, 999.0);
             }
             if let Some(images_res) = images.as_mut() {
-                let handle = spawn_single_texture_tilemap(commands, &game, images_res, true);
-                commands.insert_resource(MapImageHandle(handle));
+                let grid = spawn_chunked_texture_tilemap(commands, &game, images_res, true);
+                commands.insert_resource(grid);
             }
 
             commands.insert_resource(game);
@@ -1838,30 +1872,85 @@ fn system_home_button(
 
 // ─── Visual ──────────────────────────────────────────────────────────────────
 
-/// Max fresh tiles tracked for expansion glow. Prevents GPU thrash when 200+ bots expand simultaneously.
+/// Max fresh tiles tracked for expansion glow.
 const MAX_FRESH_TILES: usize = 512;
 
+/// Helper: paint a single tile (with optional animation boost) directly into
+/// the chunk Image that owns it. Only that chunk (~256 KB) gets re-uploaded.
+#[inline]
+fn paint_tile_to_chunk(
+    images: &mut Assets<Image>,
+    grid: &MapChunkGrid,
+    game: &GameState,
+    x: u32,
+    y: u32,
+    fresh_tiles: &FreshlyPaintedTiles,
+) {
+    let wx = x as i32;
+    let wy = y as i32;
+    if !game.map.is_valid_coord(wx, wy) { return; }
+
+    let mut color = openfront_tile_color(game, wx, wy);
+
+    if let Some(&val) = fresh_tiles.tiles.get(&(x, y)) {
+        let srgba = color.to_srgba();
+        let t = val.clamp(0.0, 1.0);
+        let eased = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t);
+        let boost = 1.0 + 4.0 * eased;
+        let owner = game.map.owner_id(x, y);
+        let is_border = [(wx, wy - 1), (wx + 1, wy), (wx, wy + 1), (wx - 1, wy)]
+            .iter()
+            .any(|&(nx, ny)| {
+                game.map.is_valid_coord(nx, ny)
+                    && game.map.owner_id(nx as u32, ny as u32) != owner
+            });
+        let white_flash = if is_border { 2.5 * eased } else { 0.0 };
+        color = Color::srgba(
+            srgba.red * boost + white_flash,
+            srgba.green * boost + white_flash,
+            srgba.blue * boost + white_flash,
+            srgba.alpha,
+        );
+    }
+
+    let handle = grid.chunk_handle(x, y);
+    let Some(image) = images.get_mut(handle) else { return };
+    let Some(data) = &mut image.data else { return };
+
+    let cx = x / CHUNK_SIZE;
+    let local_x = x % CHUNK_SIZE;
+    let local_y = y % CHUNK_SIZE;
+    let cw = grid.chunk_width(cx);
+    let idx = ((local_y * cw + local_x) * 4) as usize;
+    if idx + 3 >= data.len() { return; }
+
+    let s = color.to_srgba();
+    data[idx]     = (s.red   * 255.0).clamp(0.0, 255.0) as u8;
+    data[idx + 1] = (s.green * 255.0).clamp(0.0, 255.0) as u8;
+    data[idx + 2] = (s.blue  * 255.0).clamp(0.0, 255.0) as u8;
+    data[idx + 3] = (s.alpha * 255.0).clamp(0.0, 255.0) as u8;
+}
+
+/// Paint tile changes directly into chunk Images. Only touched chunks get
+/// re-uploaded to the GPU (~256 KB each vs 19 MB monolithic).
 fn handle_tile_change(
     game_opt: Option<ResMut<GameState>>,
     mut fresh_tiles: ResMut<FreshlyPaintedTiles>,
-    map_handle: Option<Res<MapImageHandle>>,
+    grid: Option<Res<MapChunkGrid>>,
     mut images: ResMut<Assets<Image>>,
     settings: Res<ClientSettings>,
 ) {
     let Some(mut game) = game_opt else { return };
     if !game.is_changed() { return; }
-    let Some(map_handle) = map_handle else { return; };
-    let Some(image) = images.get_mut(&map_handle.0) else { return; };
+    let Some(grid) = grid else { return };
 
     let animations_on = settings.config.visuals.territory_expansion_animations_enabled();
-    let map_w = game.map.width;
 
     for ev in &game.events {
         if let GameEvent::TileCaptured { x, y, new_owner: _ } = ev {
             if animations_on && fresh_tiles.tiles.len() < MAX_FRESH_TILES {
                 fresh_tiles.tiles.insert((*x, *y), 1.0);
             }
-
             let coords = [
                 (*x as i32, *y as i32),
                 (*x as i32, *y as i32 - 1),
@@ -1870,44 +1959,8 @@ fn handle_tile_change(
                 (*x as i32 + 1, *y as i32),
             ];
             for (wx, wy) in coords {
-                if !game.map.is_valid_coord(wx, wy) { continue; }
-                let ux = wx as u32;
-                let uy = wy as u32;
-                
-                let mut color = openfront_tile_color(&game, wx, wy);
-                
-                if let Some(&val) = fresh_tiles.tiles.get(&(ux, uy)) {
-                    let srgba = color.to_srgba();
-                    let t = val.clamp(0.0, 1.0);
-                    let eased = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t);
-                    let boost = 1.0 + 4.0 * eased;
-
-                    let owner = game.map.owner_id(ux, uy);
-                    let is_border = [(wx, wy - 1), (wx + 1, wy), (wx, wy + 1), (wx - 1, wy)]
-                        .iter()
-                        .any(|&(nx, ny)| {
-                            game.map.is_valid_coord(nx, ny)
-                                && game.map.owner_id(nx as u32, ny as u32) != owner
-                        });
-
-                    let white_flash = if is_border { 2.5 * eased } else { 0.0 };
-                    color = Color::srgba(
-                        srgba.red * boost + white_flash,
-                        srgba.green * boost + white_flash,
-                        srgba.blue * boost + white_flash,
-                        srgba.alpha
-                    );
-                }
-
-                let idx = ((uy * map_w as u32 + ux) * 4) as usize;
-                if let Some(data) = &mut image.data {
-                    if idx + 3 < data.len() {
-                        let srgba = color.to_srgba();
-                        data[idx] = (srgba.red * 255.0).clamp(0.0, 255.0) as u8;
-                        data[idx + 1] = (srgba.green * 255.0).clamp(0.0, 255.0) as u8;
-                        data[idx + 2] = (srgba.blue * 255.0).clamp(0.0, 255.0) as u8;
-                        data[idx + 3] = (srgba.alpha * 255.0).clamp(0.0, 255.0) as u8;
-                    }
+                if game.map.is_valid_coord(wx, wy) {
+                    paint_tile_to_chunk(&mut images, &grid, &game, wx as u32, wy as u32, &fresh_tiles);
                 }
             }
         }
@@ -1916,13 +1969,12 @@ fn handle_tile_change(
     game.events.clear();
 }
 
-
-
+/// Animate expansion glow by decaying and repainting affected tiles in their chunks.
 fn system_animate_tile_colors(
     time: Res<Time>,
     game_opt: Option<Res<GameState>>,
     mut fresh_tiles: ResMut<FreshlyPaintedTiles>,
-    map_handle: Option<Res<MapImageHandle>>,
+    grid: Option<Res<MapChunkGrid>>,
     mut images: ResMut<Assets<Image>>,
     settings: Res<ClientSettings>,
 ) {
@@ -1932,13 +1984,12 @@ fn system_animate_tile_colors(
     }
     if fresh_tiles.tiles.is_empty() { return; }
     let Some(game) = game_opt else { return };
-    let Some(map_handle) = map_handle else { return; };
-    let Some(image) = images.get_mut(&map_handle.0) else { return; };
-    
+    let Some(grid) = grid else { return };
+
     let dt = time.delta_secs();
     let lerp_speed = 0.85;
     let mut finished = vec![];
-    
+
     for (&(x, y), val) in fresh_tiles.tiles.iter_mut() {
         *val -= lerp_speed * dt;
         if *val <= 0.0 {
@@ -1946,48 +1997,15 @@ fn system_animate_tile_colors(
             finished.push((x, y));
         }
     }
-    
-    let map_w = game.map.width;
-    for (&(x, y), val) in fresh_tiles.tiles.iter() {
-        let wx = x as i32;
-        let wy = y as i32;
-        let mut color = openfront_tile_color(&game, wx, wy);
-        
-        let srgba = color.to_srgba();
-        let t = val.clamp(0.0, 1.0);
-        let eased = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t);
-        let boost = 1.0 + 4.0 * eased;
-        
-        let owner = game.map.owner_id(x, y);
-        let is_border = [(wx, wy - 1), (wx + 1, wy), (wx, wy + 1), (wx - 1, wy)]
-            .iter()
-            .any(|&(nx, ny)| {
-                game.map.is_valid_coord(nx, ny)
-                    && game.map.owner_id(nx as u32, ny as u32) != owner
-            });
 
-        let white_flash = if is_border { 2.5 * eased } else { 0.0 };
-        color = Color::srgba(
-            srgba.red * boost + white_flash,
-            srgba.green * boost + white_flash,
-            srgba.blue * boost + white_flash,
-            srgba.alpha
-        );
-
-        let idx = ((y * map_w as u32 + x) * 4) as usize;
-        if let Some(data) = &mut image.data {
-            if idx + 3 < data.len() {
-                let s = color.to_srgba();
-                data[idx] = (s.red * 255.0).clamp(0.0, 255.0) as u8;
-                data[idx + 1] = (s.green * 255.0).clamp(0.0, 255.0) as u8;
-                data[idx + 2] = (s.blue * 255.0).clamp(0.0, 255.0) as u8;
-                data[idx + 3] = (s.alpha * 255.0).clamp(0.0, 255.0) as u8;
-            }
-        }
+    // Repaint animated tiles (only their chunks get marked dirty).
+    for (&(x, y), _) in fresh_tiles.tiles.iter() {
+        paint_tile_to_chunk(&mut images, &grid, &game, x, y, &fresh_tiles);
     }
-    
+
     for key in finished {
         fresh_tiles.tiles.remove(&key);
+        paint_tile_to_chunk(&mut images, &grid, &game, key.0, key.1, &fresh_tiles);
     }
 }
 
@@ -2394,62 +2412,77 @@ fn player_base_color(game: &GameState, owner: u16) -> [f32; 3] {
         .map(|p| p.color)
         .unwrap_or([0.3, 0.3, 0.3])
 }
-fn spawn_single_texture_tilemap(
+fn spawn_chunked_texture_tilemap(
     commands: &mut Commands,
     game: &GameState,
     images: &mut Assets<Image>,
     in_game: bool,
-) -> Handle<Image> {
+) -> MapChunkGrid {
     let map_w = game.map.width;
     let map_h = game.map.height;
+    let chunks_x = (map_w + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    let chunks_y = (map_h + CHUNK_SIZE - 1) / CHUNK_SIZE;
 
-    let mut image = Image::new_fill(
-        Extent3d {
-            width: map_w,
-            height: map_h,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        &[0, 0, 0, 0],
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-    );
-    image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST;
-    image.sampler = bevy::image::ImageSampler::nearest();
+    let mut handles = Vec::with_capacity((chunks_x * chunks_y) as usize);
 
-    for y in 0..map_h {
-        for x in 0..map_w {
-            let color = openfront_tile_color(game, x as i32, y as i32).to_srgba();
-            let idx = (((y * map_w) + x) * 4) as usize;
-            if let Some(data) = &mut image.data {
-                data[idx] = (color.red * 255.0).clamp(0.0, 255.0) as u8;
-                data[idx + 1] = (color.green * 255.0).clamp(0.0, 255.0) as u8;
-                data[idx + 2] = (color.blue * 255.0).clamp(0.0, 255.0) as u8;
-                data[idx + 3] = (color.alpha * 255.0).clamp(0.0, 255.0) as u8;
+    for cy in 0..chunks_y {
+        for cx in 0..chunks_x {
+            let x0 = cx * CHUNK_SIZE;
+            let y0 = cy * CHUNK_SIZE;
+            let cw = (map_w - x0).min(CHUNK_SIZE);
+            let ch = (map_h - y0).min(CHUNK_SIZE);
+
+            // Build pixel data for this chunk.
+            let mut pixel_data = vec![0u8; (cw * ch * 4) as usize];
+            for ly in 0..ch {
+                for lx in 0..cw {
+                    let gx = (x0 + lx) as i32;
+                    let gy = (y0 + ly) as i32;
+                    let color = openfront_tile_color(game, gx, gy).to_srgba();
+                    let idx = ((ly * cw + lx) * 4) as usize;
+                    pixel_data[idx]     = (color.red   * 255.0).clamp(0.0, 255.0) as u8;
+                    pixel_data[idx + 1] = (color.green * 255.0).clamp(0.0, 255.0) as u8;
+                    pixel_data[idx + 2] = (color.blue  * 255.0).clamp(0.0, 255.0) as u8;
+                    pixel_data[idx + 3] = (color.alpha * 255.0).clamp(0.0, 255.0) as u8;
+                }
             }
+
+            let mut image = Image::new_fill(
+                Extent3d { width: cw, height: ch, depth_or_array_layers: 1 },
+                TextureDimension::D2,
+                &[0, 0, 0, 0],
+                TextureFormat::Rgba8UnormSrgb,
+                RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+            );
+            image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST;
+            image.sampler = bevy::image::ImageSampler::nearest();
+            if let Some(data) = &mut image.data {
+                data.copy_from_slice(&pixel_data);
+            }
+
+            let handle = images.add(image);
+
+            // Position: center of this chunk region in world space.
+            let center_x = (2 * x0 + cw - 1) as f32 * TILE_SIZE / 2.0;
+            let center_y = (2 * (map_h - 1) - 2 * y0 - ch + 1) as f32 * TILE_SIZE / 2.0;
+
+            let mut ecmd = commands.spawn((
+                Sprite {
+                    image: handle.clone(),
+                    custom_size: Some(Vec2::new(cw as f32 * TILE_SIZE, ch as f32 * TILE_SIZE)),
+                    ..default()
+                },
+                Transform::from_xyz(center_x, center_y, 0.0),
+            ));
+            if in_game {
+                ecmd.insert(InGameEntity);
+            }
+
+            handles.push(handle);
         }
     }
-    
-    let handle = images.add(image);
 
-    let mut ecmd = commands.spawn((
-        Sprite {
-            image: handle.clone(),
-            custom_size: Some(Vec2::new(map_w as f32 * TILE_SIZE, map_h as f32 * TILE_SIZE)),
-            ..default()
-        },
-        Transform::from_xyz(
-            (map_w as f32 * TILE_SIZE as f32) / 2.0 - (TILE_SIZE as f32 / 2.0),
-            (map_h as f32 * TILE_SIZE as f32) / 2.0 - (TILE_SIZE as f32 / 2.0),
-            0.0
-        ),
-    ));
-    
-    if in_game {
-        ecmd.insert(InGameEntity);
-    }
-    
-    handle
+    MapChunkGrid { chunks_x, chunks_y, map_width: map_w, map_height: map_h, handles }
 }
 
 /// OpenFront-style TileData:
