@@ -16,7 +16,9 @@ fi
 
 rm -rf "${OUT}"
 mkdir -p "${OUT}/assets/ui"
-cp "${ROOT}/assets/ui/darkrift.webp" "${OUT}/assets/ui/"
+for f in darkrift.webp loader_frame.webp loader_fill.webp; do
+  cp "${ROOT}/assets/ui/${f}" "${OUT}/assets/ui/"
+done
 
 BUILD_TS="$(date +%s)"
 # Stub replaces wasm-bindgen glue; delay mimics slow init so you can tune the bar.

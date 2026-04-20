@@ -9,6 +9,8 @@
   <title>Dark Rift</title>
   <link rel="modulepreload" href="./dark_rift_client.js?v=__BUILD_TS__" />
   <link rel="preload" href="./dark_rift_client_bg.wasm?v=__BUILD_TS__" as="fetch" crossorigin />
+  <link rel="preload" href="./assets/ui/loader_frame.webp?v=__BUILD_TS__" as="image" />
+  <link rel="preload" href="./assets/ui/loader_fill.webp?v=__BUILD_TS__" as="image" />
   <style>
     html, body { margin: 0; height: 100%; background: #050508; }
     canvas { display: block; position: relative; z-index: 1; }
@@ -38,30 +40,52 @@
 
     .loader-ui {
       position: absolute;
-      bottom: max(3vh, calc(16px + env(safe-area-inset-bottom, 0px)));
+      bottom: max(8vh, calc(16px + env(safe-area-inset-bottom, 0px)));
       left: 50%;
       transform: translateX(-50%);
-      width: min(94vw, 920px);
+      width: min(24vw, 360px);
       z-index: 2;
       box-sizing: border-box;
-      padding: 0 min(2vw, 12px);
+      padding: 0 min(vw, 12px);
     }
 
-    .loader-bar-track {
-      height: clamp(18px, 5vh, 40px);
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.12);
-      overflow: hidden;
-      box-shadow: 0 2px 16px rgba(0, 0, 0, 0.35);
+    .loader-bar {
+      --progress: 0;
+      position: relative;
+      width: 100%;
+      aspect-ratio: 1227 / 137;
+    }
+
+    .loader-bar-fill-wrap {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      clip-path: inset(0 calc((1 - var(--progress)) * 100%) 0 0);
+      -webkit-clip-path: inset(0 calc((1 - var(--progress)) * 100%) 0 0);
+      transition: clip-path 140ms linear, -webkit-clip-path 140ms linear;
+      will-change: clip-path;
+      pointer-events: none;
     }
 
     .loader-bar-fill {
-      height: 100%;
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 100.5%;
+      height: 100.5%;
+      transform: translate(-50%, -50%);
+      object-fit: fill;
+      user-select: none;
+    }
+
+    .loader-bar-frame {
+      position: relative;
+      z-index: 2;
+      display: block;
       width: 100%;
-      transform-origin: left center;
-      transform: scaleX(0);
-      background: linear-gradient(90deg, #5a8a7e, #c5e4dc);
-      border-radius: 999px;
+      height: 100%;
+      pointer-events: none;
+      user-select: none;
     }
 
     #splash-stack.is-gone {
@@ -75,7 +99,6 @@
 
     @media (prefers-reduced-motion: reduce) {
       #splash-stack.is-gone { transition: opacity 0.2s ease; }
-      .loader-bar-fill { transition: transform 0.12s linear; }
     }
   </style>
 </head>
@@ -84,15 +107,32 @@
     <img
       id="splash-art"
       src="./assets/ui/darkrift.webp?v=__BUILD_TS__"
-      autoplay
-      muted
-      loop
-      playsinline
-      preload="auto"
-    ></img>
+      alt=""
+      decoding="async"
+      fetchpriority="high"
+    />
     <div class="loader-ui">
-      <div class="loader-bar-track">
-        <div class="loader-bar-fill" id="loader-bar-fill"></div>
+      <div class="loader-bar" id="loader-bar">
+        <div class="loader-bar-fill-wrap">
+          <img
+            class="loader-bar-fill"
+            src="./assets/ui/loader_fill.webp?v=__BUILD_TS__"
+            width="1227"
+            height="137"
+            alt=""
+            decoding="async"
+            fetchpriority="high"
+          />
+        </div>
+        <img
+          class="loader-bar-frame"
+          src="./assets/ui/loader_frame.webp?v=__BUILD_TS__"
+          width="1227"
+          height="137"
+          alt=""
+          decoding="async"
+          fetchpriority="high"
+        />
       </div>
     </div>
   </div>
@@ -113,7 +153,7 @@
     const initPromise = filterWasmBindgenNoise(init(q("./dark_rift_client_bg.wasm")));
 
     const stack = document.getElementById("splash-stack");
-    const barFill = document.getElementById("loader-bar-fill");
+    const bar = document.getElementById("loader-bar");
 
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const EXIT_FADE_MS = reduceMotion ? 200 : 380;
@@ -128,7 +168,7 @@
 
     function setBarScale(t) {
       const x = Math.max(0, Math.min(1, t));
-      barFill.style.transform = "scaleX(" + x + ")";
+      bar.style.setProperty("--progress", String(x));
     }
 
     async function runProgressUntilInit() {

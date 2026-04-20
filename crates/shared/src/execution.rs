@@ -101,7 +101,23 @@ pub fn system_player_income(game_opt: Option<ResMut<GameState>>) {
         // Defensive mathematical bound: if player troops violently drain below zero during massive intent execution bursts, 
         // the calculation mathematically breaks and introduces desyncing NaN generations universally. We clamp to safely avoid this!
         let safe_troops = player.troops.max(0.0);
-        let raw_income = config::TROOP_BASE_INCOME + (safe_troops.powf(0.73) / 4.0);
+        
+        // Use strictly deterministic IEEE-754 sqrt instead of libm powf!
+        // tiles_owned^0.625 = tiles_owned^(1/2) * tiles_owned^(1/8)
+        let t_f64 = tiles_owned as f64;
+        let t_half = t_f64.sqrt();
+        let t_quarter = t_half.sqrt();
+        let t_eighth = t_quarter.sqrt();
+        let max_troops_bonus = t_half * t_eighth;
+        
+        player.max_troops = config::MAX_TROOPS_BASE + max_troops_bonus * config::MAX_TROOPS_SCALE;
+
+        // safe_troops^0.75 = safe_troops^(1/2) * safe_troops^(1/4)
+        let s_half = safe_troops.sqrt();
+        let s_quarter = s_half.sqrt();
+        let s_75 = s_half * s_quarter;
+        
+        let raw_income = config::TROOP_BASE_INCOME + (s_75 / 4.6);
         let ratio = 1.0 - (safe_troops / player.max_troops).min(1.0);
         let income = raw_income * ratio;
 
@@ -171,7 +187,10 @@ pub fn system_attack_execution(
         // Determine actual integer number of tiles to process this tick (Fractional determinism)
         let mut tiles_to_conquer = max_tiles_f32.floor() as u32;
         let p = max_tiles_f32.fract();
-        if p > 0.0 && (execution.rng.next_int(0, 1000) as f32) / 1000.0 < p {
+        
+        // UNCONDITIONAL RNG ADVANCEMENT to strictly preserve deterministic state sequence
+        let roll = (execution.rng.next_int(0, 1000) as f32) / 1000.0;
+        if p > 0.0 && roll < p {
             tiles_to_conquer += 1;
         }
 
