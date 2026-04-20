@@ -231,19 +231,19 @@ pub fn system_attack_execution(
                 // Troops were reserved on intent; only drain execution pool per tile (OpenFront).
 
                 // Enqueue new neutral/enemy neighbors that touch our newly acquired tile
-                for (nx, ny) in game.map.neighbors(target_tile.x, target_tile.y) {
+                game.map.for_each_neighbor(target_tile.x, target_tile.y, |nx, ny| {
                     // It must belong to target
                     if game.map.owner_id(nx, ny) != execution.target_owner {
-                        continue;
+                        return;
                     }
 
                     // How many tiles bordering (nx, ny) are owned by the attacker?
                     let mut num_owned_by_me = 0;
-                    for (nnx, nny) in game.map.neighbors(nx, ny) {
+                    game.map.for_each_neighbor(nx, ny, |nnx, nny| {
                         if game.map.owner_id(nnx, nny) == execution.owner_id {
                             num_owned_by_me += 1;
                         }
-                    }
+                    });
 
                     let terrain = game.map.terrain_type(nx, ny);
                     let prio = execution.calc_priority(num_owned_by_me, terrain, tick_now);
@@ -256,7 +256,7 @@ pub fn system_attack_execution(
                         x: nx,
                         y: ny,
                     });
-                }
+                });
 
                 // VALID CONQUEST
                 // Apply change AFTER enqueuing neighbors, mimicking OpenFront's `this._owner.conquer`

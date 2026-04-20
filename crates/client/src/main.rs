@@ -2954,15 +2954,14 @@ fn system_headless_bot_engine(
     let expand_ratio = bot_state.profile.expand_ratio;
     
     let player = game.player(bot_id).unwrap();
-    if player.border_tiles.is_empty() {
-        return;
-    }
+    let border_tiles = game.map.border_tiles_of(bot_id);
+    if border_tiles.is_empty() { return; }
 
     let mut has_neutral = false;
     let mut player_targets = Vec::new();
 
-    for &(bx, by) in &player.border_tiles {
-        for (nx, ny) in game.map.neighbors(bx, by) {
+    for &(bx, by) in &border_tiles {
+        game.map.for_each_neighbor(bx, by, |nx, ny| {
             let owner = game.map.owner_id(nx, ny);
             if owner != bot_id {
                 if owner == 0 {
@@ -2971,7 +2970,7 @@ fn system_headless_bot_engine(
                     player_targets.push(owner);
                 }
             }
-        }
+        });
     }
 
     let mut bot_rng = PseudoRandom::new(game.seed.wrapping_add(game.tick as u64).wrapping_add(1999));

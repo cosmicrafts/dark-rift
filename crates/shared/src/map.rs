@@ -90,6 +90,22 @@ impl GameMap {
         self.state[r] = (self.state[r] & !Self::PLAYER_ID_MASK) | (player_id & Self::PLAYER_ID_MASK);
     }
 
+    /// Visit each 4-connected neighbor (up, down, left, right) without allocations.
+    pub fn for_each_neighbor(&self, x: u32, y: u32, mut f: impl FnMut(u32, u32)) {
+        if x > 0 {
+            f(x - 1, y);
+        }
+        if x + 1 < self.width {
+            f(x + 1, y);
+        }
+        if y > 0 {
+            f(x, y - 1);
+        }
+        if y + 1 < self.height {
+            f(x, y + 1);
+        }
+    }
+
     /// Get 4-connected neighbors (up, down, left, right) of a tile.
     pub fn neighbors(&self, x: u32, y: u32) -> Vec<(u32, u32)> {
         let mut result = Vec::with_capacity(4);
@@ -106,12 +122,13 @@ impl GameMap {
         if self.owner_id(x, y) != player_id {
             return false;
         }
-        for (nx, ny) in self.neighbors(x, y) {
-            if self.owner_id(nx, ny) != player_id {
-                return true;
+        let mut is_border = false;
+        self.for_each_neighbor(x, y, |nx, ny| {
+            if !is_border && self.owner_id(nx, ny) != player_id {
+                is_border = true;
             }
-        }
-        false
+        });
+        is_border
     }
 
     /// Get all border tiles of a specific player.
@@ -139,11 +156,12 @@ impl GameMap {
 
     /// Check if a tile is adjacent to territory owned by `player_id`.
     pub fn is_adjacent_to_player(&self, x: u32, y: u32, player_id: u16) -> bool {
-        for (nx, ny) in self.neighbors(x, y) {
-            if self.owner_id(nx, ny) == player_id {
-                return true;
+        let mut adjacent = false;
+        self.for_each_neighbor(x, y, |nx, ny| {
+            if !adjacent && self.owner_id(nx, ny) == player_id {
+                adjacent = true;
             }
-        }
-        false
+        });
+        adjacent
     }
 }

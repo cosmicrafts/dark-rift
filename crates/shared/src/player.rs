@@ -41,8 +41,6 @@ pub struct Player {
     pub sum_y: u64,
     /// Number of tiles owned by the player.
     pub tile_count: u32,
-    /// Fast deterministic cache of border tiles.
-    pub border_tiles: Vec<(u32, u32)>,
 }
 
 impl Player {
@@ -60,7 +58,6 @@ impl Player {
             sum_x: 0,
             sum_y: 0,
             tile_count: 0,
-            border_tiles: Vec::with_capacity(128),
         }
     }
 
@@ -78,7 +75,6 @@ impl Player {
             sum_x: 0,
             sum_y: 0,
             tile_count: 0,
-            border_tiles: Vec::with_capacity(128),
         }
     }
 

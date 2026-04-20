@@ -43,7 +43,7 @@
       bottom: max(8vh, calc(16px + env(safe-area-inset-bottom, 0px)));
       left: 50%;
       transform: translateX(-50%);
-      width: min(24vw, 360px);
+      width: min(85vw, 360px);
       z-index: 2;
       box-sizing: border-box;
       padding: 0 min(vw, 12px);
