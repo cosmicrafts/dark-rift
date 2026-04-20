@@ -6,6 +6,7 @@ use bevy::ui::{UiTransform, Val2};
 use dark_rift_shared::player::PlayerType;
 use dark_rift_shared::protocol::*;
 use crate::settings::{save_client_settings_config, ProfileConfig};
+use crate::ui_shell::{touch_target_for_breakpoint, UiBreakpoint, UiShellState};
 use crate::ui_layers::LOBBY_BROWSER;
 use crate::{ClientSettings, Cli};
 use crate::ui_theme::*;
@@ -142,17 +143,20 @@ pub struct LobbyMenuAnimRightColumn;
 pub struct LobbyMenuAnimHeaderRow;
 
 #[derive(Component)]
-pub struct LobbyMenuAnimFooterBar;
+pub struct LobbyMenuBody;
+
+#[derive(Component)]
+pub struct LobbyWaitingContent;
 
 #[derive(Clone, Copy, Debug)]
 pub enum LobbyMenuTextRole {
     TitleMain,
     Version,
+    SectionLabel,
+    BodyCopy,
     NicknameField,
     SoloPrimary,
     SoloSecondary,
-    FooterLinks,
-    FooterNews,
     StubRanked,
     StubSecondary,
 }
@@ -166,11 +170,11 @@ fn base_text_color(role: LobbyMenuTextRole) -> Color {
     match role {
         LobbyMenuTextRole::TitleMain => accent_solo_cyan(),
         LobbyMenuTextRole::Version => text_secondary(),
+        LobbyMenuTextRole::SectionLabel => text_secondary().with_alpha(0.85),
+        LobbyMenuTextRole::BodyCopy => text_primary().with_alpha(0.82),
         LobbyMenuTextRole::NicknameField => text_primary(),
         LobbyMenuTextRole::SoloPrimary => Color::srgba(0.02, 0.05, 0.08, 1.0),
         LobbyMenuTextRole::SoloSecondary => Color::srgba(0.05, 0.12, 0.16, 0.85),
-        LobbyMenuTextRole::FooterLinks => text_secondary(),
-        LobbyMenuTextRole::FooterNews => text_primary(),
         LobbyMenuTextRole::StubRanked => Color::srgba(0.06, 0.05, 0.04, 1.0),
         LobbyMenuTextRole::StubSecondary => text_primary(),
     }
@@ -201,7 +205,6 @@ pub struct LobbyMenuAnimVisualQueries<'w, 's> {
         's,
         (
             Query<'w, 's, &'static mut BackgroundColor, With<LobbyMenuAnimBackdrop>>,
-            Query<'w, 's, &'static mut BackgroundColor, With<LobbyMenuAnimFooterBar>>,
             Query<
                 'w,
                 's,
@@ -225,12 +228,6 @@ pub struct LobbyMenuAnimVisualQueries<'w, 's> {
                 ),
                 With<ComingSoonMenuButton>,
             >,
-            Query<
-                'w,
-                's,
-                (&'static mut BackgroundColor, &'static mut BorderColor),
-                With<LobbyMenuAnimPanel>,
-            >,
         ),
     >,
     pub transform_set: ParamSet<
@@ -251,6 +248,49 @@ pub struct LobbyMenuAnimVisualQueries<'w, 's> {
         ),
     >,
     pub anim_text: Query<'w, 's, (&'static mut TextColor, &'static LobbyMenuAnimatedText)>,
+}
+
+#[derive(SystemParam)]
+pub struct LobbyLayoutResponsiveQueries<'w, 's> {
+    pub nodes: ParamSet<
+        'w,
+        's,
+        (
+            Query<'w, 's, &'static mut Node, With<LobbyBrowserRoot>>,
+            Query<'w, 's, &'static mut Node, (With<LobbyBrowserMainChrome>, Without<LobbyMenuBody>)>,
+            Query<'w, 's, &'static mut Node, With<LobbyMenuAnimHeaderRow>>,
+            Query<'w, 's, &'static mut Node, With<LobbyMenuBody>>,
+            Query<'w, 's, &'static mut Node, With<LobbyMenuAnimLeftColumn>>,
+            Query<'w, 's, &'static mut Node, With<LobbyMenuAnimRightColumn>>,
+            Query<'w, 's, &'static mut Node, With<LobbyCardsContainer>>,
+            Query<'w, 's, &'static mut Node, With<WaitingQueueContainer>>,
+        ),
+    >,
+}
+
+#[derive(SystemParam)]
+pub struct LobbyControlsResponsiveQueries<'w, 's> {
+    pub nodes: ParamSet<
+        'w,
+        's,
+        (
+            Query<'w, 's, &'static mut Node, With<LobbyWaitingContent>>,
+            Query<'w, 's, &'static mut Node, With<NicknameFieldRoot>>,
+            Query<'w, 's, &'static mut Node, With<SinglePlayerButton>>,
+            Query<'w, 's, &'static mut Node, With<ComingSoonMenuButton>>,
+            Query<'w, 's, &'static mut Node, With<CancelJoinButton>>,
+            Query<'w, 's, &'static mut Node, With<LobbyCardRoot>>,
+        ),
+    >,
+    pub fonts: ParamSet<
+        'w,
+        's,
+        (
+            Query<'w, 's, (&'static mut TextFont, &'static LobbyMenuAnimatedText)>,
+            Query<'w, 's, &'static mut TextFont, With<WaitingStatusText>>,
+            Query<'w, 's, &'static mut TextFont, With<WaitingPlayersText>>,
+        ),
+    >,
 }
 
 #[inline]
@@ -329,6 +369,11 @@ fn solo_button_border_color() -> Color {
 }
 
 #[inline]
+fn fullscreen_menu_backdrop() -> Color {
+    menu_backdrop().with_alpha(1.0)
+}
+
+#[inline]
 fn is_printable_char(chr: char) -> bool {
     let is_in_private_use_area = ('\u{e000}'..='\u{f8ff}').contains(&chr)
         || ('\u{f0000}'..='\u{ffffd}').contains(&chr)
@@ -353,9 +398,9 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                 height: Val::Percent(100.0),
                 position_type: PositionType::Absolute,
                 flex_direction: FlexDirection::Column,
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                padding: UiRect::all(Val::Percent(1.5)),
+                justify_content: JustifyContent::FlexStart,
+                align_items: AlignItems::Stretch,
+                padding: UiRect::all(Val::Px(18.0)),
                 ..default()
             },
             GlobalZIndex(LOBBY_BROWSER),
@@ -366,21 +411,16 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                 LobbyBrowserMainChrome,
                 LobbyMenuAnimPanel,
                 Node {
-                    width: Val::Percent(94.0),
-                    height: Val::Percent(90.0),
-                    max_width: Val::Px(1280.0),
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
                     flex_direction: FlexDirection::Column,
-                    padding: UiRect::all(Val::Px(20.0)),
-                    row_gap: Val::Px(16.0),
-                    border_radius: BorderRadius::all(Val::Px(18.0)),
-                    border: UiRect::all(Val::Px(2.0)),
+                    justify_content: JustifyContent::FlexStart,
+                    align_items: AlignItems::Stretch,
+                    row_gap: Val::Px(20.0),
                     ..default()
                 },
-                BackgroundColor(menu_panel_bg().with_alpha(0.0)),
-                BorderColor::all(menu_panel_border_glow().with_alpha(0.0)),
             ))
             .with_children(|panel| {
-                // ── Header: title + version (centered) ───────────────────────
                 panel
                     .spawn((
                         LobbyMenuAnimHeaderRow,
@@ -388,24 +428,21 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                         Node {
                             width: Val::Percent(100.0),
                             flex_direction: FlexDirection::Row,
-                            align_items: AlignItems::Center,
-                            column_gap: Val::Px(12.0),
+                            justify_content: JustifyContent::SpaceBetween,
+                            align_items: AlignItems::FlexEnd,
+                            column_gap: Val::Px(20.0),
+                            row_gap: Val::Px(12.0),
                             ..default()
                         },
                     ))
                     .with_children(|header| {
-                        header.spawn(Node {
-                            flex_grow: 1.0,
-                            min_width: Val::Px(0.0),
-                            ..default()
-                        });
-
                         header
                             .spawn((
                                 Node {
                                     flex_direction: FlexDirection::Column,
-                                    align_items: AlignItems::Center,
-                                    row_gap: Val::Px(4.0),
+                                    align_items: AlignItems::FlexStart,
+                                    row_gap: Val::Px(6.0),
+                                    max_width: Val::Px(760.0),
                                     ..default()
                                 },
                             ))
@@ -415,7 +452,7 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                                     LobbyMenuAnimatedText(LobbyMenuTextRole::TitleMain),
                                     TextFont {
                                         font: font.clone(),
-                                        font_size: 42.0,
+                                        font_size: 52.0,
                                         ..default()
                                     },
                                     TextColor(base_text_color(LobbyMenuTextRole::TitleMain).with_alpha(0.0)),
@@ -425,84 +462,129 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                                     LobbyMenuAnimatedText(LobbyMenuTextRole::Version),
                                     TextFont {
                                         font: font.clone(),
-                                        font_size: 16.0,
+                                        font_size: 18.0,
                                         ..default()
                                     },
                                     TextColor(base_text_color(LobbyMenuTextRole::Version).with_alpha(0.0)),
                                 ));
+                                title_col.spawn((
+                                    Text::new("Join the live sector or jump straight into a solo run."),
+                                    LobbyMenuAnimatedText(LobbyMenuTextRole::BodyCopy),
+                                    TextFont {
+                                        font: font.clone(),
+                                        font_size: 18.0,
+                                        ..default()
+                                    },
+                                    TextColor(base_text_color(LobbyMenuTextRole::BodyCopy).with_alpha(0.0)),
+                                ));
                             });
 
-                        header.spawn(Node {
-                            flex_grow: 1.0,
-                            min_width: Val::Px(0.0),
-                            ..default()
-                        });
-                    });
-
-                // ── Body: lobby list (left) + mode buttons (right) ───────────
-                panel
-                    .spawn(Node {
-                        width: Val::Percent(100.0),
-                        flex_grow: 1.0,
-                        min_height: Val::Px(200.0),
-                        flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(20.0),
-                        align_items: AlignItems::Stretch,
-                        ..default()
-                    })
-                    .with_children(|body| {
-                        body.spawn((
-                            LobbyMenuAnimLeftColumn,
-                            UiTransform::from_translation(Val2::px(INTRO_SLIDE_LEFT_PX, 0.0)),
-                            Node {
-                                width: Val::Percent(40.0),
-                                min_width: Val::Px(260.0),
+                        header
+                            .spawn(Node {
                                 flex_direction: FlexDirection::Column,
-                                row_gap: Val::Px(12.0),
+                                align_items: AlignItems::FlexStart,
+                                row_gap: Val::Px(8.0),
+                                min_width: Val::Px(220.0),
                                 ..default()
-                            },
-                        ))
-                        .with_children(|left| {
-                            left.spawn((
-                                Button,
-                                NicknameFieldRoot,
-                                Node {
-                                    width: Val::Percent(100.0),
-                                    height: Val::Px(32.0),
-                                    min_height: Val::Px(30.0),
-                                    max_height: Val::Px(36.0),
-                                    padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
-                                    border_radius: BorderRadius::all(Val::Px(8.0)),
-                                    border: UiRect::all(Val::Px(1.0)),
-                                    justify_content: JustifyContent::FlexStart,
-                                    align_items: AlignItems::Center,
-                                    ..default()
-                                },
-                                BackgroundColor(nickname_field_bg().with_alpha(0.0)),
-                                BorderColor::all(nickname_field_border().with_alpha(0.0)),
-                            ))
-                            .with_children(|field| {
-                                field.spawn((
-                                    Text::new(nick_display.clone()),
-                                    NicknameFieldText,
-                                    LobbyMenuAnimatedText(LobbyMenuTextRole::NicknameField),
+                            })
+                            .with_children(|meta| {
+                                meta.spawn((
+                                    Text::new("CALLSIGN"),
+                                    LobbyMenuAnimatedText(LobbyMenuTextRole::SectionLabel),
                                     TextFont {
                                         font: font.clone(),
                                         font_size: 14.0,
                                         ..default()
                                     },
-                                    TextColor(base_text_color(LobbyMenuTextRole::NicknameField).with_alpha(0.0)),
+                                    TextColor(base_text_color(LobbyMenuTextRole::SectionLabel).with_alpha(0.0)),
                                 ));
+                                meta.spawn((
+                                    Button,
+                                    NicknameFieldRoot,
+                                    Node {
+                                        width: Val::Percent(100.0),
+                                        min_height: Val::Px(56.0),
+                                        padding: UiRect::axes(Val::Px(16.0), Val::Px(12.0)),
+                                        border_radius: BorderRadius::all(Val::Px(14.0)),
+                                        border: UiRect::all(Val::Px(1.0)),
+                                        justify_content: JustifyContent::FlexStart,
+                                        align_items: AlignItems::Center,
+                                        ..default()
+                                    },
+                                    BackgroundColor(nickname_field_bg().with_alpha(0.0)),
+                                    BorderColor::all(nickname_field_border().with_alpha(0.0)),
+                                ))
+                                .with_children(|field| {
+                                    field.spawn((
+                                        Text::new(nick_display.clone()),
+                                        NicknameFieldText,
+                                        LobbyMenuAnimatedText(LobbyMenuTextRole::NicknameField),
+                                        TextFont {
+                                            font: font.clone(),
+                                            font_size: 18.0,
+                                            ..default()
+                                        },
+                                        TextColor(base_text_color(LobbyMenuTextRole::NicknameField).with_alpha(0.0)),
+                                    ));
+                                });
                             });
+                    });
+
+                panel
+                    .spawn((
+                        LobbyMenuBody,
+                        Node {
+                        width: Val::Percent(100.0),
+                        flex_grow: 1.0,
+                        min_height: Val::Px(200.0),
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(24.0),
+                        row_gap: Val::Px(18.0),
+                        align_items: AlignItems::Stretch,
+                        ..default()
+                    },
+                    ))
+                    .with_children(|body| {
+                        body.spawn((
+                            LobbyMenuAnimLeftColumn,
+                            UiTransform::from_translation(Val2::px(INTRO_SLIDE_LEFT_PX, 0.0)),
+                            Node {
+                                width: Val::Percent(58.0),
+                                min_width: Val::Px(0.0),
+                                flex_direction: FlexDirection::Column,
+                                row_gap: Val::Px(14.0),
+                                ..default()
+                            },
+                        ))
+                        .with_children(|left| {
+                            left.spawn((
+                                Text::new("OPEN LOBBIES"),
+                                LobbyMenuAnimatedText(LobbyMenuTextRole::SectionLabel),
+                                TextFont {
+                                    font: font.clone(),
+                                    font_size: 16.0,
+                                    ..default()
+                                },
+                                TextColor(base_text_color(LobbyMenuTextRole::SectionLabel).with_alpha(0.0)),
+                            ));
+                            left.spawn((
+                                Text::new("Pick the active sector below. The list adapts to the next match the server wants to fill."),
+                                LobbyMenuAnimatedText(LobbyMenuTextRole::BodyCopy),
+                                TextFont {
+                                    font: font.clone(),
+                                    font_size: 16.0,
+                                    ..default()
+                                },
+                                TextColor(base_text_color(LobbyMenuTextRole::BodyCopy).with_alpha(0.0)),
+                            ));
 
                             left.spawn((
                                 Node {
                                     width: Val::Percent(100.0),
+                                    min_height: Val::Px(280.0),
                                     flex_grow: 1.0,
-                                    min_height: Val::Px(180.0),
                                     flex_direction: FlexDirection::Column,
-                                    row_gap: Val::Px(14.0),
-                                    padding: UiRect::all(Val::Px(8.0)),
+                                    row_gap: Val::Px(16.0),
                                     align_items: AlignItems::Stretch,
                                     overflow: Overflow::scroll_y(),
                                     ..default()
@@ -516,27 +598,39 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                             UiTransform::from_translation(Val2::px(INTRO_SLIDE_RIGHT_PX, 0.0)),
                             Node {
                                 width: Val::Percent(34.0),
-                                min_width: Val::Px(220.0),
+                                min_width: Val::Px(280.0),
+                                max_width: Val::Px(420.0),
                                 flex_direction: FlexDirection::Column,
                                 justify_content: JustifyContent::FlexStart,
                                 row_gap: Val::Px(14.0),
-                                padding: UiRect::horizontal(Val::Px(8.0)),
                                 ..default()
                             },
                         ))
                         .with_children(|right| {
+                            right.spawn((
+                                Text::new("PLAY"),
+                                LobbyMenuAnimatedText(LobbyMenuTextRole::SectionLabel),
+                                TextFont {
+                                    font: font.clone(),
+                                    font_size: 16.0,
+                                    ..default()
+                                },
+                                TextColor(base_text_color(LobbyMenuTextRole::SectionLabel).with_alpha(0.0)),
+                            ));
                             right.spawn((
                                 Button,
                                 SinglePlayerButton,
                                 UiTransform::default(),
                                 Node {
                                     width: Val::Percent(100.0),
-                                    min_height: Val::Px(56.0),
-                                    padding: UiRect::axes(Val::Px(24.0), Val::Px(18.0)),
-                                    border_radius: BorderRadius::all(Val::Px(14.0)),
+                                    min_height: Val::Px(92.0),
+                                    padding: UiRect::axes(Val::Px(24.0), Val::Px(20.0)),
+                                    flex_direction: FlexDirection::Column,
+                                    row_gap: Val::Px(6.0),
+                                    border_radius: BorderRadius::all(Val::Px(18.0)),
                                     border: UiRect::all(Val::Px(2.0)),
                                     justify_content: JustifyContent::Center,
-                                    align_items: AlignItems::Center,
+                                    align_items: AlignItems::FlexStart,
                                     ..default()
                                 },
                                 BackgroundColor(accent_solo_cyan().with_alpha(0.0)),
@@ -548,17 +642,17 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                                     LobbyMenuAnimatedText(LobbyMenuTextRole::SoloPrimary),
                                     TextFont {
                                         font: font.clone(),
-                                        font_size: 22.0,
+                                        font_size: 28.0,
                                         ..default()
                                     },
                                     TextColor(base_text_color(LobbyMenuTextRole::SoloPrimary).with_alpha(0.0)),
                                 ));
                                 btn.spawn((
-                                    Text::new("Single player"),
+                                    Text::new("Start a fast local match instantly."),
                                     LobbyMenuAnimatedText(LobbyMenuTextRole::SoloSecondary),
                                     TextFont {
                                         font: font.clone(),
-                                        font_size: 13.0,
+                                        font_size: 16.0,
                                         ..default()
                                     },
                                     TextColor(base_text_color(LobbyMenuTextRole::SoloSecondary).with_alpha(0.0)),
@@ -570,48 +664,8 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                             spawn_stub_button(right, &font, "JOIN LOBBY", ComingSoonKind::Secondary);
                         });
                     });
-
-                // ── Footer ───────────────────────────────────────────────────
-                panel
-                    .spawn((
-                        LobbyMenuAnimFooterBar,
-                        Node {
-                            width: Val::Percent(100.0),
-                            min_height: Val::Px(44.0),
-                            flex_direction: FlexDirection::Row,
-                            justify_content: JustifyContent::SpaceBetween,
-                            align_items: AlignItems::Center,
-                            padding: UiRect::horizontal(Val::Px(12.0)),
-                            border_radius: BorderRadius::all(Val::Px(10.0)),
-                            ..default()
-                        },
-                        BackgroundColor(menu_footer_bg().with_alpha(0.0)),
-                    ))
-                    .with_children(|footer| {
-                        footer.spawn((
-                            Text::new("GitHub   Discord   Web"),
-                            LobbyMenuAnimatedText(LobbyMenuTextRole::FooterLinks),
-                            TextFont {
-                                font: font.clone(),
-                                font_size: 12.0,
-                                ..default()
-                            },
-                            TextColor(base_text_color(LobbyMenuTextRole::FooterLinks).with_alpha(0.0)),
-                        ));
-                        footer.spawn((
-                            Text::new("NEWS"),
-                            LobbyMenuAnimatedText(LobbyMenuTextRole::FooterNews),
-                            TextFont {
-                                font: font.clone(),
-                                font_size: 12.0,
-                                ..default()
-                            },
-                            TextColor(base_text_color(LobbyMenuTextRole::FooterNews).with_alpha(0.0)),
-                        ));
-                    });
             });
 
-            // Waiting overlay (drawn above chrome)
             root.spawn((
                 WaitingQueueContainer,
                 Node {
@@ -624,54 +678,82 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                     height: Val::Percent(100.0),
                     flex_direction: FlexDirection::Column,
                     justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    row_gap: Val::Px(20.0),
+                    align_items: AlignItems::Stretch,
+                    padding: UiRect::all(Val::Px(18.0)),
                     display: Display::None,
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.01, 0.02, 0.05, 0.92)),
+                BackgroundColor(menu_backdrop().with_alpha(1.0)),
             ))
             .with_children(|wait| {
                 wait.spawn((
-                    Text::new("WAITING FOR PLAYERS..."),
-                    TextFont {
-                        font: font.clone(),
-                        font_size: 24.0,
-                        ..default()
-                    },
-                    TextColor(text_secondary()),
-                    WaitingStatusText,
-                ));
-                wait.spawn((
-                    Text::new(""),
-                    TextFont {
-                        font: font.clone(),
-                        font_size: 18.0,
-                        ..default()
-                    },
-                    TextColor(Color::srgb(0.7, 0.7, 0.8)),
-                    WaitingPlayersText,
-                ));
-                wait.spawn((
-                    Button,
-                    CancelJoinButton,
+                    LobbyWaitingContent,
                     Node {
-                        padding: UiRect::axes(Val::Px(30.0), Val::Px(15.0)),
-                        border_radius: BorderRadius::all(Val::Px(12.0)),
+                        width: Val::Percent(100.0),
+                        max_width: Val::Px(720.0),
+                        flex_direction: FlexDirection::Column,
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::FlexStart,
+                        row_gap: Val::Px(16.0),
                         ..default()
                     },
-                    BackgroundColor(accent_danger()),
                 ))
-                .with_children(|btn| {
-                    btn.spawn((
-                        Text::new("CANCEL"),
+                .with_children(|content| {
+                    content.spawn((
+                        Text::new("QUEUE"),
+                        LobbyMenuAnimatedText(LobbyMenuTextRole::SectionLabel),
                         TextFont {
                             font: font.clone(),
-                            font_size: 18.0,
+                            font_size: 16.0,
                             ..default()
                         },
-                        TextColor(Color::WHITE),
+                        TextColor(base_text_color(LobbyMenuTextRole::SectionLabel)),
                     ));
+                    content.spawn((
+                        Text::new("WAITING FOR PLAYERS..."),
+                        TextFont {
+                            font: font.clone(),
+                            font_size: 38.0,
+                            ..default()
+                        },
+                        TextColor(text_primary()),
+                        WaitingStatusText,
+                    ));
+                    content.spawn((
+                        Text::new(""),
+                        TextFont {
+                            font: font.clone(),
+                            font_size: 20.0,
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.7, 0.7, 0.8)),
+                        WaitingPlayersText,
+                    ));
+                    content.spawn((
+                        Button,
+                        CancelJoinButton,
+                        Node {
+                            padding: UiRect::axes(Val::Px(32.0), Val::Px(16.0)),
+                            border_radius: BorderRadius::all(Val::Px(14.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },
+                        BackgroundColor(accent_danger()),
+                        BorderColor::all(accent_danger_border()),
+                    ))
+                    .with_children(|btn| {
+                        btn.spawn((
+                            Text::new("CANCEL"),
+                            TextFont {
+                                font: font.clone(),
+                                font_size: 20.0,
+                                ..default()
+                            },
+                            TextColor(Color::WHITE),
+                        ));
+                    });
                 });
             });
         });
@@ -697,12 +779,12 @@ fn spawn_stub_button(parent: &mut ChildSpawnerCommands<'_>, font: &Handle<Font>,
         UiTransform::default(),
         Node {
             width: Val::Percent(100.0),
-            min_height: Val::Px(44.0),
-            padding: UiRect::axes(Val::Px(20.0), Val::Px(12.0)),
-            border_radius: BorderRadius::all(Val::Px(10.0)),
+            min_height: Val::Px(72.0),
+            padding: UiRect::axes(Val::Px(20.0), Val::Px(16.0)),
+            border_radius: BorderRadius::all(Val::Px(16.0)),
             border: UiRect::all(Val::Px(1.0)),
             justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
+            align_items: AlignItems::FlexStart,
             ..default()
         },
         BackgroundColor(base.with_alpha(0.0)),
@@ -719,12 +801,154 @@ fn spawn_stub_button(parent: &mut ChildSpawnerCommands<'_>, font: &Handle<Font>,
             LobbyMenuAnimatedText(role),
             TextFont {
                 font: font.clone(),
-                font_size: 16.0,
+                font_size: 18.0,
                 ..default()
             },
             TextColor(base_text_color(role).with_alpha(0.0)),
         ));
     });
+}
+
+#[inline]
+fn lobby_responsive_metrics(breakpoint: UiBreakpoint, inset_left: f32) -> (f32, f32, f32, f32, f32, f32) {
+    match breakpoint {
+        UiBreakpoint::Compact => (inset_left.max(14.0), 16.0, 12.0, 64.0, 172.0, f32::INFINITY),
+        UiBreakpoint::Medium => (inset_left.max(18.0), 20.0, 14.0, 76.0, 188.0, 760.0),
+        UiBreakpoint::Wide => (inset_left.max(24.0), 24.0, 16.0, 88.0, 212.0, 820.0),
+    }
+}
+
+pub fn system_apply_lobby_layout_responsive(
+    ui_shell: Res<UiShellState>,
+    mut q: LobbyLayoutResponsiveQueries,
+) {
+    let (outer_pad, section_gap, header_row_gap, _action_min_height, card_min_height, _waiting_max_width) =
+        lobby_responsive_metrics(ui_shell.breakpoint, ui_shell.inset_left);
+
+    if let Ok(mut root) = q.nodes.p0().single_mut() {
+        root.padding = UiRect::all(Val::Px(outer_pad));
+    }
+    if let Ok(mut chrome) = q.nodes.p1().single_mut() {
+        chrome.row_gap = Val::Px(section_gap);
+    }
+    if let Ok(mut header) = q.nodes.p2().single_mut() {
+        header.flex_direction = if matches!(ui_shell.breakpoint, UiBreakpoint::Compact) {
+            FlexDirection::Column
+        } else {
+            FlexDirection::Row
+        };
+        header.align_items = if matches!(ui_shell.breakpoint, UiBreakpoint::Compact) {
+            AlignItems::FlexStart
+        } else {
+            AlignItems::FlexEnd
+        };
+        header.justify_content = JustifyContent::SpaceBetween;
+        header.row_gap = Val::Px(header_row_gap);
+    }
+    if let Ok(mut body) = q.nodes.p3().single_mut() {
+        let compact = matches!(ui_shell.breakpoint, UiBreakpoint::Compact);
+        body.flex_direction = if compact {
+            FlexDirection::Column
+        } else {
+            FlexDirection::Row
+        };
+        body.row_gap = Val::Px(section_gap);
+        body.column_gap = Val::Px(section_gap);
+    }
+    if let Ok(mut left) = q.nodes.p4().single_mut() {
+        left.width = if matches!(ui_shell.breakpoint, UiBreakpoint::Compact) {
+            Val::Percent(100.0)
+        } else {
+            Val::Percent(60.0)
+        };
+        left.min_width = Val::Px(0.0);
+        left.row_gap = Val::Px(section_gap - 2.0);
+    }
+    if let Ok(mut right) = q.nodes.p5().single_mut() {
+        let compact = matches!(ui_shell.breakpoint, UiBreakpoint::Compact);
+        right.width = if compact {
+            Val::Percent(100.0)
+        } else {
+            Val::Percent(34.0)
+        };
+        right.min_width = if compact { Val::Px(0.0) } else { Val::Px(280.0) };
+        right.max_width = if compact { Val::Percent(100.0) } else { Val::Px(420.0) };
+        right.row_gap = Val::Px(section_gap - 4.0);
+    }
+    if let Ok(mut cards) = q.nodes.p6().single_mut() {
+        cards.row_gap = Val::Px(section_gap - 2.0);
+        cards.min_height = Val::Px(card_min_height + 100.0);
+    }
+    if let Ok(mut waiting) = q.nodes.p7().single_mut() {
+        waiting.padding = UiRect::all(Val::Px(outer_pad));
+    }
+}
+
+pub fn system_apply_lobby_controls_responsive(
+    ui_shell: Res<UiShellState>,
+    mut q: LobbyControlsResponsiveQueries,
+) {
+    let (_outer_pad, section_gap, _header_row_gap, action_min_height, card_min_height, waiting_max_width) =
+        lobby_responsive_metrics(ui_shell.breakpoint, ui_shell.inset_left);
+    let (_, touch_h) = touch_target_for_breakpoint(ui_shell.breakpoint);
+
+    if let Ok(mut waiting_content) = q.nodes.p0().single_mut() {
+        waiting_content.max_width = if waiting_max_width.is_infinite() {
+            Val::Percent(100.0)
+        } else {
+            Val::Px(waiting_max_width)
+        };
+        waiting_content.row_gap = Val::Px(section_gap);
+    }
+    if let Ok(mut nick) = q.nodes.p1().single_mut() {
+        nick.min_height = Val::Px((touch_h + 22.0).max(52.0));
+        nick.padding = UiRect::axes(Val::Px(16.0), Val::Px(12.0));
+    }
+    if let Ok(mut solo) = q.nodes.p2().single_mut() {
+        solo.min_height = Val::Px(action_min_height);
+    }
+    for mut stub in &mut q.nodes.p3() {
+        stub.min_height = Val::Px((action_min_height - 10.0).max(60.0));
+    }
+    for mut cancel in &mut q.nodes.p4() {
+        cancel.min_height = Val::Px((touch_h + 24.0).max(54.0));
+    }
+    for mut card in &mut q.nodes.p5() {
+        card.min_height = Val::Px(card_min_height);
+    }
+
+    let (title_fs, version_fs, section_fs, body_fs, nickname_fs, solo_primary_fs, solo_secondary_fs, stub_fs) =
+        match ui_shell.breakpoint {
+            UiBreakpoint::Compact => (40.0, 16.0, 14.0, 15.0, 18.0, 24.0, 15.0, 17.0),
+            UiBreakpoint::Medium => (48.0, 18.0, 15.0, 16.0, 18.0, 26.0, 16.0, 18.0),
+            UiBreakpoint::Wide => (56.0, 18.0, 16.0, 17.0, 19.0, 28.0, 16.0, 19.0),
+        };
+    for (mut text_font, role) in &mut q.fonts.p0() {
+        text_font.font_size = match role.0 {
+            LobbyMenuTextRole::TitleMain => title_fs,
+            LobbyMenuTextRole::Version => version_fs,
+            LobbyMenuTextRole::SectionLabel => section_fs,
+            LobbyMenuTextRole::BodyCopy => body_fs,
+            LobbyMenuTextRole::NicknameField => nickname_fs,
+            LobbyMenuTextRole::SoloPrimary => solo_primary_fs,
+            LobbyMenuTextRole::SoloSecondary => solo_secondary_fs,
+            LobbyMenuTextRole::StubRanked | LobbyMenuTextRole::StubSecondary => stub_fs,
+        };
+    }
+    if let Ok(mut status_font) = q.fonts.p1().single_mut() {
+        status_font.font_size = match ui_shell.breakpoint {
+            UiBreakpoint::Compact => 28.0,
+            UiBreakpoint::Medium => 34.0,
+            UiBreakpoint::Wide => 40.0,
+        };
+    }
+    if let Ok(mut players_font) = q.fonts.p2().single_mut() {
+        players_font.font_size = match ui_shell.breakpoint {
+            UiBreakpoint::Compact => 18.0,
+            UiBreakpoint::Medium => 19.0,
+            UiBreakpoint::Wide => 20.0,
+        };
+    }
 }
 
 fn queue_save(auto: &mut NicknameSettingsAutosave) {
@@ -1006,22 +1230,22 @@ pub fn system_update_lobby_browser(
                     let status_text = if lobby.is_counting_down {
                         format!("STARTING IN {:.0}s", lobby.timer_secs)
                     } else {
-                        "WAITING FOR PLAYERS".to_string()
+                        "OPEN".to_string()
                     };
 
                     let is_counting = lobby.is_counting_down;
                     let bg_color = if is_counting {
-                        accent_solo_cyan()
+                        Color::srgba(0.05, 0.18, 0.24, 0.96)
                     } else {
-                        panel_bg()
+                        Color::srgba(0.06, 0.09, 0.13, 0.98)
                     };
                     let bd_color = if is_counting {
                         menu_panel_border_glow()
                     } else {
-                        panel_border()
+                        panel_border().with_alpha(0.7)
                     };
                     let text_clr = if is_counting {
-                        Color::srgba(0.02, 0.06, 0.08, 1.0)
+                        accent_solo_cyan()
                     } else {
                         text_secondary()
                     };
@@ -1036,7 +1260,12 @@ pub fn system_update_lobby_browser(
                             t.0 = format!("SECTOR {}", lobby.id);
                         }
                         if let Some(mut t) = card_players_q.iter_mut().next() {
-                            t.0 = format!("{}/{} players", lobby.num_players, lobby.max_players);
+                            t.0 = format!(
+                                "{}\n{}/{} players connected",
+                                lobby.map_name,
+                                lobby.num_players,
+                                lobby.max_players
+                            );
                         }
                         if let Some((mut t, mut tc)) = card_status_q.iter_mut().next() {
                             t.0 = status_text;
@@ -1052,85 +1281,74 @@ pub fn system_update_lobby_browser(
                                 UiTransform::default(),
                                 Node {
                                     width: Val::Percent(100.0),
-                                    min_height: Val::Px(180.0),
+                                    min_height: Val::Px(188.0),
                                     flex_direction: FlexDirection::Column,
                                     justify_content: JustifyContent::SpaceBetween,
-                                    border_radius: BorderRadius::all(Val::Px(12.0)),
+                                    row_gap: Val::Px(18.0),
+                                    padding: UiRect::all(Val::Px(18.0)),
+                                    border_radius: BorderRadius::all(Val::Px(18.0)),
                                     border: UiRect::all(Val::Px(2.0)),
-                                    overflow: Overflow::clip(),
                                     ..default()
                                 },
-                                BackgroundColor(Color::srgba(0.58, 0.71, 0.43, 1.0)), // Map background placeholder
+                                BackgroundColor(bg_color),
                                 BorderColor::all(bd_color),
                             ))
                             .with_children(|card| {
-                                // Top Area
                                 card.spawn(Node {
                                     width: Val::Percent(100.0),
                                     flex_direction: FlexDirection::Row,
                                     justify_content: JustifyContent::SpaceBetween,
-                                    padding: UiRect::all(Val::Px(12.0)),
+                                    align_items: AlignItems::FlexStart,
+                                    column_gap: Val::Px(16.0),
+                                    row_gap: Val::Px(12.0),
                                     ..default()
                                 }).with_children(|top| {
-                                    // Left Pills
                                     top.spawn(Node {
                                         flex_direction: FlexDirection::Column,
-                                        row_gap: Val::Px(6.0),
+                                        row_gap: Val::Px(8.0),
+                                        max_width: Val::Percent(75.0),
                                         ..default()
                                     }).with_children(|left| {
-                                        let blue_pill_bg = Color::srgba(0.04, 0.47, 0.75, 1.0);
-                                        
                                         left.spawn((
-                                            Node {
-                                                padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
-                                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                            LobbyCardTitle,
+                                            Text::new(format!("SECTOR {}", lobby.id)),
+                                            TextFont {
+                                                font: font.clone(),
+                                                font_size: 28.0,
                                                 ..default()
                                             },
-                                            BackgroundColor(blue_pill_bg),
-                                        )).with_children(|p| {
-                                            p.spawn((
-                                                Text::new("COMPACT MAP"),
-                                                TextFont {
-                                                    font: font.clone(),
-                                                    font_size: 13.0,
-                                                    ..default()
-                                                },
-                                                TextColor(Color::WHITE),
-                                            ));
-                                        });
-
+                                            TextColor(Color::WHITE),
+                                        ));
                                         left.spawn((
-                                            Node {
-                                                padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
-                                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                            LobbyCardPlayers,
+                                            Text::new(format!(
+                                                "{}\n{}/{} players connected",
+                                                lobby.map_name,
+                                                lobby.num_players,
+                                                lobby.max_players
+                                            )),
+                                            TextFont {
+                                                font: font.clone(),
+                                                font_size: 16.0,
                                                 ..default()
                                             },
-                                            BackgroundColor(blue_pill_bg),
-                                        )).with_children(|p| {
-                                            p.spawn((
-                                                Text::new("RANDOM SPAWN"),
-                                                TextFont {
-                                                    font: font.clone(),
-                                                    font_size: 13.0,
-                                                    ..default()
-                                                },
-                                                TextColor(Color::WHITE),
-                                            ));
-                                        });
+                                            TextColor(text_secondary()),
+                                        ));
                                     });
 
-                                    // Right Pill (Status / Timer)
                                     top.spawn((
                                         Node {
-                                            padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
-                                            border_radius: BorderRadius::all(Val::Px(4.0)),
-                                            height: Val::Px(24.0),
+                                            padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                                            border_radius: BorderRadius::all(Val::Px(999.0)),
+                                            border: UiRect::all(Val::Px(1.0)),
+                                            justify_content: JustifyContent::Center,
                                             align_items: AlignItems::Center,
                                             ..default()
                                         },
-                                        BackgroundColor(Color::srgba(0.04, 0.47, 0.75, 1.0)),
-                                    )).with_children(|right| {
-                                        right.spawn((
+                                        BackgroundColor(Color::srgba(0.01, 0.08, 0.1, 0.82)),
+                                        BorderColor::all(bd_color),
+                                    )).with_children(|status| {
+                                        status.spawn((
                                             LobbyCardStatus,
                                             Text::new(status_text),
                                             TextFont {
@@ -1138,75 +1356,52 @@ pub fn system_update_lobby_browser(
                                                 font_size: 13.0,
                                                 ..default()
                                             },
-                                            TextColor(Color::WHITE),
+                                            TextColor(text_clr),
                                         ));
                                     });
                                 });
 
-                                // Bottom Area (Player count + Footer)
                                 card.spawn(Node {
                                     width: Val::Percent(100.0),
-                                    flex_direction: FlexDirection::Column,
-                                    justify_content: JustifyContent::FlexEnd,
+                                    justify_content: JustifyContent::SpaceBetween,
+                                    align_items: AlignItems::Center,
+                                    column_gap: Val::Px(16.0),
                                     ..default()
-                                }).with_children(|bot| {
-                                    // Player count pill (right-aligned, overlaps map)
-                                    bot.spawn(Node {
+                                }).with_children(|bottom| {
+                                    bottom.spawn((
+                                        Text::new("Tap to join the next live match."),
+                                        TextFont {
+                                            font: font.clone(),
+                                            font_size: 15.0,
+                                            ..default()
+                                        },
+                                        TextColor(text_primary().with_alpha(0.8)),
+                                    ));
+                                    bottom.spawn(Node {
                                         width: Val::Percent(100.0),
                                         justify_content: JustifyContent::FlexEnd,
-                                        padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
                                         ..default()
-                                    }).with_children(|p_row| {
-                                        p_row.spawn((
+                                    }).with_children(|cta_row| {
+                                        cta_row.spawn((
                                             Node {
-                                                padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
-                                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                                padding: UiRect::axes(Val::Px(14.0), Val::Px(8.0)),
+                                                border_radius: BorderRadius::all(Val::Px(999.0)),
+                                                border: UiRect::all(Val::Px(1.0)),
                                                 ..default()
                                             },
-                                            BackgroundColor(Color::srgba(0.12, 0.12, 0.12, 0.9)),
-                                        )).with_children(|p_pill| {
-                                            p_pill.spawn((
-                                                LobbyCardPlayers,
-                                                Text::new(format!("{}/{} players", lobby.num_players, lobby.max_players)),
+                                            BackgroundColor(Color::srgba(0.0, 0.16, 0.22, 0.75)),
+                                            BorderColor::all(menu_panel_border_glow().with_alpha(0.45)),
+                                        )).with_children(|cta| {
+                                            cta.spawn((
+                                                Text::new("JOIN"),
                                                 TextFont {
                                                     font: font.clone(),
-                                                    font_size: 13.0,
+                                                    font_size: 14.0,
                                                     ..default()
                                                 },
                                                 TextColor(Color::WHITE),
                                             ));
                                         });
-                                    });
-
-                                    // Footer area
-                                    bot.spawn((
-                                        Node {
-                                            width: Val::Percent(100.0),
-                                            flex_direction: FlexDirection::Column,
-                                            padding: UiRect::axes(Val::Px(16.0), Val::Px(12.0)),
-                                            ..default()
-                                        },
-                                        BackgroundColor(Color::srgba(0.35, 0.38, 0.30, 0.95)),
-                                    )).with_children(|footer| {
-                                        footer.spawn((
-                                            LobbyCardTitle,
-                                            Text::new(format!("SECTOR {}", lobby.id)),
-                                            TextFont {
-                                                font: font.clone(),
-                                                font_size: 22.0,
-                                                ..default()
-                                            },
-                                            TextColor(Color::WHITE),
-                                        ));
-                                        footer.spawn((
-                                            Text::new("FREE FOR ALL"),
-                                            TextFont {
-                                                font: font.clone(),
-                                                font_size: 14.0,
-                                                ..default()
-                                            },
-                                            TextColor(Color::srgba(0.8, 0.8, 0.8, 1.0)),
-                                        ));
                                     });
                                 });
                             });
@@ -1245,10 +1440,10 @@ pub fn system_handle_join_clicks(
                 anim.clicked = Some(ent);
             }
             Interaction::Hovered => {
-                *bg = accent_solo_cyan_hover().into();
+                *bg = Color::srgba(0.07, 0.17, 0.24, 0.98).into();
             }
             Interaction::None => {
-                *bg = panel_bg().into();
+                *bg = Color::srgba(0.06, 0.09, 0.13, 0.98).into();
             }
         }
     }
@@ -1338,14 +1533,10 @@ fn insert_mock_single_player_start(commands: &mut Commands, settings: &ClientSet
 /// Snap all animated chrome widgets back to theme defaults (used after cancel-from-waiting and stub bounce).
 pub fn apply_lobby_main_menu_idle_visuals(q: &mut LobbyMenuAnimVisualQueries) {
     if let Ok(mut bg) = q.color_set.p0().single_mut() {
-        *bg = menu_backdrop().into();
+        *bg = fullscreen_menu_backdrop().into();
     }
     if let Ok(mut panel_node) = q.layout_node_set.p0().single_mut() {
         panel_node.display = Display::Flex;
-    }
-    if let Ok((mut pbg, mut pbd)) = q.color_set.p5().single_mut() {
-        *pbg = menu_panel_bg().into();
-        *pbd = BorderColor::all(menu_panel_border_glow());
     }
     if let Ok(mut h) = q.transform_set.p0().single_mut() {
         *h = UiTransform::default();
@@ -1356,21 +1547,18 @@ pub fn apply_lobby_main_menu_idle_visuals(q: &mut LobbyMenuAnimVisualQueries) {
     if let Ok(mut r) = q.transform_set.p2().single_mut() {
         *r = UiTransform::from_translation(Val2::px(0.0, 0.0));
     }
-    if let Ok(mut f) = q.color_set.p1().single_mut() {
-        *f = menu_footer_bg().into();
-    }
-    if let Ok((mut nbg, mut nbd)) = q.color_set.p2().single_mut() {
+    if let Ok((mut nbg, mut nbd)) = q.color_set.p1().single_mut() {
         *nbg = nickname_field_bg().into();
         *nbd = BorderColor::all(nickname_field_border());
     }
-    if let Ok((mut sbg, mut sbd)) = q.color_set.p3().single_mut() {
+    if let Ok((mut sbg, mut sbd)) = q.color_set.p2().single_mut() {
         *sbg = accent_solo_cyan().into();
         *sbd = BorderColor::all(solo_button_border_color());
     }
     if let Ok(mut str) = q.transform_set.p3().single_mut() {
         *str = UiTransform::default();
     }
-    for (_, mut sbg, mut sbd, kind) in q.color_set.p4().iter_mut() {
+    for (_, mut sbg, mut sbd, kind) in q.color_set.p3().iter_mut() {
         match kind {
             ComingSoonKind::Ranked => *sbg = accent_ranked_gold().into(),
             ComingSoonKind::Secondary => *sbg = menu_secondary_button().into(),
@@ -1470,25 +1658,11 @@ pub fn system_lobby_main_menu_anim(
             }
 
             if let Ok(mut bg) = q.color_set.p0().single_mut() {
-                *bg = menu_backdrop()
-                    .with_alpha(menu_backdrop().alpha() * fade)
+                *bg = fullscreen_menu_backdrop()
+                    .with_alpha(fullscreen_menu_backdrop().alpha() * fade)
                     .into();
             }
-            if let Ok((mut pbg, mut pbd)) = q.color_set.p5().single_mut() {
-                *pbg = menu_panel_bg()
-                    .with_alpha(menu_panel_bg().alpha() * fade)
-                    .into();
-                *pbd = BorderColor::all(
-                    menu_panel_border_glow()
-                        .with_alpha(menu_panel_border_glow().alpha() * fade),
-                );
-            }
-            if let Ok(mut f) = q.color_set.p1().single_mut() {
-                *f = menu_footer_bg()
-                    .with_alpha(menu_footer_bg().alpha() * fade)
-                    .into();
-            }
-            if let Ok((mut nbg, mut nbd)) = q.color_set.p2().single_mut() {
+            if let Ok((mut nbg, mut nbd)) = q.color_set.p1().single_mut() {
                 *nbg = nickname_field_bg()
                     .with_alpha(nickname_field_bg().alpha() * fade)
                     .into();
@@ -1497,7 +1671,7 @@ pub fn system_lobby_main_menu_anim(
                         .with_alpha(nickname_field_border().alpha() * fade),
                 );
             }
-            if let Ok((mut sbg, mut sbd)) = q.color_set.p3().single_mut() {
+            if let Ok((mut sbg, mut sbd)) = q.color_set.p2().single_mut() {
                 *sbg = accent_solo_cyan()
                     .with_alpha(accent_solo_cyan().alpha() * fade)
                     .into();
@@ -1506,7 +1680,7 @@ pub fn system_lobby_main_menu_anim(
                         .with_alpha(solo_button_border_color().alpha() * fade),
                 );
             }
-            for (_, mut sbg, mut sbd, kind) in q.color_set.p4().iter_mut() {
+            for (_, mut sbg, mut sbd, kind) in q.color_set.p3().iter_mut() {
                 let base = match kind {
                     ComingSoonKind::Ranked => accent_ranked_gold(),
                     ComingSoonKind::Secondary => menu_secondary_button(),
@@ -1579,25 +1753,11 @@ pub fn system_lobby_main_menu_anim(
                 );
             }
             if let Ok(mut bg) = q.color_set.p0().single_mut() {
-                *bg = menu_backdrop()
-                    .with_alpha(menu_backdrop().alpha() * e)
+                *bg = fullscreen_menu_backdrop()
+                    .with_alpha(fullscreen_menu_backdrop().alpha() * e)
                     .into();
             }
-            if let Ok((mut pbg, mut pbd)) = q.color_set.p5().single_mut() {
-                *pbg = menu_panel_bg()
-                    .with_alpha(menu_panel_bg().alpha() * e)
-                    .into();
-                *pbd = BorderColor::all(
-                    menu_panel_border_glow()
-                        .with_alpha(menu_panel_border_glow().alpha() * e),
-                );
-            }
-            if let Ok(mut f) = q.color_set.p1().single_mut() {
-                *f = menu_footer_bg()
-                    .with_alpha(menu_footer_bg().alpha() * e)
-                    .into();
-            }
-            if let Ok((mut nbg, mut nbd)) = q.color_set.p2().single_mut() {
+            if let Ok((mut nbg, mut nbd)) = q.color_set.p1().single_mut() {
                 *nbg = nickname_field_bg()
                     .with_alpha(nickname_field_bg().alpha() * e)
                     .into();
@@ -1606,7 +1766,7 @@ pub fn system_lobby_main_menu_anim(
                         .with_alpha(nickname_field_border().alpha() * e),
                 );
             }
-            if let Ok((mut sbg, mut sbd)) = q.color_set.p3().single_mut() {
+            if let Ok((mut sbg, mut sbd)) = q.color_set.p2().single_mut() {
                 *sbg = accent_solo_cyan()
                     .with_alpha(accent_solo_cyan().alpha() * e)
                     .into();
@@ -1618,7 +1778,7 @@ pub fn system_lobby_main_menu_anim(
             if let Ok(mut str) = q.transform_set.p3().single_mut() {
                 *str = UiTransform::default();
             }
-            for (_, mut sbg, mut sbd, kind) in q.color_set.p4().iter_mut() {
+            for (_, mut sbg, mut sbd, kind) in q.color_set.p3().iter_mut() {
                 let base = match kind {
                     ComingSoonKind::Ranked => accent_ranked_gold(),
                     ComingSoonKind::Secondary => menu_secondary_button(),
@@ -1653,18 +1813,9 @@ fn click_scale_at_exit_end() -> f32 {
 
 fn apply_intro_frame(e: f32, q: &mut LobbyMenuAnimVisualQueries) {
     if let Ok(mut bg) = q.color_set.p0().single_mut() {
-        *bg = menu_backdrop()
-            .with_alpha(menu_backdrop().alpha() * e)
+        *bg = fullscreen_menu_backdrop()
+            .with_alpha(fullscreen_menu_backdrop().alpha() * e)
             .into();
-    }
-    if let Ok((mut pbg, mut pbd)) = q.color_set.p5().single_mut() {
-        *pbg = menu_panel_bg()
-            .with_alpha(menu_panel_bg().alpha() * e)
-            .into();
-        *pbd = BorderColor::all(
-            menu_panel_border_glow()
-                .with_alpha(menu_panel_border_glow().alpha() * e),
-        );
     }
     if let Ok(mut h) = q.transform_set.p0().single_mut() {
         *h = UiTransform::from_translation(Val2::px(
@@ -1684,12 +1835,7 @@ fn apply_intro_frame(e: f32, q: &mut LobbyMenuAnimVisualQueries) {
             0.0,
         ));
     }
-    if let Ok(mut f) = q.color_set.p1().single_mut() {
-        *f = menu_footer_bg()
-            .with_alpha(menu_footer_bg().alpha() * e)
-            .into();
-    }
-    if let Ok((mut nbg, mut nbd)) = q.color_set.p2().single_mut() {
+    if let Ok((mut nbg, mut nbd)) = q.color_set.p1().single_mut() {
         *nbg = nickname_field_bg()
             .with_alpha(nickname_field_bg().alpha() * e)
             .into();
@@ -1698,7 +1844,7 @@ fn apply_intro_frame(e: f32, q: &mut LobbyMenuAnimVisualQueries) {
                 .with_alpha(nickname_field_border().alpha() * e),
         );
     }
-    if let Ok((mut sbg, mut sbd)) = q.color_set.p3().single_mut() {
+    if let Ok((mut sbg, mut sbd)) = q.color_set.p2().single_mut() {
         *sbg = accent_solo_cyan()
             .with_alpha(accent_solo_cyan().alpha() * e)
             .into();
@@ -1707,7 +1853,7 @@ fn apply_intro_frame(e: f32, q: &mut LobbyMenuAnimVisualQueries) {
                 .with_alpha(solo_button_border_color().alpha() * e),
         );
     }
-    for (_, mut sbg, mut sbd, kind) in q.color_set.p4().iter_mut() {
+    for (_, mut sbg, mut sbd, kind) in q.color_set.p3().iter_mut() {
         let base = match kind {
             ComingSoonKind::Ranked => accent_ranked_gold(),
             ComingSoonKind::Secondary => menu_secondary_button(),

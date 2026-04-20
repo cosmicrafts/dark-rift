@@ -63,12 +63,6 @@ pub fn menu_backdrop() -> Color {
     Color::srgba(0.039, 0.078, 0.114, 0.97)
 }
 
-/// Main framed panel fill (~#0A141D).
-#[inline]
-pub fn menu_panel_bg() -> Color {
-    Color::srgba(0.039, 0.078, 0.114, 0.92)
-}
-
 #[inline]
 pub fn menu_panel_border_glow() -> Color {
     Color::srgba(0.0, 0.83, 1.0, 0.55)
@@ -131,7 +125,3 @@ pub fn nickname_field_border_focused() -> Color {
     Color::srgba(0.0, 0.85, 1.0, 0.85)
 }
 
-#[inline]
-pub fn menu_footer_bg() -> Color {
-    Color::srgba(0.02, 0.04, 0.06, 0.88)
-}

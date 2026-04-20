@@ -106,6 +106,9 @@ impl GameState {
                 p.sum_x = p.sum_x.saturating_sub(x as u64);
                 p.sum_y = p.sum_y.saturating_sub(y as u64);
                 p.tile_count = p.tile_count.saturating_sub(1);
+                if let Some(pos) = p.border_tiles.iter().position(|&t| t == (x, y)) {
+                    p.border_tiles.swap_remove(pos);
+                }
             }
         }
 

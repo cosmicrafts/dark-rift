@@ -228,9 +228,7 @@ const CHUNK_SIZE: u32 = 256;
 #[derive(Resource)]
 struct MapChunkGrid {
     chunks_x: u32,
-    chunks_y: u32,
     map_width: u32,
-    map_height: u32,
     /// Flattened grid: chunk (cx, cy) is at index cy * chunks_x + cx.
     handles: Vec<Handle<Image>>,
 }
@@ -516,6 +514,15 @@ fn main() {
                 system_lobby_main_menu_anim,
                 system_update_lobby_browser,
             ).run_if(|state: Res<State<AppState>>, cli: Res<Cli>| *state.get() == AppState::LobbyBrowser && !cli.bot))
+            .add_systems(
+                Update,
+                (
+                    ui_lobby_browser::system_apply_lobby_layout_responsive,
+                    ui_lobby_browser::system_apply_lobby_controls_responsive,
+                )
+                    .run_if(|state: Res<State<AppState>>, cli: Res<Cli>| *state.get() == AppState::LobbyBrowser && !cli.bot)
+                    .before(system_lobby_main_menu_anim),
+            )
             .add_systems(Update, (
                 handle_server_start,
                 system_mock_single_player_start,
@@ -2489,7 +2496,7 @@ fn spawn_chunked_texture_tilemap(
         }
     }
 
-    MapChunkGrid { chunks_x, chunks_y, map_width: map_w, map_height: map_h, handles }
+    MapChunkGrid { chunks_x, map_width: map_w, handles }
 }
 
 /// OpenFront-style TileData:
