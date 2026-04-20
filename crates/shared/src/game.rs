@@ -106,7 +106,6 @@ impl GameState {
                 p.sum_x = p.sum_x.saturating_sub(x as u64);
                 p.sum_y = p.sum_y.saturating_sub(y as u64);
                 p.tile_count = p.tile_count.saturating_sub(1);
-                p.border_tiles.remove(&(x, y));
             }
         }
 
@@ -121,7 +120,7 @@ impl GameState {
 
         self.map.set_owner_id(x, y, new_owner);
 
-        // Now update border caches for affected tiles (the tile itself and its 4 neighbors)
+        // Update border cache without allocations
         let coords = [
             (x as i32, y as i32),
             (x as i32, y as i32 - 1),
@@ -146,11 +145,16 @@ impl GameState {
         for (owner, ux, uy, is_border) in updates {
             if let Some(p) = self.player_mut(owner) {
                 if is_border {
-                    p.border_tiles.insert((ux, uy));
+                    if !p.border_tiles.contains(&(ux, uy)) {
+                        p.border_tiles.push((ux, uy));
+                    }
                 } else {
-                    p.border_tiles.remove(&(ux, uy));
+                    if let Some(pos) = p.border_tiles.iter().position(|&t| t == (ux, uy)) {
+                        p.border_tiles.swap_remove(pos);
+                    }
                 }
             }
         }
     }
+
 }
