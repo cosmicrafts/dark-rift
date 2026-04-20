@@ -551,14 +551,21 @@ fn main() {
             system_sync_bottom_combat_hud,
             system_sync_outgoing_attack_rows,
             system_handle_cancel_click,
-            ui_leaderboard::system_update_leaderboard,
-        ).run_if(in_state(AppState::InGame)))
+        ).run_if(in_state(AppState::InGame)));
+
+        app.add_systems(Update,
+            ui_leaderboard::system_update_leaderboard
+                .run_if(in_state(AppState::InGame))
+                .run_if(bevy::time::common_conditions::on_timer(std::time::Duration::from_secs(1)))
+        );
+
         // ── Tile rendering: direct chunk painting ──
-        .add_systems(Update, (
+        app.add_systems(Update, (
             handle_tile_change,
             system_animate_tile_colors.after(handle_tile_change),
-        ).run_if(in_state(AppState::InGame)))
-        .add_systems(
+        ).run_if(in_state(AppState::InGame)));
+        
+        app.add_systems(
             Update,
             system_animate_attack_command_rings
                 .after(player_click)

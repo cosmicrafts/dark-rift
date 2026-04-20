@@ -71,6 +71,7 @@ pub fn system_update_leaderboard(
     game_opt: Option<Res<GameState>>,
     mut q_entries: Query<(&LeaderboardEntryText, &mut Text, &mut TextColor)>,
     my_id: Option<Res<crate::MyPlayerId>>,
+    mut cached_land: Local<Option<f32>>,
 ) {
     let Some(game) = game_opt else { return };
     let my_player_id = my_id.map(|r| r.0).unwrap_or(0);
@@ -79,8 +80,15 @@ pub fn system_update_leaderboard(
     let mut sorted_players: Vec<_> = game.players.iter().filter(|p| p.alive).collect();
     sorted_players.sort_by(|a, b| b.tile_count.cmp(&a.tile_count));
     
-    // Lazy count total land tiles (since terrain is immutable)
-    let total_land = game.map.terrain.iter().filter(|t| t.is_land()).count().max(1) as f32;
+    // Lazy count total land tiles (since terrain is immutable) only ONCE
+    let total_land = match *cached_land {
+        Some(val) => val,
+        None => {
+            let val = game.map.terrain.iter().filter(|t| t.is_land()).count().max(1) as f32;
+            *cached_land = Some(val);
+            val
+        }
+    };
     
     for (entry, mut text, mut text_color) in q_entries.iter_mut() {
         if let Some(p) = sorted_players.get(entry.0) {
