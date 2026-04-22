@@ -12,8 +12,21 @@
   <link rel="preload" href="./assets/ui/loader_frame.webp?v=__BUILD_TS__" as="image" />
   <link rel="preload" href="./assets/ui/loader_fill.webp?v=__BUILD_TS__" as="image" />
   <style>
-    html, body { margin: 0; height: 100%; background: #050508; }
-    canvas { display: block; position: relative; z-index: 1; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #050508;
+      overscroll-behavior: none;
+      touch-action: none;
+    }
+    canvas {
+      display: block;
+      position: relative;
+      z-index: 1;
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
 
     #splash-stack {
       position: fixed;

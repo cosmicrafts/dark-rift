@@ -169,7 +169,7 @@ pub fn system_attack_execution(
         let max_tiles_f32 = if execution.target_owner == 0 {
             // Neutral expansion speed: grows purely with attack troops
             let base_speed = execution.troops as f32 / 50.0;
-            base_speed.max(1.0).min(50.0) // At least 1, max 50
+            base_speed.max(1.0).min(3.0) // At least 1, max 50
         } else {
             // PvP expansion speed: ratio based
             let defender_troops = game

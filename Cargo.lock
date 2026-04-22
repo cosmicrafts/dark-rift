@@ -2744,6 +2744,7 @@ dependencies = [
  "bevy_ecs",
  "bevy_enoki",
  "bevy_state",
+ "bytemuck",
  "clap",
  "crossbeam-channel",
  "dark-rift-shared",

@@ -13,9 +13,7 @@ use bevy::prelude::*;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::text::FontWeight;
 use bevy::ui::RelativeCursorPosition;
-use bevy::sprite::Sprite;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
-use bevy::asset::RenderAssetUsages;
+
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::post_process::bloom::{Bloom, BloomCompositeMode};
 use bevy_enoki::prelude::*;
@@ -45,6 +43,7 @@ use dark_rift_shared::intent::{apply_stamped_intent, system_bot_think};
 use dark_rift_shared::protocol::*;
 use dark_rift_shared::pseudo_random::PseudoRandom;
 
+mod border_material;
 mod map_fetch;
 mod settings;
 mod ui_layers;
@@ -58,6 +57,8 @@ use ui_layers::GAME_OVER;
 use ui_shell::*;
 use ui_theme::*;
 use ui_lobby_browser::*;
+
+use bevy::sprite_render::MeshMaterial2d;
 
 const TILE_SIZE: f32 = 8.0;
 /// Native client: plain WebSocket to this `SocketAddr` (see `WebSocketScheme::Plain`).
@@ -129,6 +130,17 @@ pub struct InGameEntity;
 pub struct CameraDragState {
     pub accumulated_drag: f32,
     pub is_dragging: bool,
+}
+
+#[derive(Resource, Default)]
+pub struct PinchState {
+    pub last_distance: Option<f32>,
+}
+
+#[derive(Resource, Default)]
+pub struct TouchGestureState {
+    pub max_touches_in_gesture: u8,
+    pub last_touch_pos: Option<Vec2>,
 }
 
 #[derive(Resource, Default)]
@@ -220,36 +232,7 @@ struct FreshlyPaintedTiles {
 }
 
 
-const CHUNK_SIZE: u32 = 256;
 
-/// Spatial texture chunking: the map is split into a grid of 256×256 Images.
-/// When a tile changes, only its chunk's Image gets `get_mut` → only ~256 KB
-/// is re-uploaded to the GPU instead of the full 8-19 MB monolithic texture.
-#[derive(Resource)]
-struct MapChunkGrid {
-    chunks_x: u32,
-    map_width: u32,
-    /// Flattened grid: chunk (cx, cy) is at index cy * chunks_x + cx.
-    handles: Vec<Handle<Image>>,
-}
-
-impl MapChunkGrid {
-    #[inline]
-    fn chunk_index(&self, tile_x: u32, tile_y: u32) -> usize {
-        let cx = tile_x / CHUNK_SIZE;
-        let cy = tile_y / CHUNK_SIZE;
-        (cy * self.chunks_x + cx) as usize
-    }
-    #[inline]
-    fn chunk_handle(&self, tile_x: u32, tile_y: u32) -> &Handle<Image> {
-        &self.handles[self.chunk_index(tile_x, tile_y)]
-    }
-    /// Width of the chunk at column cx (edge chunks may be smaller).
-    #[inline]
-    fn chunk_width(&self, cx: u32) -> u32 {
-        (self.map_width - cx * CHUNK_SIZE).min(CHUNK_SIZE)
-    }
-}
 
 /// Troop fraction committed on each attack click (OpenFront `uiState.attackRatio` + ControlPanel slider 1–100%).
 #[derive(Resource)]
@@ -432,6 +415,8 @@ fn main() {
         .init_resource::<TurnQueue>()
         .init_resource::<HighestReceivedTurn>()
         .init_resource::<CameraDragState>()
+        .init_resource::<PinchState>()
+        .init_resource::<TouchGestureState>()
         .init_resource::<FreshlyPaintedTiles>()
         .init_resource::<AttackRatio>()
         .init_resource::<OutgoingAttackRowMap>()
@@ -566,10 +551,12 @@ fn main() {
                 .run_if(bevy::time::common_conditions::on_timer(std::time::Duration::from_secs(1)))
         );
 
-        // ── Tile rendering: direct chunk painting ──
+        // ── GPU shader map rendering ──
+        // handle_tile_change now writes owner IDs into the ShaderStorageBuffer (2 bytes/tile),
+        // eliminating the old chunk texture uploads entirely.
         app.add_systems(Update, (
             handle_tile_change,
-            system_animate_tile_colors.after(handle_tile_change),
+
         ).run_if(in_state(AppState::InGame)));
         
         app.add_systems(
@@ -676,6 +663,8 @@ fn camera_movement_and_zoom(
     mut scroll_evr: MessageReader<MouseWheel>,
     mut motion_evr: MessageReader<bevy::input::mouse::MouseMotion>,
     mut drag_state: ResMut<CameraDragState>,
+    mut pinch_state: ResMut<PinchState>,
+    mut touch_gesture: ResMut<TouchGestureState>,
 ) {
     if mouse_input.just_pressed(MouseButton::Left) || touches.any_just_pressed() {
         drag_state.is_dragging = true;
@@ -695,6 +684,54 @@ fn camera_movement_and_zoom(
     if touch_count > 0 {
         touch_delta /= touch_count as f32;
     }
+    if touch_count > 0 {
+        if touch_gesture.max_touches_in_gesture == 0 || touches.any_just_pressed() {
+            touch_gesture.max_touches_in_gesture = touch_count as u8;
+        } else {
+            touch_gesture.max_touches_in_gesture =
+                touch_gesture.max_touches_in_gesture.max(touch_count as u8);
+        }
+    }
+    if let Some(touch) = touches.iter().next() {
+        touch_gesture.last_touch_pos = Some(touch.position());
+    } else if !touches.any_just_released() {
+        touch_gesture.last_touch_pos = None;
+        touch_gesture.max_touches_in_gesture = 0;
+    }
+
+    // Two-finger pinch zoom (mobile/tablet). Keep this branch isolated so
+    // desktop wheel zoom and one-finger pan semantics remain unchanged.
+    let mut touch_a = None;
+    let mut touch_b = None;
+    let mut extra_touches = false;
+    for touch in touches.iter() {
+        if touch_a.is_none() {
+            touch_a = Some(touch.position());
+        } else if touch_b.is_none() {
+            touch_b = Some(touch.position());
+        } else {
+            extra_touches = true;
+            break;
+        }
+    }
+    let is_pinching = touch_a.is_some() && touch_b.is_some() && !extra_touches;
+    let mut pinch_zoom = 0.0_f32;
+    if let (Some(a), Some(b)) = (touch_a, touch_b) {
+        let distance = a.distance(b);
+        if is_pinching {
+            if let Some(prev_distance) = pinch_state.last_distance {
+                let delta = distance - prev_distance;
+                pinch_zoom = -delta * 0.004;
+            }
+            pinch_state.last_distance = Some(distance);
+            // Treat pinch as non-tap interaction.
+            drag_state.accumulated_drag = drag_state.accumulated_drag.max(11.0);
+        } else {
+            pinch_state.last_distance = None;
+        }
+    } else {
+        pinch_state.last_distance = None;
+    }
 
     for (mut transform, mut projection) in q_camera.iter_mut() {
         let bevy::prelude::Projection::Orthographic(ref mut ortho) = *projection else { continue };
@@ -708,6 +745,7 @@ fn camera_movement_and_zoom(
             }
         }
         
+        zoom += pinch_zoom;
         if zoom != 0.0 {
             ortho.scale = (ortho.scale * (1.0 + zoom)).clamp(0.1, 20.0);
         }
@@ -732,7 +770,7 @@ fn camera_movement_and_zoom(
         // Mouse/Touch Drag Pan
         let mut drag_delta = Vec2::ZERO;
         
-        if drag_state.is_dragging {
+        if drag_state.is_dragging && !is_pinching {
             // Process Mouse
             for ev in motion_evr.read() {
                 drag_delta += ev.delta;
@@ -765,6 +803,8 @@ fn setup_offline(
     mut commands: Commands,
     mut ready: ResMut<GameReady>,
     director: NonSend<ReplayDirector>,
+    mut meshes: ResMut<Assets<Mesh>>,
+
     mut images: ResMut<Assets<Image>>,
     settings: Res<ClientSettings>,
     mut overlay: ResMut<OverlayDiagnostics>,
@@ -1355,6 +1395,23 @@ fn handle_server_start(
     }
 }
 
+use bevy::ecs::system::SystemParam;
+
+#[derive(SystemParam)]
+pub struct StartGameParams<'w> {
+    ready: ResMut<'w, GameReady>,
+    my_id: ResMut<'w, MyPlayerId>,
+    queue: ResMut<'w, TurnQueue>,
+    pending: ResMut<'w, PendingTicks>,
+    highest: ResMut<'w, HighestReceivedTurn>,
+    overlay: Option<ResMut<'w, OverlayDiagnostics>>,
+    shell: Option<Res<'w, HudShellRegions>>,
+    meshes: Option<ResMut<'w, Assets<Mesh>>>,
+
+    images: Option<ResMut<'w, Assets<Image>>>,
+    next_state: ResMut<'w, NextState<AppState>>,
+}
+
 fn setup_loading_map_timeout(mut commands: Commands) {
     commands.insert_resource(LoadingMapTimeout(Timer::from_seconds(15.0, TimerMode::Once)));
 }
@@ -1365,21 +1422,13 @@ fn system_loading_map(
     mut timeout: ResMut<LoadingMapTimeout>,
     mut cache: Option<ResMut<MapCache>>,
     pending_msg: Option<ResMut<PendingServerStart>>,
-    mut ready: ResMut<GameReady>,
-    mut my_id: ResMut<MyPlayerId>,
     mut cam_q: Query<&mut Transform, With<Camera2d>>,
-    mut queue: ResMut<TurnQueue>,
-    mut pending: ResMut<PendingTicks>,
-    mut highest: ResMut<HighestReceivedTurn>,
-    mut overlay: Option<ResMut<OverlayDiagnostics>>,
-    shell: Option<Res<HudShellRegions>>,
-    mut images: Option<ResMut<Assets<Image>>>,
-    mut next_state: ResMut<NextState<AppState>>,
+    mut params: StartGameParams,
 ) {
     timeout.0.tick(time.delta());
     if timeout.0.just_finished() {
         bevy::log::error!("Map load timeout! Returning to lobby.");
-        next_state.set(AppState::LobbyBrowser);
+        params.next_state.set(AppState::LobbyBrowser);
         commands.remove_resource::<PendingServerStart>();
         return;
     }
@@ -1409,17 +1458,9 @@ fn system_loading_map(
 
     start_game_core(
         p_msg.0.clone(),
-        &mut ready,
-        &mut my_id,
         &mut cam_q,
         &mut commands,
-        &mut queue,
-        &mut pending,
-        &mut highest,
-        &mut overlay,
-        &shell,
-        &mut images,
-        &mut next_state,
+        &mut params,
     );
 
     commands.remove_resource::<PendingServerStart>();
@@ -1428,17 +1469,9 @@ fn system_loading_map(
 
 fn system_mock_single_player_start(
     mock:      Option<ResMut<MockSinglePlayerStart>>,
-    mut ready:     ResMut<GameReady>,
-    mut my_id:     ResMut<MyPlayerId>,
     mut cam_q:     Query<&mut Transform, With<Camera2d>>,
     mut commands:  Commands,
-    mut queue:     ResMut<TurnQueue>,
-    mut pending:   ResMut<PendingTicks>,
-    mut highest:   ResMut<HighestReceivedTurn>,
-    mut overlay:   Option<ResMut<OverlayDiagnostics>>,
-    shell:         Option<Res<HudShellRegions>>,
-    mut images:    Option<ResMut<Assets<Image>>>,
-    mut next_state: ResMut<NextState<AppState>>,
+    mut params:    StartGameParams,
 ) {
     if let Some(m) = mock {
         commands.insert_resource(SinglePlayerState {
@@ -1447,8 +1480,7 @@ fn system_mock_single_player_start(
         });
         commands.insert_resource(LocalIntentBuffer::default());
         start_game_core(
-            m.0.clone(), &mut ready, &mut my_id, &mut cam_q, &mut commands,
-            &mut queue, &mut pending, &mut highest, &mut overlay, &shell, &mut images, &mut next_state
+            m.0.clone(), &mut cam_q, &mut commands, &mut params
         );
         commands.remove_resource::<MockSinglePlayerStart>();
     }
@@ -1480,26 +1512,18 @@ fn system_single_player_tick(
 
 fn start_game_core(
     msg:           ServerStartMessage,
-    ready:         &mut ResMut<GameReady>,
-    my_id:         &mut ResMut<MyPlayerId>,
     cam_q:         &mut Query<&mut Transform, With<Camera2d>>,
     commands:      &mut Commands,
-    queue:         &mut ResMut<TurnQueue>,
-    pending:       &mut ResMut<PendingTicks>,
-    highest:       &mut ResMut<HighestReceivedTurn>,
-    overlay:       &mut Option<ResMut<OverlayDiagnostics>>,
-    shell:         &Option<Res<HudShellRegions>>,
-    images:        &mut Option<ResMut<Assets<Image>>>,
-    next_state:    &mut ResMut<NextState<AppState>>,
+    params:        &mut StartGameParams,
 ) {
-            if ready.0 { return; }
+            if params.ready.0 { return; }
 
             if let Some(pid) = msg.my_player_id {
                 info!("🎮 Game starting! I am player {}", pid);
-                my_id.0 = pid;
+                params.my_id.0 = pid;
             } else {
                 info!("👁  Game starting! I am an observer");
-                my_id.0 = 0;
+                params.my_id.0 = 0;
             }
 
             let mut game = GameState::new(msg.seed, msg.config.map_width, msg.config.map_height);
@@ -1519,9 +1543,9 @@ fn start_game_core(
 
             // Replay missed turns (late-join) — identical behavior to OpenFront
             for turn in &msg.missed_turns {
-                queue.0.push_back(turn.clone());
-                pending.0 += 1;
-                highest.0 = Some(highest.0.unwrap_or(0).max(turn.turn_number));
+                params.queue.0.push_back(turn.clone());
+                params.pending.0 += 1;
+                params.highest.0 = Some(params.highest.0.unwrap_or(0).max(turn.turn_number));
             }
 
             commands.insert_resource(msg.config.clone());
@@ -1532,8 +1556,8 @@ fn start_game_core(
             let mut cx = map_w * TILE_SIZE / 2.0;
             let mut cy = map_h * TILE_SIZE / 2.0;
 
-            if my_id.0 != 0 {
-                if let Some(me) = msg.players.iter().find(|p| p.id == my_id.0) {
+            if params.my_id.0 != 0 {
+                if let Some(me) = msg.players.iter().find(|p| p.id == params.my_id.0) {
                     cx = me.spawn_x as f32 * TILE_SIZE;
                     cy = (game.map.height as f32 - 1.0 - me.spawn_y as f32) * TILE_SIZE;
                 }
@@ -1542,20 +1566,20 @@ fn start_game_core(
             if let Ok(mut cam) = cam_q.single_mut() {
                 cam.translation = Vec3::new(cx, cy, 999.0);
             }
-            if let Some(images_res) = images.as_mut() {
+            if let Some(images_res) = params.images.as_mut() {
                 let grid = spawn_chunked_texture_tilemap(commands, &game, images_res, true);
                 commands.insert_resource(grid);
             }
 
             commands.insert_resource(game);
-            ready.0 = true;
-            next_state.set(AppState::InGame);
+            params.ready.0 = true;
+            params.next_state.set(AppState::InGame);
 
-            if let Some(s) = shell {
+            if let Some(s) = &params.shell {
                 spawn_bottom_combat_hud(commands, s, msg.my_player_id.is_none());
             }
 
-            if let Some(over) = overlay {
+            if let Some(over) = params.overlay.as_mut() {
                 if msg.my_player_id.is_some() {
                     over.status_line = format!("Connected — Player {:?}", msg.my_player_id);
                 } else {
@@ -1663,7 +1687,9 @@ fn player_click(
     mut materials: ResMut<Assets<ColorMaterial>>,
     mouse:       Res<ButtonInput<MouseButton>>,
     touches:     Res<Touches>,
+    q_camera:    Query<(&Camera, &GlobalTransform), With<Camera2d>>,
     drag_state:  Res<CameraDragState>,
+    touch_gesture: Res<TouchGestureState>,
     hovered:     Res<HoveredTile>,
     game_opt:    Option<Res<GameState>>,
     my_id:       Res<MyPlayerId>,
@@ -1675,7 +1701,14 @@ fn player_click(
 ) {
     // We trigger ONLY on release to support dragging.
     // Additionally, if the user accumulated too much drag, we abort the intent payload.
-    if !mouse.just_released(MouseButton::Left) && !touches.any_just_released() { return; }
+    let mouse_release = mouse.just_released(MouseButton::Left);
+    let touch_release = touches.any_just_released();
+    if !mouse_release && !touch_release {
+        return;
+    }
+    if touch_release && touch_gesture.max_touches_in_gesture > 1 {
+        return; // Ignore pinch/two-finger releases.
+    }
     if drag_state.accumulated_drag > 10.0 { return; } // It was a drag, not a click
 
     // Clicks/releases over the combat HUD must not issue map attacks (OpenFront: UI eats pointer).
@@ -1683,8 +1716,20 @@ fn player_click(
         return;
     }
 
-    let Some((x, y)) = hovered.0 else { return };
     let Some(game) = game_opt else { return };
+    let target = hovered.0.or_else(|| {
+        let viewport = touch_gesture.last_touch_pos?;
+        let (camera, cam_t) = q_camera.single().ok()?;
+        let world = camera.viewport_to_world_2d(cam_t, viewport).ok()?;
+        let gx = (world.x / TILE_SIZE).round() as i32;
+        let gy = game.map.height as i32 - 1 - (world.y / TILE_SIZE).round() as i32;
+        if game.map.is_valid_coord(gx, gy) {
+            Some((gx as u32, gy as u32))
+        } else {
+            None
+        }
+    });
+    let Some((x, y)) = target else { return };
 
     let pid = my_id.0;
     let Some(player) = game.players.iter().find(|p| p.id == pid) else { return };
@@ -1884,144 +1929,41 @@ fn system_home_button(
     }
 }
 
-// ─── Visual ──────────────────────────────────────────────────────────────────
 
-/// Max fresh tiles tracked for expansion glow.
-const MAX_FRESH_TILES: usize = 512;
-
-/// Helper: paint a single tile (with optional animation boost) directly into
-/// the chunk Image that owns it. Only that chunk (~256 KB) gets re-uploaded.
-#[inline]
-fn paint_tile_to_chunk(
-    images: &mut Assets<Image>,
-    grid: &MapChunkGrid,
-    game: &GameState,
-    x: u32,
-    y: u32,
-    fresh_tiles: &FreshlyPaintedTiles,
-) {
-    let wx = x as i32;
-    let wy = y as i32;
-    if !game.map.is_valid_coord(wx, wy) { return; }
-
-    let mut color = openfront_tile_color(game, wx, wy);
-
-    if let Some(&val) = fresh_tiles.tiles.get(&(x, y)) {
-        let srgba = color.to_srgba();
-        let t = val.clamp(0.0, 1.0);
-        let eased = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t);
-        let boost = 1.0 + 4.0 * eased;
-        let owner = game.map.owner_id(x, y);
-        let is_border = [(wx, wy - 1), (wx + 1, wy), (wx, wy + 1), (wx - 1, wy)]
-            .iter()
-            .any(|&(nx, ny)| {
-                game.map.is_valid_coord(nx, ny)
-                    && game.map.owner_id(nx as u32, ny as u32) != owner
-            });
-        let white_flash = if is_border { 2.5 * eased } else { 0.0 };
-        color = Color::srgba(
-            srgba.red * boost + white_flash,
-            srgba.green * boost + white_flash,
-            srgba.blue * boost + white_flash,
-            srgba.alpha,
-        );
-    }
-
-    let handle = grid.chunk_handle(x, y);
-    let Some(image) = images.get_mut(handle) else { return };
-    let Some(data) = &mut image.data else { return };
-
-    let cx = x / CHUNK_SIZE;
-    let local_x = x % CHUNK_SIZE;
-    let local_y = y % CHUNK_SIZE;
-    let cw = grid.chunk_width(cx);
-    let idx = ((local_y * cw + local_x) * 4) as usize;
-    if idx + 3 >= data.len() { return; }
-
-    let s = color.to_srgba();
-    data[idx]     = (s.red   * 255.0).clamp(0.0, 255.0) as u8;
-    data[idx + 1] = (s.green * 255.0).clamp(0.0, 255.0) as u8;
-    data[idx + 2] = (s.blue  * 255.0).clamp(0.0, 255.0) as u8;
-    data[idx + 3] = (s.alpha * 255.0).clamp(0.0, 255.0) as u8;
-}
-
-/// Paint tile changes directly into chunk Images. Only touched chunks get
-/// re-uploaded to the GPU (~256 KB each vs 19 MB monolithic).
+/// Write changed owner IDs into the GPU ShaderStorageBuffer.
 fn handle_tile_change(
     game_opt: Option<ResMut<GameState>>,
-    mut fresh_tiles: ResMut<FreshlyPaintedTiles>,
-    grid: Option<Res<MapChunkGrid>>,
+    grid_opt: Option<Res<MapChunkGrid>>,
     mut images: ResMut<Assets<Image>>,
-    settings: Res<ClientSettings>,
 ) {
     let Some(mut game) = game_opt else { return };
     if !game.is_changed() { return; }
-    let Some(grid) = grid else { return };
+    let Some(grid) = grid_opt else { return };
 
-    let animations_on = settings.config.visuals.territory_expansion_animations_enabled();
+    let mut dirty_tiles = std::collections::HashSet::new();
 
     for ev in &game.events {
-        if let GameEvent::TileCaptured { x, y, new_owner: _ } = ev {
-            if animations_on && fresh_tiles.tiles.len() < MAX_FRESH_TILES {
-                fresh_tiles.tiles.insert((*x, *y), 1.0);
-            }
-            let coords = [
-                (*x as i32, *y as i32),
-                (*x as i32, *y as i32 - 1),
-                (*x as i32, *y as i32 + 1),
-                (*x as i32 - 1, *y as i32),
-                (*x as i32 + 1, *y as i32),
-            ];
-            for (wx, wy) in coords {
-                if game.map.is_valid_coord(wx, wy) {
-                    paint_tile_to_chunk(&mut images, &grid, &game, wx as u32, wy as u32, &fresh_tiles);
-                }
-            }
+        if let GameEvent::TileCaptured { x, y, .. } = ev {
+            let cx = *x as i32;
+            let cy = *y as i32;
+            dirty_tiles.insert((cx, cy));
+            dirty_tiles.insert((cx, cy - 1));
+            dirty_tiles.insert((cx + 1, cy));
+            dirty_tiles.insert((cx, cy + 1));
+            dirty_tiles.insert((cx - 1, cy));
+        }
+    }
+
+    for &(nx, ny) in &dirty_tiles {
+        if game.map.is_valid_coord(nx, ny) {
+            paint_tile_to_chunk(&mut images, &grid, &game, nx as u32, ny as u32);
         }
     }
 
     game.events.clear();
 }
 
-/// Animate expansion glow by decaying and repainting affected tiles in their chunks.
-fn system_animate_tile_colors(
-    time: Res<Time>,
-    game_opt: Option<Res<GameState>>,
-    mut fresh_tiles: ResMut<FreshlyPaintedTiles>,
-    grid: Option<Res<MapChunkGrid>>,
-    mut images: ResMut<Assets<Image>>,
-    settings: Res<ClientSettings>,
-) {
-    if !settings.config.visuals.territory_expansion_animations_enabled() {
-        fresh_tiles.tiles.clear();
-        return;
-    }
-    if fresh_tiles.tiles.is_empty() { return; }
-    let Some(game) = game_opt else { return };
-    let Some(grid) = grid else { return };
 
-    let dt = time.delta_secs();
-    let lerp_speed = 0.85;
-    let mut finished = vec![];
-
-    for (&(x, y), val) in fresh_tiles.tiles.iter_mut() {
-        *val -= lerp_speed * dt;
-        if *val <= 0.0 {
-            *val = 0.0;
-            finished.push((x, y));
-        }
-    }
-
-    // Repaint animated tiles (only their chunks get marked dirty).
-    for (&(x, y), _) in fresh_tiles.tiles.iter() {
-        paint_tile_to_chunk(&mut images, &grid, &game, x, y, &fresh_tiles);
-    }
-
-    for key in finished {
-        fresh_tiles.tiles.remove(&key);
-        paint_tile_to_chunk(&mut images, &grid, &game, key.0, key.1, &fresh_tiles);
-    }
-}
 
 fn update_hud(
     game_opt:  Option<Res<GameState>>,
@@ -2416,94 +2358,42 @@ fn system_handle_cancel_click(
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/// Returns the raw [r, g, b] (0..1) for a player, or dark void for unowned.
+const CHUNK_SIZE: u32 = 256;
+
+#[derive(Resource)]
+struct MapChunkGrid {
+    chunk_handles: HashMap<(u32, u32), Handle<Image>>,
+    chunk_width: HashMap<u32, u32>,
+    chunk_height: HashMap<u32, u32>,
+}
+
+impl MapChunkGrid {
+    fn chunk_handle(&self, x: u32, y: u32) -> &Handle<Image> {
+        let cx = x / CHUNK_SIZE;
+        let cy = y / CHUNK_SIZE;
+        self.chunk_handles.get(&(cx, cy)).unwrap()
+    }
+    fn chunk_w(&self, cx: u32) -> u32 {
+        *self.chunk_width.get(&cx).unwrap()
+    }
+    fn chunk_h(&self, cy: u32) -> u32 {
+        *self.chunk_height.get(&cy).unwrap()
+    }
+}
+
 fn player_base_color(game: &GameState, owner: u16) -> [f32; 3] {
     if owner == 0 {
-        return [0.08, 0.08, 0.12];
+        return [0.0, 0.0, 0.0];
     }
-    game.players.iter()
+    game.players
+        .iter()
         .find(|p| p.id == owner)
-        .map(|p| p.color)
-        .unwrap_or([0.3, 0.3, 0.3])
-}
-fn spawn_chunked_texture_tilemap(
-    commands: &mut Commands,
-    game: &GameState,
-    images: &mut Assets<Image>,
-    in_game: bool,
-) -> MapChunkGrid {
-    let map_w = game.map.width;
-    let map_h = game.map.height;
-    let chunks_x = (map_w + CHUNK_SIZE - 1) / CHUNK_SIZE;
-    let chunks_y = (map_h + CHUNK_SIZE - 1) / CHUNK_SIZE;
-
-    let mut handles = Vec::with_capacity((chunks_x * chunks_y) as usize);
-
-    for cy in 0..chunks_y {
-        for cx in 0..chunks_x {
-            let x0 = cx * CHUNK_SIZE;
-            let y0 = cy * CHUNK_SIZE;
-            let cw = (map_w - x0).min(CHUNK_SIZE);
-            let ch = (map_h - y0).min(CHUNK_SIZE);
-
-            // Build pixel data for this chunk.
-            let mut pixel_data = vec![0u8; (cw * ch * 4) as usize];
-            for ly in 0..ch {
-                for lx in 0..cw {
-                    let gx = (x0 + lx) as i32;
-                    let gy = (y0 + ly) as i32;
-                    let color = openfront_tile_color(game, gx, gy).to_srgba();
-                    let idx = ((ly * cw + lx) * 4) as usize;
-                    pixel_data[idx]     = (color.red   * 255.0).clamp(0.0, 255.0) as u8;
-                    pixel_data[idx + 1] = (color.green * 255.0).clamp(0.0, 255.0) as u8;
-                    pixel_data[idx + 2] = (color.blue  * 255.0).clamp(0.0, 255.0) as u8;
-                    pixel_data[idx + 3] = (color.alpha * 255.0).clamp(0.0, 255.0) as u8;
-                }
-            }
-
-            let mut image = Image::new_fill(
-                Extent3d { width: cw, height: ch, depth_or_array_layers: 1 },
-                TextureDimension::D2,
-                &[0, 0, 0, 0],
-                TextureFormat::Rgba8UnormSrgb,
-                RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
-            );
-            image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST;
-            image.sampler = bevy::image::ImageSampler::nearest();
-            if let Some(data) = &mut image.data {
-                data.copy_from_slice(&pixel_data);
-            }
-
-            let handle = images.add(image);
-
-            // Position: center of this chunk region in world space.
-            let center_x = (2 * x0 + cw - 1) as f32 * TILE_SIZE / 2.0;
-            let center_y = (2 * (map_h - 1) - 2 * y0 - ch + 1) as f32 * TILE_SIZE / 2.0;
-
-            let mut ecmd = commands.spawn((
-                Sprite {
-                    image: handle.clone(),
-                    custom_size: Some(Vec2::new(cw as f32 * TILE_SIZE, ch as f32 * TILE_SIZE)),
-                    ..default()
-                },
-                Transform::from_xyz(center_x, center_y, 0.0),
-            ));
-            if in_game {
-                ecmd.insert(InGameEntity);
-            }
-
-            handles.push(handle);
-        }
-    }
-
-    MapChunkGrid { chunks_x, map_width: map_w, handles }
+        .map(|p| [p.color[0], p.color[1], p.color[2]])
+        .unwrap_or([0.0, 0.0, 0.0])
 }
 
-/// OpenFront-style TileData:
-/// - Border (any cardinal neighbor has different owner) → `base * TERRITORY_BORDER_RGB_MULTIPLIER`, alpha 1
-/// - Interior → base color, alpha `config::TERRITORY_INTERIOR_ALPHA`
 fn openfront_tile_color(game: &GameState, cx: i32, cy: i32) -> Color {
-    let owner = game.map.owner_id(cx as u32, cy as u32);
+    let owner = game.map.owner_id(cx as u32, cy as u32) as u16;
     let base = player_base_color(game, owner);
 
     let is_border = [(cx, cy - 1), (cx + 1, cy), (cx, cy + 1), (cx - 1, cy)]
@@ -2513,29 +2403,137 @@ fn openfront_tile_color(game: &GameState, cx: i32, cy: i32) -> Color {
                 && game.map.owner_id(nx as u32, ny as u32) != owner
         });
 
-    let color = if owner == 0 {
-        // Unowned tiles show the true terrain color
+    if owner == 0 {
         let terrain = game.map.terrain_type(cx as u32, cy as u32);
         match terrain {
-            dark_rift_shared::map::TerrainType::Water | dark_rift_shared::map::TerrainType::Lake => Color::srgb(0.1, 0.3, 0.6), // Blue
-            dark_rift_shared::map::TerrainType::Land => Color::srgb(0.4, 0.7, 0.3), // Light Green
-            dark_rift_shared::map::TerrainType::Highland => Color::srgb(0.2, 0.5, 0.2), // Dark Green
-            dark_rift_shared::map::TerrainType::Mountain => Color::srgb(0.6, 0.5, 0.4), // Brown/Gray
+            dark_rift_shared::map::TerrainType::Water | dark_rift_shared::map::TerrainType::Lake => Color::srgb(0.1, 0.3, 0.6),
+            dark_rift_shared::map::TerrainType::Land => Color::srgb(0.4, 0.7, 0.3),
+            dark_rift_shared::map::TerrainType::Highland => Color::srgb(0.2, 0.5, 0.2),
+            dark_rift_shared::map::TerrainType::Mountain => Color::srgb(0.6, 0.5, 0.4),
         }
     } else if is_border {
-        let m = config::TERRITORY_BORDER_RGB_MULTIPLIER;
+        let m = 0.6; // config::TERRITORY_BORDER_RGB_MULTIPLIER
         Color::srgba(base[0] * m, base[1] * m, base[2] * m, 1.0)
     } else {
-        Color::srgba(
-            base[0],
-            base[1],
-            base[2],
-            config::TERRITORY_INTERIOR_ALPHA,
-        )
-    };
-
-    color
+        Color::srgba(base[0], base[1], base[2], 1.0)
+    }
 }
+
+fn paint_tile_to_chunk(
+    images: &mut Assets<Image>,
+    grid: &MapChunkGrid,
+    game: &GameState,
+    x: u32, y: u32,
+) {
+    let handle = grid.chunk_handle(x, y);
+    let Some(image) = images.get_mut(handle) else { return };
+
+    let cx = x / CHUNK_SIZE;
+    let cy = y / CHUNK_SIZE;
+    let local_x = x % CHUNK_SIZE;
+    let local_y = y % CHUNK_SIZE;
+    let cw = grid.chunk_w(cx);
+    let ch = grid.chunk_h(cy);
+    
+    let color = openfront_tile_color(game, x as i32, y as i32);
+    let rgba = color.to_srgba();
+    let r = (rgba.red * 255.0) as u8;
+    let g = (rgba.green * 255.0) as u8;
+    let b = (rgba.blue * 255.0) as u8;
+    let a = (rgba.alpha * 255.0) as u8;
+
+    if let Some(ref mut data) = image.data {
+        let linear_index = (local_y * cw + local_x) as usize;
+        let byte_offset = linear_index * 4;
+        if byte_offset + 3 < data.len() {
+            data[byte_offset] = r;
+            data[byte_offset + 1] = g;
+            data[byte_offset + 2] = b;
+            data[byte_offset + 3] = a;
+        }
+    }
+}
+
+fn spawn_chunked_texture_tilemap(
+    commands: &mut Commands,
+    game: &GameState,
+    images: &mut Assets<Image>,
+    in_game: bool,
+) -> MapChunkGrid {
+    let mut chunk_handles = HashMap::new();
+    let mut chunk_width = HashMap::new();
+    let mut chunk_height = HashMap::new();
+    
+    let num_chunks_x = (game.map.width + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    let num_chunks_y = (game.map.height + CHUNK_SIZE - 1) / CHUNK_SIZE;
+
+    for cx in 0..num_chunks_x {
+        let cw = if cx == num_chunks_x - 1 {
+            let rem = game.map.width % CHUNK_SIZE;
+            if rem == 0 { CHUNK_SIZE } else { rem }
+        } else {
+            CHUNK_SIZE
+        };
+        chunk_width.insert(cx, cw);
+        
+        for cy in 0..num_chunks_y {
+            let ch = if cy == num_chunks_y - 1 {
+                let rem = game.map.height % CHUNK_SIZE;
+                if rem == 0 { CHUNK_SIZE } else { rem }
+            } else {
+                CHUNK_SIZE
+            };
+            chunk_height.insert(cy, ch);
+            
+            let total_pixels = (cw * ch) as usize;
+            let initial_data = vec![0u8; total_pixels * 4];
+
+            let mut img = Image::new(
+                bevy::render::render_resource::Extent3d { width: cw, height: ch, depth_or_array_layers: 1 },
+                bevy::render::render_resource::TextureDimension::D2,
+                initial_data,
+                bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+                bevy::asset::RenderAssetUsages::MAIN_WORLD | bevy::asset::RenderAssetUsages::RENDER_WORLD,
+            );
+            img.sampler = bevy::image::ImageSampler::nearest();
+
+            let handle = images.add(img);
+            chunk_handles.insert((cx, cy), handle.clone());
+
+            let screen_w = cw as f32 * TILE_SIZE;
+            let screen_h = ch as f32 * TILE_SIZE;
+            
+            let offset_x = (cx * CHUNK_SIZE) as f32 * TILE_SIZE + (cw as f32 - 1.0) * TILE_SIZE / 2.0;
+            let start_y = cy * CHUNK_SIZE;
+            let world_y_top = (game.map.height as f32 - 1.0 - start_y as f32) * TILE_SIZE;
+            let offset_y = world_y_top - (ch as f32 - 1.0) * TILE_SIZE / 2.0;
+
+            let mut ecmd = commands.spawn((
+                Sprite {
+                    image: handle.clone(),
+                    custom_size: Some(Vec2::new(screen_w, screen_h)),
+                    ..default()
+                },
+                Transform::from_xyz(offset_x, offset_y, 0.0),
+            ));
+            if in_game {
+                ecmd.insert(InGameEntity);
+            }
+        }
+    }
+
+    let grid = MapChunkGrid { chunk_handles, chunk_width, chunk_height };
+
+    for y in 0..game.map.height {
+        for x in 0..game.map.width {
+            paint_tile_to_chunk(images, &grid, game, x, y);
+        }
+    }
+
+    grid
+}
+
+
 
 fn rand_client_id() -> u64 {
     #[cfg(target_arch = "wasm32")]

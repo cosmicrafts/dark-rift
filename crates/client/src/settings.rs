@@ -43,10 +43,6 @@ impl VisualSettingsConfig {
         self.enable_hdr_bloom
     }
 
-    #[inline]
-    pub fn territory_expansion_animations_enabled(&self) -> bool {
-        self.enable_territory_expansion_animations
-    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

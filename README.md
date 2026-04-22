@@ -65,6 +65,94 @@ With 400 bots fighting, the WASM client froze at 5 FPS. The culprit was invisibl
 ### 🤖 OpenClaw Integration Test
 This repository is currently being orchestrated and optimized via OpenClaw AI. Automated deployments, config management, and stress-testing logic have been validated.
 
+## 🧭 Determinism Contract (read this before touching simulation code)
+
+Dark Rift runs a **lockstep** simulation: the server is a pure turn relay and
+every client (native and WASM) must produce a byte-identical `GameState` each
+tick from the same seed + same turns. Any divergence → instant desync between
+PC and Mac/iPhone/Android. These are the *hard rules*; break them and things
+will appear to "work on my machine" but silently diverge on ARM/WASM.
+
+### 1. Zero `HashMap` / `HashSet` iteration in simulation code
+`std::collections::HashMap` randomizes iteration order per process (SipHash
+DoS mitigation). Forbidden inside `SimulationSchedule` systems,
+`apply_stamped_intent`, `system_attack_execution`, `system_bot_think`, or
+anything reachable from them.
+- OK: use `HashMap` as a **dedup scratch buffer** only if you immediately
+  collect into a `Vec` and `sort_by(|a, b| a.cmp(b))` with a *total* order
+  (see `merge_frontiers` in `crates/shared/src/intent.rs`).
+- Prefer: `Vec`, `BinaryHeap<PrioritizedTile>`, linear scans over
+  `game.map.state` / `game.players`.
+
+### 2. Every `Ord` must end with an absolute spatial tie-breaker
+Never terminate an `Ord::cmp` with `Ordering::Equal`. The tie-break chain for
+any tile struct must end with `(y, x)` — map coordinates are immutable and
+unique per tile. See `PrioritizedTile` in `crates/shared/src/execution.rs`:
+`priority → insert_seq → y → x`.
+
+### 3. No stateful per-player caches indexed by insertion order
+The old `Player.border_tiles` cache (Vec / BTreeSet maintained inside
+`set_tile_owner`) is **banned**. Insertion-order Vecs used in gameplay
+decisions compound history — a single platform-specific quirk anywhere
+cascades into different bot targets. Rule:
+- Border / frontier lookups must be **derived lazily** via
+  `GameMap::border_tiles_of(player_id)`, which iterates `state` by tile
+  index (deterministic by construction).
+- `set_tile_owner` stays strictly **O(1)**: owner write +
+  `sum_x / sum_y / tile_count`. No neighbor scans, no per-tile allocations.
+
+### 4. No early-return in `SimulationSchedule` systems based on async resources
+Bevy flushes `Commands::insert_resource` at `apply_deferred`. WASM on
+ProMotion Safari ticks `FixedUpdate` before the flush. If your system does
+`let Some(cfg) = res else { return; }`, one platform will skip a tick and the
+PRNG stream desyncs forever. Use `unwrap_or_default()` and execute the same
+mutations every tick on every platform.
+
+### 5. Bots run on every client, never broadcast
+`system_bot_think` runs inside `SimulationSchedule` locally on every client;
+the server only relays **human** intents (`handle_intent_messages`). Bot code
+gets the determinism rules *doubled*: no `HashMap`, no Vec-order reuse across
+ticks, seed the RNG deterministically from `(game.seed, game.tick, bot_id)`.
+
+### 6. No `f64::powf` / `f32::powf` / `exp` / `ln` / transcendentals on game state
+`libm` transcendentals are **not** bit-identical across
+`x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, and
+`wasm32-unknown-unknown`. Allowed f64 ops on game state: `+ - * /`, `sqrt`,
+`min`, `max`, `clamp`, comparisons, `abs`. Decompose `x^k` into `sqrt`
+chains (see `system_player_income` in `crates/shared/src/execution.rs`:
+`x^0.625 = sqrt(x) * sqrt(sqrt(sqrt(x)))`).
+
+### 7. No hidden allocations in simulation hot paths
+Per-tile allocations (e.g. `Vec::with_capacity(5)` in `set_tile_owner`,
+`neighbors() -> Vec`) are banned on simulation hot paths. Use
+`GameMap::for_each_neighbor` (alloc-free closure). Allocator pressure is the
+#1 reason WASM/ARM choke — see the perf section in the developer journal
+above.
+
+### 8. Stable-sort entities by monotonic id before mutating them
+`query.iter()` order is NOT stable across `Entity` generations. Always
+collect `(Entity, id)` and `sort_by_key(|&(_, id)| id)` before mutating — see
+`system_attack_execution` and `apply_attack_intent`.
+
+### 9. No `std::time` / `Instant` / `SystemTime` in simulation
+Wall-clock drifts per platform. All time inside the sim comes from
+`game.tick` (u64). Real `Instant` is fine only for non-sim diagnostics like
+`NetTiming`.
+
+### 10. No parallelism in `SimulationSchedule`
+Keep systems `.chain()`ed. Do not introduce `par_iter`, `rayon`, task pools,
+or unordered Bevy system sets inside the sim. Parallel scheduling produces
+non-deterministic read/write interleavings.
+
+### Desync debugging checklist
+Before blaming architecture, verify:
+1. Same `game.seed` on both clients (`ServerStartMessage`).
+2. Same `game.tick` when diverging (hash `map.state` + `players.tile_count`
+   at tick N and compare).
+3. Replay the turn log from `latest_replay.json` headlessly — divergence
+   must be reproducible if the bug is in sim code.
+4. `rg 'powf|HashMap::new|HashSet::new|Instant::now|thread_rng|rand::random' crates/shared`.
+
 ## WASM local build (Fase 1)
 
 One-time toolchain:
