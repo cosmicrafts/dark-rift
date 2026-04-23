@@ -273,16 +273,17 @@ fn system_lobby_gc(
 ) {
     for (entity, lobby, mut phase, roster, timer_opt) in q_lobbies.iter_mut() {
         if phase.0 == LobbyPhase::Active {
-            if roster.0.is_empty() {
+            let human_count = roster.0.iter().filter(|p| p.player_type == dark_rift_shared::player::PlayerType::Human).count();
+            if human_count == 0 {
                 if let Some(mut timer) = timer_opt {
                     timer.0.tick(time.delta());
                     if timer.0.just_finished() {
-                        info!("🗑️  [GC] Lobby {} estuvo vacío por 30s. Terminando...", lobby.id);
+                        info!("🗑️  [GC] Lobby {} estuvo vacío de humanos por 30s. Terminando...", lobby.id);
                         phase.0 = LobbyPhase::Finished;
                         commands.entity(entity).despawn();
                     }
                 } else {
-                    info!("🗑️  [GC] Todos los jugadores abandonaron el Lobby {}. Terminando...", lobby.id);
+                    info!("🗑️  [GC] Todos los humanos abandonaron el Lobby {}. Terminando...", lobby.id);
                     phase.0 = LobbyPhase::Finished;
                     commands.entity(entity).despawn();
                 }

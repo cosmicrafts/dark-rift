@@ -130,6 +130,7 @@ pub fn system_attack_execution(
     mut commands: Commands,
     game_opt: Option<ResMut<GameState>>,
     mut query: Query<(Entity, &mut AttackExecution)>,
+    mut scratch_ordered: Local<Vec<(Entity, u64)>>,
 ) {
     let Some(mut game) = game_opt else { return };
     if game.phase != GamePhase::Playing {
@@ -139,10 +140,11 @@ pub fn system_attack_execution(
     let tick_now = game.tick;
     // Collect all AttackExecution entities and sort them by their perfectly coherent monotonic ID 
     // to strictly enforce identical processing execution order across clients!
-    let mut ordered: Vec<(Entity, u64)> = query.iter().map(|(ent, exec)| (ent, exec.id)).collect();
-    ordered.sort_by_key(|&(_, id)| id);
+    scratch_ordered.clear();
+    scratch_ordered.extend(query.iter().map(|(ent, exec)| (ent, exec.id)));
+    scratch_ordered.sort_by_key(|&(_, id)| id);
 
-    for (entity, _) in ordered {
+    for &(entity, _) in scratch_ordered.iter() {
         let Ok((_, mut execution)) = query.get_mut(entity) else { continue };
 
         if execution.retreating {

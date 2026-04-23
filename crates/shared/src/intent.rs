@@ -36,22 +36,22 @@ fn build_attack_frontier(
     game: &GameState,
     player_id: u16,
     target_owner: u16,
-    border_tiles: &[(u32, u32)],
     rng: &mut PseudoRandom,
     insert_seq_counter: &mut u32,
 ) -> BinaryHeap<PrioritizedTile> {
     let mut to_conquer = BinaryHeap::new();
-    for (bx, by) in border_tiles.iter().copied() {
-        game.map.for_each_neighbor(bx, by, |nx, ny| {
+    let player = game.player(player_id).expect("Player should exist");
+    for (bx, by) in player.border_tiles.iter().copied() {
+        for (nx, ny) in game.map.neighbors(bx, by) {
             if game.map.owner_id(nx, ny) != target_owner {
-                return;
+                continue;
             }
-            let mut num_owned_by_me = 0u32;
-            game.map.for_each_neighbor(nx, ny, |nnx, nny| {
-                if game.map.owner_id(nnx, nny) == player_id {
-                    num_owned_by_me += 1;
-                }
-            });
+            let num_owned_by_me = game
+                .map
+                .neighbors(nx, ny)
+                .into_iter()
+                .filter(|(nnx, nny)| game.map.owner_id(*nnx, *nny) == player_id)
+                .count() as u32;
 
             let terrain = game.map.terrain_type(nx, ny);
             let mag_x2 = match terrain {
@@ -74,7 +74,7 @@ fn build_attack_frontier(
                 x: nx,
                 y: ny,
             });
-        });
+        }
     }
     to_conquer
 }
@@ -195,15 +195,7 @@ fn apply_attack_intent(
             .wrapping_add(intent_index as u64),
     );
     let mut initial_seq = 0;
-    let border_tiles = game.map.border_tiles_of(player_id);
-    let fresh = build_attack_frontier(
-        game,
-        player_id,
-        target_owner,
-        &border_tiles,
-        &mut rng,
-        &mut initial_seq,
-    );
+    let fresh = build_attack_frontier(game, player_id, target_owner, &mut rng, &mut initial_seq);
 
     if fresh.is_empty() {
         if let Some(p) = game.players.iter_mut().find(|p| p.id == player_id) {
@@ -252,6 +244,7 @@ pub fn system_bot_think(
     mut game: ResMut<GameState>,
     mut q_exec: Query<(Entity, &mut AttackExecution)>,
     config_opt: Option<Res<crate::game_config::GameConfig>>,
+    mut scratch_targets: Local<Vec<u16>>,
 ) {
     if game.phase != crate::game::GamePhase::Playing {
         return;
@@ -294,24 +287,25 @@ pub fn system_bot_think(
             continue;
         }
 
-        let border_tiles = game.map.border_tiles_of(bot_id);
-        if border_tiles.is_empty() { continue; }
+        if player.border_tiles.is_empty() {
+            continue;
+        }
 
         let mut has_neutral = false;
-        let mut player_targets = Vec::new();
+        scratch_targets.clear();
 
         // Terra Nullius Pacifism: Scan entire perimeter for ANY empty land
-        for &(bx, by) in &border_tiles {
-            game.map.for_each_neighbor(bx, by, |nx, ny| {
+        for &(bx, by) in &player.border_tiles {
+            for (nx, ny) in game.map.neighbors(bx, by) {
                 let owner = game.map.owner_id(nx, ny);
                 if owner != bot_id {
                     if owner == 0 {
                         has_neutral = true;
                     } else {
-                        player_targets.push(owner);
+                        scratch_targets.push(owner);
                     }
                 }
-            });
+            }
         }
 
         // OpenFront AI Algorithm Port:
@@ -320,10 +314,10 @@ pub fn system_bot_think(
         let (target_owner, is_neutral) = if has_neutral {
             (0, true)
         } else {
-            if player_targets.is_empty() {
+            if scratch_targets.is_empty() {
                 continue;
             }
-            (player_targets[rng.next_int(0, player_targets.len() as i32) as usize], false)
+            (scratch_targets[rng.next_int(0, scratch_targets.len() as i32) as usize], false)
         };
 
         if !is_neutral {

@@ -1940,23 +1940,30 @@ fn handle_tile_change(
     if !game.is_changed() { return; }
     let Some(grid) = grid_opt else { return };
 
-    let mut dirty_tiles = std::collections::HashSet::new();
+    let color_lookup = build_player_color_lookup(&game);
+    let mut dirty_tiles = Vec::new();
 
     for ev in &game.events {
         if let GameEvent::TileCaptured { x, y, .. } = ev {
             let cx = *x as i32;
             let cy = *y as i32;
-            dirty_tiles.insert((cx, cy));
-            dirty_tiles.insert((cx, cy - 1));
-            dirty_tiles.insert((cx + 1, cy));
-            dirty_tiles.insert((cx, cy + 1));
-            dirty_tiles.insert((cx - 1, cy));
+            dirty_tiles.push((cx, cy));
+            dirty_tiles.push((cx, cy - 1));
+            dirty_tiles.push((cx + 1, cy));
+            dirty_tiles.push((cx, cy + 1));
+            dirty_tiles.push((cx - 1, cy));
         }
     }
 
+    dirty_tiles.sort_by(|a, b| match a.0.cmp(&b.0) {
+        std::cmp::Ordering::Equal => a.1.cmp(&b.1),
+        ord => ord,
+    });
+    dirty_tiles.dedup();
+
     for &(nx, ny) in &dirty_tiles {
         if game.map.is_valid_coord(nx, ny) {
-            paint_tile_to_chunk(&mut images, &grid, &game, nx as u32, ny as u32);
+            paint_tile_to_chunk(&mut images, &grid, &game, &color_lookup, nx as u32, ny as u32);
         }
     }
 
@@ -2381,20 +2388,18 @@ impl MapChunkGrid {
     }
 }
 
-fn player_base_color(game: &GameState, owner: u16) -> [f32; 3] {
-    if owner == 0 {
-        return [0.0, 0.0, 0.0];
+fn build_player_color_lookup(game: &GameState) -> [[f32; 3]; 4096] {
+    let mut lookup = [[0.0; 3]; 4096];
+    for p in &game.players {
+        let idx = (p.id & 0x0FFF) as usize;
+        lookup[idx] = [p.color[0], p.color[1], p.color[2]];
     }
-    game.players
-        .iter()
-        .find(|p| p.id == owner)
-        .map(|p| [p.color[0], p.color[1], p.color[2]])
-        .unwrap_or([0.0, 0.0, 0.0])
+    lookup
 }
 
-fn openfront_tile_color(game: &GameState, cx: i32, cy: i32) -> Color {
+fn openfront_tile_color(game: &GameState, color_lookup: &[[f32; 3]; 4096], cx: i32, cy: i32) -> Color {
     let owner = game.map.owner_id(cx as u32, cy as u32) as u16;
-    let base = player_base_color(game, owner);
+    let base = color_lookup[(owner & 0x0FFF) as usize];
 
     let is_border = [(cx, cy - 1), (cx + 1, cy), (cx, cy + 1), (cx - 1, cy)]
         .iter()
@@ -2423,6 +2428,7 @@ fn paint_tile_to_chunk(
     images: &mut Assets<Image>,
     grid: &MapChunkGrid,
     game: &GameState,
+    color_lookup: &[[f32; 3]; 4096],
     x: u32, y: u32,
 ) {
     let handle = grid.chunk_handle(x, y);
@@ -2435,7 +2441,7 @@ fn paint_tile_to_chunk(
     let cw = grid.chunk_w(cx);
     let ch = grid.chunk_h(cy);
     
-    let color = openfront_tile_color(game, x as i32, y as i32);
+    let color = openfront_tile_color(game, color_lookup, x as i32, y as i32);
     let rgba = color.to_srgba();
     let r = (rgba.red * 255.0) as u8;
     let g = (rgba.green * 255.0) as u8;
@@ -2524,9 +2530,11 @@ fn spawn_chunked_texture_tilemap(
 
     let grid = MapChunkGrid { chunk_handles, chunk_width, chunk_height };
 
+    let color_lookup = build_player_color_lookup(game);
+
     for y in 0..game.map.height {
         for x in 0..game.map.width {
-            paint_tile_to_chunk(images, &grid, game, x, y);
+            paint_tile_to_chunk(images, &grid, game, &color_lookup, x, y);
         }
     }
 
@@ -2952,14 +2960,13 @@ fn system_headless_bot_engine(
     let expand_ratio = bot_state.profile.expand_ratio;
     
     let player = game.player(bot_id).unwrap();
-    let border_tiles = game.map.border_tiles_of(bot_id);
-    if border_tiles.is_empty() { return; }
+    if player.border_tiles.is_empty() { return; }
 
     let mut has_neutral = false;
     let mut player_targets = Vec::new();
 
-    for &(bx, by) in &border_tiles {
-        game.map.for_each_neighbor(bx, by, |nx, ny| {
+    for &(bx, by) in &player.border_tiles {
+        for (nx, ny) in game.map.neighbors(bx, by) {
             let owner = game.map.owner_id(nx, ny);
             if owner != bot_id {
                 if owner == 0 {
@@ -2968,7 +2975,7 @@ fn system_headless_bot_engine(
                     player_targets.push(owner);
                 }
             }
-        });
+        }
     }
 
     let mut bot_rng = PseudoRandom::new(game.seed.wrapping_add(game.tick as u64).wrapping_add(1999));

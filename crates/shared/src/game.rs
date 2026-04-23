@@ -119,6 +119,42 @@ impl GameState {
         }
 
         self.map.set_owner_id(x, y, new_owner);
+
+        // Update border cache without allocations
+        let coords = [
+            (x as i32, y as i32),
+            (x as i32, y as i32 - 1),
+            (x as i32, y as i32 + 1),
+            (x as i32 - 1, y as i32),
+            (x as i32 + 1, y as i32),
+        ];
+
+        let mut updates: Vec<(u16, u32, u32, bool)> = Vec::with_capacity(5);
+        for (cx, cy) in coords {
+            if self.map.is_valid_coord(cx, cy) {
+                let ux = cx as u32;
+                let uy = cy as u32;
+                let owner = self.map.owner_id(ux, uy);
+                if owner != 0 {
+                    let is_border = self.map.is_border_tile(ux, uy, owner);
+                    updates.push((owner, ux, uy, is_border));
+                }
+            }
+        }
+        
+        for (owner, ux, uy, is_border) in updates {
+            if let Some(p) = self.player_mut(owner) {
+                if is_border {
+                    if !p.border_tiles.contains(&(ux, uy)) {
+                        p.border_tiles.push((ux, uy));
+                    }
+                } else {
+                    if let Some(pos) = p.border_tiles.iter().position(|&t| t == (ux, uy)) {
+                        p.border_tiles.swap_remove(pos);
+                    }
+                }
+            }
+        }
     }
 
 }

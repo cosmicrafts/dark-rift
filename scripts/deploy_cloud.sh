@@ -44,7 +44,7 @@ green "✅ Compilaciones de Rust exitosas."
 cyan "==> 2. Empaquetando Frontend (wasm-bindgen)..."
 rm -rf dist
 mkdir -p dist
-wasm-bindgen --out-dir dist --target web --out-name "${OUT_NAME}" --no-typescript "${WASM_IN}"
+~/.cargo/bin/wasm-bindgen --out-dir dist --target web --out-name "${OUT_NAME}" --no-typescript "${WASM_IN}"
 
 cp -a assets dist/assets
 
