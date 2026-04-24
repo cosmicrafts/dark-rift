@@ -195,7 +195,7 @@ fn apply_attack_intent(
             .wrapping_add(intent_index as u64),
     );
     let mut initial_seq = 0;
-    let border_tiles = game.map.border_tiles_of(player_id);
+    let border_tiles = game.player(player_id).unwrap().border_coords(game.map.width);
     let fresh = build_attack_frontier(
         game,
         player_id,
@@ -294,7 +294,7 @@ pub fn system_bot_think(
             continue;
         }
 
-        let border_tiles = game.map.border_tiles_of(bot_id);
+        let border_tiles = player.border_coords(game.map.width);
         if border_tiles.is_empty() { continue; }
 
         let mut has_neutral = false;

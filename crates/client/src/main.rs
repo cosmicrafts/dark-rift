@@ -2911,7 +2911,7 @@ fn system_headless_bot_engine(
     let expand_ratio = bot_state.profile.expand_ratio;
     
     let player = game.player(bot_id).unwrap();
-    let border_tiles = game.map.border_tiles_of(bot_id);
+    let border_tiles = player.border_coords(game.map.width);
     if border_tiles.is_empty() { return; }
 
     let mut has_neutral = false;

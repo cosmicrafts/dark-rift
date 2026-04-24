@@ -95,16 +95,11 @@ any tile struct must end with `(y, x)` — map coordinates are immutable and
 unique per tile. See `PrioritizedTile` in `crates/shared/src/execution.rs`:
 `priority → insert_seq → y → x`.
 
-### 3. No stateful per-player caches indexed by insertion order
-The old `Player.border_tiles` cache (Vec / BTreeSet maintained inside
-`set_tile_owner`) is **banned**. Insertion-order Vecs used in gameplay
-decisions compound history — a single platform-specific quirk anywhere
-cascades into different bot targets. Rule:
-- Border / frontier lookups must be **derived lazily** via
-  `GameMap::border_tiles_of(player_id)`, which iterates `state` by tile
-  index (deterministic by construction).
-- `set_tile_owner` stays strictly **O(1)**: owner write +
-  `sum_x / sum_y / tile_count`. No neighbor scans, no per-tile allocations.
+### 3. Stateful Caches MUST use absolute spatial ordering
+If you maintain a stateful per-player cache (like `Player.border_tiles`), you **must** guarantee its iteration order is perfectly deterministic across all platforms. 
+- You may use a `Vec` for incremental caching *only* if it is maintained in strictly sorted order (e.g. by sorting linear indices: `(y * width) + x`).
+- Standard `Vec::push` + `swap_remove` inside `set_tile_owner` is **banned**. It creates insertion-order artifacts that cascade into different bot behaviors based on network arrival times.
+- If in doubt, derive lazily. If optimizing for speed, use `binary_search` and `insert`/`remove` to guarantee perfect absolute spatial sorting.
 
 ### 4. No early-return in `SimulationSchedule` systems based on async resources
 Bevy flushes `Commands::insert_resource` at `apply_deferred`. WASM on

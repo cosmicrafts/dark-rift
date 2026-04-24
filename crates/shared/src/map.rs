@@ -131,21 +131,6 @@ impl GameMap {
         is_border
     }
 
-    /// Get all border tiles of a specific player.
-    pub fn border_tiles_of(&self, player_id: u16) -> Vec<(u32, u32)> {
-        let mut border = Vec::new();
-        // Linear iteration is substantially faster because of L1 cache locality
-        for (idx, &s) in self.state.iter().enumerate() {
-            if (s & Self::PLAYER_ID_MASK) == player_id {
-                let x = (idx as u32) % self.width;
-                let y = (idx as u32) / self.width;
-                if self.is_border_tile(x, y, player_id) {
-                    border.push((x, y));
-                }
-            }
-        }
-        border
-    }
 
     /// Count tiles owned by a specific player.
     pub fn tiles_owned_by(&self, player_id: u16) -> u32 {

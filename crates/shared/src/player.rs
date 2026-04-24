@@ -41,6 +41,8 @@ pub struct Player {
     pub sum_y: u64,
     /// Number of tiles owned by the player.
     pub tile_count: u32,
+    /// Deterministic, strictly sorted cache of linear indices of border tiles.
+    pub border_tiles: Vec<u32>,
 }
 
 impl Player {
@@ -58,6 +60,7 @@ impl Player {
             sum_x: 0,
             sum_y: 0,
             tile_count: 0,
+            border_tiles: Vec::with_capacity(512),
         }
     }
 
@@ -75,12 +78,18 @@ impl Player {
             sum_x: 0,
             sum_y: 0,
             tile_count: 0,
+            border_tiles: Vec::with_capacity(512),
         }
     }
 
     /// Check if this player is a human.
     pub fn is_human(&self) -> bool {
         self.player_type == PlayerType::Human
+    }
+
+    /// Decode linear indices to (x, y) coordinates.
+    pub fn border_coords(&self, map_width: u32) -> Vec<(u32, u32)> {
+        self.border_tiles.iter().map(|&idx| (idx % map_width, idx / map_width)).collect()
     }
 }
 
