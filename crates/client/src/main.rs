@@ -1957,10 +1957,9 @@ fn handle_tile_change(
                 if let GameEvent::TileCaptured { x, y, new_owner: owner, .. } = ev {
                     // Update single owner ID at (x, y)
                     let linear_index = (*y as usize * game.map.width as usize) + *x as usize;
-                    let byte_offset = linear_index * 4;
-                    if byte_offset + 3 < data.len() {
-                        let owner_u32 = *owner as u32;
-                        data[byte_offset..byte_offset+4].copy_from_slice(&owner_u32.to_ne_bytes());
+                    let byte_offset = linear_index * 2;
+                    if byte_offset + 1 < data.len() {
+                        data[byte_offset..byte_offset+2].copy_from_slice(&owner.to_ne_bytes());
                     }
                 }
             }
@@ -2377,17 +2376,13 @@ fn sync_player_colors(game: &GameState, image: &mut Image) {
     if let Some(ref mut data) = image.data {
         for p in &game.players {
             let idx = (p.id & 0x0FFF) as usize;
-            let byte_offset = idx * 16;
-            if byte_offset + 15 < data.len() {
+            let byte_offset = idx * 4;
+            if byte_offset + 3 < data.len() {
                 let rgba = bevy::color::Color::srgb(p.color[0], p.color[1], p.color[2]).to_srgba();
-                let r = rgba.red.to_ne_bytes();
-                let g = rgba.green.to_ne_bytes();
-                let b = rgba.blue.to_ne_bytes();
-                let a = rgba.alpha.to_ne_bytes();
-                data[byte_offset..byte_offset+4].copy_from_slice(&r);
-                data[byte_offset+4..byte_offset+8].copy_from_slice(&g);
-                data[byte_offset+8..byte_offset+12].copy_from_slice(&b);
-                data[byte_offset+12..byte_offset+16].copy_from_slice(&a);
+                data[byte_offset] = (rgba.red * 255.0) as u8;
+                data[byte_offset+1] = (rgba.green * 255.0) as u8;
+                data[byte_offset+2] = (rgba.blue * 255.0) as u8;
+                data[byte_offset+3] = (rgba.alpha * 255.0) as u8;
             }
         }
     }
@@ -2405,54 +2400,54 @@ fn spawn_shader_map(
     let width = game.map.width;
     let height = game.map.height;
 
-    // 1. Board Data (Owner IDs): R32Uint
-    let mut board_data = vec![0u8; (width * height * 4) as usize];
+    // 1. Board Data (Owner IDs): R16Uint
+    let mut board_data = vec![0u8; (width * height * 2) as usize];
     for y in 0..height {
         for x in 0..width {
-            let owner = game.map.owner_id(x, y) as u32;
-            let idx = ((y * width) + x) as usize * 4;
-            board_data[idx..idx+4].copy_from_slice(&owner.to_ne_bytes());
+            let owner = game.map.owner_id(x, y) as u16;
+            let idx = ((y * width) + x) as usize * 2;
+            board_data[idx..idx+2].copy_from_slice(&owner.to_ne_bytes());
         }
     }
     let mut board_img = Image::new(
         bevy::render::render_resource::Extent3d { width, height, depth_or_array_layers: 1 },
         bevy::render::render_resource::TextureDimension::D2,
         board_data,
-        bevy::render::render_resource::TextureFormat::R32Uint,
+        bevy::render::render_resource::TextureFormat::R16Uint,
         bevy::asset::RenderAssetUsages::MAIN_WORLD | bevy::asset::RenderAssetUsages::RENDER_WORLD,
     );
     board_img.sampler = bevy::image::ImageSampler::nearest();
     let board_handle = images.add(board_img);
 
-    // 2. Player Colors: Rgba32Float
-    let mut colors_data = vec![0u8; 4096 * 16];
+    // 2. Player Colors: Rgba8Unorm
+    let colors_data = vec![0u8; 4096 * 4];
     let mut colors_img = Image::new(
         bevy::render::render_resource::Extent3d { width: 4096, height: 1, depth_or_array_layers: 1 },
         bevy::render::render_resource::TextureDimension::D2,
         colors_data,
-        bevy::render::render_resource::TextureFormat::Rgba32Float,
+        bevy::render::render_resource::TextureFormat::Rgba8Unorm,
         bevy::asset::RenderAssetUsages::MAIN_WORLD | bevy::asset::RenderAssetUsages::RENDER_WORLD,
     );
     colors_img.sampler = bevy::image::ImageSampler::nearest();
     sync_player_colors(game, &mut colors_img);
     let colors_handle = images.add(colors_img);
 
-    // 3. Map Terrain: R32Uint
-    let mut terrain_data = vec![0u8; (width * height * 4) as usize];
+    // 3. Map Terrain: R16Uint
+    let mut terrain_data = vec![0u8; (width * height * 2) as usize];
     for y in 0..height {
         for x in 0..width {
-            let is_water = game.map.terrain_type(x, y) == dark_rift_shared::map::TerrainType::Water || game.map.terrain_type(x, y) == dark_rift_shared::map::TerrainType::Lake;
-            let mut tile_u32 = 0u32;
-            if is_water { tile_u32 |= 0x20; } else { tile_u32 |= 0x80; }
-            let idx = ((y * width) + x) as usize * 4;
-            terrain_data[idx..idx+4].copy_from_slice(&tile_u32.to_ne_bytes());
+            let tile_idx = (y * width) + x;
+            let raw_byte = game.map.terrain[tile_idx as usize].as_byte();
+            let tile_u16 = raw_byte as u16;
+            let byte_idx = tile_idx as usize * 2;
+            terrain_data[byte_idx..byte_idx+2].copy_from_slice(&tile_u16.to_ne_bytes());
         }
     }
     let mut terrain_img = Image::new(
         bevy::render::render_resource::Extent3d { width, height, depth_or_array_layers: 1 },
         bevy::render::render_resource::TextureDimension::D2,
         terrain_data,
-        bevy::render::render_resource::TextureFormat::R32Uint,
+        bevy::render::render_resource::TextureFormat::R16Uint,
         bevy::asset::RenderAssetUsages::MAIN_WORLD | bevy::asset::RenderAssetUsages::RENDER_WORLD,
     );
     terrain_img.sampler = bevy::image::ImageSampler::nearest();

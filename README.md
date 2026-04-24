@@ -61,6 +61,11 @@ With 400 bots fighting, the WASM client froze at 5 FPS. The culprit was invisibl
 * **The Fix:** We replicated OpenFront's architecture in Bevy: a `MapTextureCPU` resource holds the pixel buffer outside Bevy's change detection, a `TileRenderQueue` drains 10% per frame, and a single `flush_map_to_gpu` system copies only the dirty rows once per frame. On idle frames (no attacks), **zero bytes** are uploaded to the GPU. During heavy combat, only the bounding box of active warfare is transferred.
 * **The Result:** GPU uploads dropped from 19-38 MB/frame to ~100 KB/frame. Idle frames trigger no GPU work at all. The 10% drain also creates the same organic "wave" expansion visual that makes OpenFront feel alive.
 
+### 12. The WebGL2 Mobile Texture Death Trap (Silent Shader Crashes)
+When we finally ported the new GPU map renderer (`border.wgsl`) to WASM, it worked perfectly on desktop Chrome/Firefox, but **silently and fatally crashed on iOS Safari and Android Chrome**. The wgpu pipeline builder rejected the shader bindings entirely.
+* **The Culprit:** Desktop OpenGL 4.x natively supports massive 32-bit texture formats (`R32Uint`, `Rgba32Float`), so our initial GPU architecture used them to store player IDs and colors. However, mobile WebGL2 is bound by **OpenGL ES 3.0** constraints. Mobile GPUs physically lack hardware support for filtering 32-bit floats without obscure extensions (`OES_texture_float_linear`), and many Adreno/Mali chips outright reject `R32Uint` framebuffers or storage textures.
+* **The Poka-Yoke (Mistake-Proofing):** When targeting WASM/Mobile with `wgpu`, never use 32-bit texture formats unless mathematically unavoidable. We downgraded the GPU data pipeline to strictly mobile-safe formats: `R32Uint` -> `R16Uint` (since player IDs only go up to 4095, fitting in 12 bits), and `Rgba32Float` -> `Rgba8Unorm` (since colors are 8-bit sRGB anyway). The shader `textureLoad` syntax `texture_2d<u32>` handled the WGSL-side type promotion automatically. The crash instantly vanished across all mobile devices with zero loss in visual precision.
+
 ---
 ### 🤖 OpenClaw Integration Test
 This repository is currently being orchestrated and optimized via OpenClaw AI. Automated deployments, config management, and stress-testing logic have been validated.
