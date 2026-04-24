@@ -33,7 +33,14 @@ pub struct GameState {
     pub tick: u64,
     pub winner: Option<u16>,
     pub events: Vec<GameEvent>,
+    /// Monotonic id for `WarpFleet` (deterministic ordering across clients).
+    #[serde(default = "default_next_fleet_id")]
+    pub next_fleet_id: u64,
 
+}
+
+fn default_next_fleet_id() -> u64 {
+    1
 }
 
 impl GameState {
@@ -47,6 +54,7 @@ impl GameState {
             tick: 0,
             winner: None,
             events: Vec::new(),
+            next_fleet_id: 1,
         }
     }
 

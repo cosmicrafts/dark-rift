@@ -37,10 +37,19 @@ use dark_rift_shared::config;
 use dark_rift_shared::game::{GameState, GameEvent};
 use dark_rift_shared::player::Player;
 use dark_rift_shared::execution::{
-    system_attack_execution, system_player_income, system_game_tick, AttackExecution,
+    system_attack_execution,
+    system_player_income,
+    system_game_tick,
+    system_warp_fleet_execution,
+    AttackExecution,
 };
 use dark_rift_shared::intent::{apply_stamped_intent, system_bot_think};
+use dark_rift_shared::pathfinding::WaterPathfinderScratch;
 use dark_rift_shared::protocol::*;
+use dark_rift_shared::warp_fleet::{
+    player_water_components, resolve_fleet_route, shares_border_with, WarpFleet,
+};
+use dark_rift_shared::water_components::WaterComponents;
 use dark_rift_shared::pseudo_random::PseudoRandom;
 
 mod border_material;
@@ -226,6 +235,36 @@ struct AttackPingTroopLabel;
 #[derive(Resource)]
 struct AttackRingMesh(Handle<Mesh>);
 
+/// Meshes for local-only transport visuals (boat disc, wake speck, landing ring).
+#[derive(Resource)]
+struct FleetVisualMeshes {
+    boat: Handle<Mesh>,
+    wake_dot: Handle<Mesh>,
+    target_ring: Handle<Mesh>,
+}
+
+/// Follows `WarpFleet.current_tile` for the local player.
+#[derive(Component)]
+struct FollowFleetBoat {
+    fleet: Entity,
+    wake: Entity,
+    prev_tile: Option<u32>,
+}
+
+/// One-tile “wake” behind the boat (OpenFront `UnitLayer` trail simplified).
+#[derive(Component)]
+struct FollowFleetWake;
+
+/// Fixed at landing tile until the fleet entity is gone.
+#[derive(Component)]
+struct FollowFleetTarget {
+    fleet: Entity,
+}
+
+/// Client already spawned boat/target meshes for this fleet.
+#[derive(Component)]
+struct FleetClientVisuals;
+
 #[derive(Resource, Default)]
 struct FreshlyPaintedTiles {
     tiles: HashMap<(u32, u32), f32>,
@@ -373,7 +412,9 @@ fn main() {
             .init_resource::<HoveredTile>()
             .init_resource::<FreshlyPaintedTiles>()
             .init_resource::<AttackRatio>()
-            .init_resource::<OutgoingAttackRowMap>();
+            .init_resource::<OutgoingAttackRowMap>()
+            .init_resource::<WaterPathfinderScratch>()
+            .init_resource::<WaterComponents>();
 
         // Network stack — same as normal client, but no visual plugins
         app.add_plugins(SharedProtocolPlugin)
@@ -428,7 +469,9 @@ fn main() {
         .init_resource::<OutgoingAttackRowMap>()
         .init_resource::<NetTiming>()
         .init_resource::<OverlayDiagnostics>()
-        .init_resource::<UiShellState>();
+        .init_resource::<UiShellState>()
+        .init_resource::<WaterPathfinderScratch>()
+        .init_resource::<WaterComponents>();
 
         // Insert ClientSettings BEFORE app.run() so it exists when OnEnter(LobbyBrowser) fires.
         // Font handle is Handle::default() here; init_client_font patches it in Startup.
@@ -480,6 +523,7 @@ fn main() {
                 (
                     setup_network,
                     setup_attack_ring_mesh,
+                    setup_fleet_visual_meshes,
                     init_client_font,
                     init_attack_ratio_from_ui_settings,
                     setup_hud_shell,
@@ -500,8 +544,8 @@ fn main() {
                 ui_lobby_browser::system_clear_lobby_nickname_focus,
                 ui_lobby_browser::system_handle_single_player_click,
                 ui_lobby_browser::system_nickname_field_focus_from_click,
-                ui_lobby_browser::system_nickname_keyboard_when_focused
-                    .run_if(|f: Res<LobbyNicknameFocused>| f.0),
+                ui_lobby_browser::system_nickname_keyboard_when_focused,
+                ui_lobby_browser::system_nickname_cursor_blink,
                 ui_lobby_browser::system_nickname_autosave_tick,
                 system_lobby_main_menu_anim,
                 system_update_lobby_browser,
@@ -543,6 +587,7 @@ fn main() {
             system_attack_ratio_keyboard,
             system_attack_ratio_slider_drag,
             player_click,
+            system_force_boat_key,
             system_exit_button,
             system_home_button,
             update_hud,
@@ -572,6 +617,15 @@ fn main() {
                 .after(player_click)
                 .run_if(in_state(AppState::InGame)),
         );
+
+        app.add_systems(
+            Update,
+            (
+                system_spawn_fleet_visuals,
+                system_sync_fleet_visuals,
+            )
+                .run_if(in_state(AppState::InGame)),
+        );
         
         app.add_systems(Update, (
             camera_movement_and_zoom,
@@ -588,6 +642,7 @@ fn main() {
         pop_turn,
         system_player_income,
         system_bot_think,
+        system_warp_fleet_execution,
         system_attack_execution,
         system_game_tick,
         system_headless_bot_engine.run_if(|cli: Res<Cli>| cli.bot),
@@ -629,6 +684,9 @@ fn pop_turn(
     mut game: ResMut<GameState>,
     mut queue: ResMut<TurnQueue>,
     mut q_exec: Query<(Entity, &mut AttackExecution)>,
+    mut q_fleet: Query<(Entity, &mut WarpFleet)>,
+    mut path_scratch: ResMut<WaterPathfinderScratch>,
+    water_components: Res<WaterComponents>,
 ) {
     if let Some(turn) = queue.0.pop_front() {
         for (i, stamped) in turn.intents.iter().enumerate() {
@@ -636,8 +694,11 @@ fn pop_turn(
                 &mut commands,
                 &mut *game,
                 &mut q_exec,
+                &mut q_fleet,
                 stamped,
                 i as u32,
+                &mut *path_scratch,
+                &water_components,
             );
         }
     }
@@ -937,6 +998,7 @@ fn setup_offline(
     let grid = spawn_shader_map(&mut commands, &game, &mut images, &mut materials, &mut meshes, false);
     commands.insert_resource(grid);
 
+    commands.insert_resource(WaterComponents::compute(&game.map));
     commands.insert_resource(game);
     ready.0 = true;
 }
@@ -1578,6 +1640,7 @@ fn start_game_core(
                 commands.insert_resource(grid);
             }
 
+            commands.insert_resource(WaterComponents::compute(&game.map));
             commands.insert_resource(game);
             params.ready.0 = true;
             params.next_state.set(AppState::InGame);
@@ -1647,6 +1710,155 @@ fn setup_attack_ring_mesh(mut commands: Commands, mut meshes: ResMut<Assets<Mesh
     commands.insert_resource(AttackRingMesh(meshes.add(mesh)));
 }
 
+fn setup_fleet_visual_meshes(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
+    let boat = Annulus::new(0.35, 2.9)
+        .mesh()
+        .resolution(28)
+        .build();
+    let wake_dot = Annulus::new(0.1, 1.15)
+        .mesh()
+        .resolution(14)
+        .build();
+    let target_ring = Annulus::new(4.0, 7.4)
+        .mesh()
+        .resolution(52)
+        .build();
+    commands.insert_resource(FleetVisualMeshes {
+        boat: meshes.add(boat),
+        wake_dot: meshes.add(wake_dot),
+        target_ring: meshes.add(target_ring),
+    });
+}
+
+#[inline]
+fn tile_idx_to_world(idx: u32, map_w: u32, map_h: u32) -> Vec3 {
+    let x = idx % map_w;
+    let y = idx / map_w;
+    let wx = (x as f32 + 0.5) * TILE_SIZE;
+    let wy = (map_h as f32 - y as f32 - 0.5) * TILE_SIZE;
+    Vec3::new(wx, wy, 0.0)
+}
+
+/// Returns `LaunchFleet` only if [`resolve_fleet_route`] succeeds (same as simulation).
+fn try_launch_fleet_intent(
+    game: &GameState,
+    wc: &WaterComponents,
+    path_scratch: &mut WaterPathfinderScratch,
+    pid: u16,
+    target_owner: u16,
+    target_tile: u32,
+    troops: f64,
+    log_ctx: &str,
+) -> Option<GameplayIntent> {
+    let Some(launcher) = game.player(pid) else {
+        bevy::log::warn!("{log_ctx}: launcher player {pid} not found");
+        return None;
+    };
+    let border = launcher.border_tiles.as_slice();
+    let target_border = if target_owner != 0 {
+        match game.player(target_owner) {
+            Some(p) => Some(p.border_tiles.as_slice()),
+            None => {
+                bevy::log::warn!("{log_ctx}: target_owner {target_owner} not found");
+                return None;
+            }
+        }
+    } else {
+        None
+    };
+    match resolve_fleet_route(
+        &game.map,
+        wc,
+        path_scratch,
+        pid,
+        target_owner,
+        target_tile,
+        border,
+        target_border,
+    ) {
+        Ok(_) => Some(GameplayIntent::LaunchFleet {
+            target_owner,
+            target_tile,
+            troops,
+        }),
+        Err(e) => {
+            bevy::log::warn!("{log_ctx}: {e}");
+            None
+        }
+    }
+}
+
+fn spawn_attack_command_ring(
+    commands: &mut Commands,
+    ring_mesh: &AttackRingMesh,
+    materials: &mut Assets<ColorMaterial>,
+    settings: &ClientSettings,
+    player_color: [f32; 3],
+    x: u32,
+    y: u32,
+    map_h: u32,
+    send: f64,
+) {
+    let wx = (x as f32 + 0.5) * TILE_SIZE;
+    let wy = (map_h as f32 - y as f32 - 0.5) * TILE_SIZE;
+    let [r, g, b] = player_color;
+    let mat = materials.add(ColorMaterial::from_color(Color::srgba(r, g, b, 0.97)));
+    let label = format!("{:.0}", send);
+    let ox = TILE_SIZE * 1.75;
+    let oy = TILE_SIZE * 0.35;
+    commands
+        .spawn((
+            AttackCommandRing {
+                elapsed: 0.0,
+                rgb: player_color,
+            },
+            InGameEntity,
+            Transform::from_xyz(wx, wy, 260.0).with_scale(Vec3::ZERO),
+            Visibility::default(),
+            InheritedVisibility::default(),
+            ViewVisibility::default(),
+        ))
+        .with_children(|root| {
+            root.spawn((
+                AttackPingMesh,
+                Mesh2d(ring_mesh.0.clone()),
+                MeshMaterial2d(mat),
+                Transform::default(),
+            ));
+            root.spawn((
+                AttackPingTroopLabel,
+                Text2d::new(label),
+                TextFont {
+                    font: settings.font.clone(),
+                    font_size: 28.0,
+                    weight: FontWeight::BOLD,
+                    ..default()
+                },
+                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.98)),
+                TextLayout::new_with_justify(Justify::Left),
+                Transform::from_xyz(ox, oy, 2.0),
+            ));
+        });
+}
+
+fn send_gameplay_intent(
+    intent: GameplayIntent,
+    pid: u16,
+    local_buf: Option<ResMut<LocalIntentBuffer>>,
+    senders: &mut Query<&mut MessageSender<ClientGameplayMessage>>,
+) {
+    if let Some(mut buf) = local_buf {
+        buf.0.push(StampedIntent {
+            player_id: pid,
+            intent,
+        });
+    } else {
+        for mut sender in senders.iter_mut() {
+            let _ = sender.send::<ReliableChannel>(ClientGameplayMessage { intent: intent.clone() });
+        }
+    }
+}
+
 /// Overshoot ease 0→1 in `t ∈ [0,1]` (landing exactly at 1).
 fn ease_out_back_scaled(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
@@ -1688,6 +1900,103 @@ fn hover_system(
 
 /// On click: send intent to server via MessageSender.
 /// Server stamps player_id → bundles into next Turn → broadcasts → we apply next frame.
+/// Key `B` force-boat path (OpenFront `DoBoatAttackEvent`): same resolver as right-click.
+#[derive(bevy::ecs::system::SystemParam)]
+struct ForceBoatKeyCtx<'w> {
+    game_opt: Option<Res<'w, GameState>>,
+    my_id: Res<'w, MyPlayerId>,
+    attack_ratio: Res<'w, AttackRatio>,
+    components: Option<Res<'w, WaterComponents>>,
+    path_scratch: ResMut<'w, WaterPathfinderScratch>,
+}
+
+fn system_force_boat_key(
+    kb: Res<ButtonInput<KeyCode>>,
+    hovered: Res<HoveredTile>,
+    bottom_hud_hit: Query<&RelativeCursorPosition, With<BottomHudRoot>>,
+    mut commands: Commands,
+    ring_mesh: Res<AttackRingMesh>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    settings: Res<ClientSettings>,
+    mut senders: Query<&mut MessageSender<ClientGameplayMessage>>,
+    local_buf: Option<ResMut<LocalIntentBuffer>>,
+    mut ctx: ForceBoatKeyCtx,
+) {
+    if !kb.just_pressed(KeyCode::KeyB) {
+        return;
+    }
+    if bottom_hud_hit.iter().any(|rcp| rcp.cursor_over) {
+        return;
+    }
+    let Some(game) = ctx.game_opt.as_deref() else {
+        return;
+    };
+    let Some((x, y)) = hovered.0 else {
+        bevy::log::warn!("force boat (B): no tile under cursor");
+        return;
+    };
+    let pid = ctx.my_id.0;
+    if pid == 0 {
+        return;
+    }
+    let Some(player) = game.player(pid) else {
+        return;
+    };
+    if !player.alive || player.troops < config::EXPAND_COST {
+        return;
+    }
+    let target_owner = game.map.owner_id(x, y);
+    if target_owner == pid {
+        return;
+    }
+    let target_tile = y * game.map.width + x;
+    let ratio = ctx.attack_ratio.0.clamp(0.01, 1.0) as f64;
+    let send = (player.troops * ratio).floor().max(0.0).min(player.troops);
+    if send < config::EXPAND_COST {
+        return;
+    }
+    let Some(wc) = ctx.components.as_deref() else {
+        bevy::log::warn!("force boat (B): WaterComponents not loaded");
+        return;
+    };
+    let Some(intent) = try_launch_fleet_intent(
+        game,
+        wc,
+        &mut *ctx.path_scratch,
+        pid,
+        target_owner,
+        target_tile,
+        send,
+        "KeyB force boat",
+    ) else {
+        return;
+    };
+    spawn_attack_command_ring(
+        &mut commands,
+        &ring_mesh,
+        &mut materials,
+        &settings,
+        player.color,
+        x,
+        y,
+        game.map.height,
+        send,
+    );
+    send_gameplay_intent(intent, pid, local_buf, &mut senders);
+}
+
+/// Bundled per-click game-state params for [`player_click`]. Collapsed into a
+/// single [`SystemParam`] to stay under Bevy 0.18's 16-arg limit after adding
+/// the water-component resource and pathfinder scratch for neutral-land BFS.
+#[derive(bevy::ecs::system::SystemParam)]
+struct ClickCtx<'w> {
+    game_opt: Option<Res<'w, GameState>>,
+    my_id: Res<'w, MyPlayerId>,
+    attack_ratio: Res<'w, AttackRatio>,
+    components: Option<Res<'w, WaterComponents>>,
+    path_scratch: ResMut<'w, WaterPathfinderScratch>,
+}
+
 fn player_click(
     mut commands: Commands,
     ring_mesh: Res<AttackRingMesh>,
@@ -1698,21 +2007,21 @@ fn player_click(
     drag_state:  Res<CameraDragState>,
     touch_gesture: Res<TouchGestureState>,
     hovered:     Res<HoveredTile>,
-    game_opt:    Option<Res<GameState>>,
-    my_id:       Res<MyPlayerId>,
-    attack_ratio: Res<AttackRatio>,
     settings:    Res<ClientSettings>,
     bottom_hud_hit: Query<&RelativeCursorPosition, With<BottomHudRoot>>,
     mut senders: Query<&mut MessageSender<ClientGameplayMessage>>,
     local_buf: Option<ResMut<LocalIntentBuffer>>,
+    mut ctx: ClickCtx,
 ) {
     // We trigger ONLY on release to support dragging.
     // Additionally, if the user accumulated too much drag, we abort the intent payload.
-    let mouse_release = mouse.just_released(MouseButton::Left);
+    let left_mouse_release = mouse.just_released(MouseButton::Left);
+    let right_mouse_release = mouse.just_released(MouseButton::Right);
     let touch_release = touches.any_just_released();
-    if !mouse_release && !touch_release {
+    if !left_mouse_release && !right_mouse_release && !touch_release {
         return;
     }
+    let wants_force_boat = right_mouse_release && !touch_release;
     if touch_release && touch_gesture.max_touches_in_gesture > 1 {
         return; // Ignore pinch/two-finger releases.
     }
@@ -1723,7 +2032,7 @@ fn player_click(
         return;
     }
 
-    let Some(game) = game_opt else { return };
+    let Some(game) = ctx.game_opt.as_deref() else { return };
     let target = hovered.0.or_else(|| {
         let viewport = touch_gesture.last_touch_pos?;
         let (camera, cam_t) = q_camera.single().ok()?;
@@ -1738,80 +2047,214 @@ fn player_click(
     });
     let Some((x, y)) = target else { return };
 
-    let pid = my_id.0;
+    let pid = ctx.my_id.0;
     let Some(player) = game.player(pid) else { return };
     if !player.alive || player.troops < config::EXPAND_COST { return; }
 
     let target_owner = game.map.owner_id(x, y);
-    if target_owner == pid { return; }
+    if target_owner == pid {
+        return;
+    }
 
-    let ratio = attack_ratio.0.clamp(0.01, 1.0) as f64;
+    // OpenFront `canAttack` / `canBoatAttack` decision tree:
+    //   • enemy-owned tile    → ground attack if I share a border with that owner
+    //   • neutral-owned tile  → ground attack if BFS through neutral land (≤200) reaches my territory
+    //   • otherwise          → boat if I share a water component with a reachable shoreline
+    let border_tiles: &[u32] = &player.border_tiles;
+    let target_tile = y * game.map.width + x;
+
+    let can_ground_attack = if target_owner != 0 {
+        shares_border_with(&game.map, border_tiles, target_owner)
+    } else {
+        let scratch = &mut *ctx.path_scratch;
+        dark_rift_shared::warp_fleet::can_ground_attack_neutral(
+            &game.map,
+            pid,
+            target_tile,
+            200,
+            &mut scratch.bfs_queue,
+            &mut scratch.bfs_visited,
+            &mut scratch.bfs_stamp,
+        )
+    };
+
+    let has_water_access = match ctx.components.as_deref() {
+        Some(wc) => !player_water_components(&game.map, wc, pid, border_tiles).is_empty(),
+        None => false,
+    };
+
+    let ratio = ctx.attack_ratio.0.clamp(0.01, 1.0) as f64;
     let send_floor = (player.troops * ratio).floor();
     let send = send_floor.max(0.0).min(player.troops);
     if send < config::EXPAND_COST {
         return;
     }
 
-    let wx = (x as f32 + 0.5) * TILE_SIZE;
-    let wy = (game.map.height as f32 - y as f32 - 0.5) * TILE_SIZE;
-    let [r, g, b] = player.color;
-    let mat = materials.add(ColorMaterial::from_color(Color::srgba(r, g, b, 0.97)));
-    let label = format!("{:.0}", send);
-    let ox = TILE_SIZE * 1.75;
-    let oy = TILE_SIZE * 0.35;
+    // Decide intent first (OpenFront: LMB canAttack wins; auto-boat only when route resolves).
+    // Right-click / force-boat skips ground branch and uses the same resolver as the simulation.
+    let intent = if wants_force_boat {
+        let Some(wc) = ctx.components.as_deref() else {
+            bevy::log::warn!("player_click: right-click boat — WaterComponents not loaded");
+            return;
+        };
+        try_launch_fleet_intent(
+            game,
+            wc,
+            &mut *ctx.path_scratch,
+            pid,
+            target_owner,
+            target_tile,
+            send,
+            "player_click: right-click boat",
+        )
+    } else if can_ground_attack {
+        Some(GameplayIntent::Attack(AttackIntent {
+            target_owner,
+            troops: Some(send),
+        }))
+    } else if has_water_access {
+        let Some(wc) = ctx.components.as_deref() else {
+            return;
+        };
+        try_launch_fleet_intent(
+            game,
+            wc,
+            &mut *ctx.path_scratch,
+            pid,
+            target_owner,
+            target_tile,
+            send,
+            "player_click: auto boat",
+        )
+    } else {
+        return;
+    };
 
-    // One root transform (same pop as before): mesh + Text2d as children so the number inherits scale.
-    commands
-        .spawn((
-            AttackCommandRing {
-                elapsed: 0.0,
-                rgb: player.color,
+    let Some(intent) = intent else {
+        return;
+    };
+
+    spawn_attack_command_ring(
+        &mut commands,
+        &ring_mesh,
+        &mut materials,
+        &settings,
+        player.color,
+        x,
+        y,
+        game.map.height,
+        send,
+    );
+    send_gameplay_intent(intent, pid, local_buf, &mut senders);
+}
+
+/// Spawn disc + landing ring for new `WarpFleet`s owned by the local player (OpenFront-style feedback).
+fn system_spawn_fleet_visuals(
+    mut commands: Commands,
+    meshes: Option<Res<FleetVisualMeshes>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    my_id: Res<MyPlayerId>,
+    game_opt: Option<Res<GameState>>,
+    mut q: Query<(Entity, &WarpFleet), (Added<WarpFleet>, Without<FleetClientVisuals>)>,
+) {
+    let Some(m) = meshes.as_ref() else {
+        return;
+    };
+    let Some(game) = game_opt.as_deref() else {
+        return;
+    };
+    let pid = my_id.0;
+    if pid == 0 {
+        return;
+    }
+    let mw = game.map.width;
+    let mh = game.map.height;
+    for (fleet_e, fleet) in q.iter_mut() {
+        if fleet.owner_id != pid {
+            continue;
+        }
+        commands.entity(fleet_e).insert(FleetClientVisuals);
+        let boat_mat =
+            materials.add(ColorMaterial::from_color(Color::srgba(0.12, 0.82, 1.0, 0.9)));
+        let wake_mat =
+            materials.add(ColorMaterial::from_color(Color::srgba(0.35, 0.95, 1.0, 0.4)));
+        let ring_mat =
+            materials.add(ColorMaterial::from_color(Color::srgba(1.0, 0.1, 0.06, 0.42)));
+        let p0 = tile_idx_to_world(fleet.current_tile, mw, mh);
+        let wake_e = commands
+            .spawn((
+                FollowFleetWake,
+                InGameEntity,
+                Mesh2d(m.wake_dot.clone()),
+                MeshMaterial2d(wake_mat),
+                Transform::from_xyz(p0.x, p0.y, 269.0).with_scale(Vec3::ZERO),
+                GlobalTransform::default(),
+                Visibility::Hidden,
+            ))
+            .id();
+        commands.spawn((
+            FollowFleetBoat {
+                fleet: fleet_e,
+                wake: wake_e,
+                prev_tile: None,
             },
             InGameEntity,
-            Transform::from_xyz(wx, wy, 260.0).with_scale(Vec3::ZERO),
+            Mesh2d(m.boat.clone()),
+            MeshMaterial2d(boat_mat),
+            Transform::from_xyz(p0.x, p0.y, 272.0),
+            GlobalTransform::default(),
             Visibility::default(),
-            InheritedVisibility::default(),
-            ViewVisibility::default(),
-        ))
-        .with_children(|root| {
-            root.spawn((
-                AttackPingMesh,
-                Mesh2d(ring_mesh.0.clone()),
-                MeshMaterial2d(mat),
-                Transform::default(),
-            ));
-            root.spawn((
-                AttackPingTroopLabel,
-                Text2d::new(label),
-                TextFont {
-                    font: settings.font.clone(),
-                    font_size: 28.0,
-                    weight: FontWeight::BOLD,
-                    ..default()
-                },
-                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.98)),
-                TextLayout::new_with_justify(Justify::Left),
-                Transform::from_xyz(ox, oy, 2.0),
-            ));
-        });
+        ));
+        let pl = tile_idx_to_world(fleet.dst_tile, mw, mh);
+        commands.spawn((
+            FollowFleetTarget { fleet: fleet_e },
+            InGameEntity,
+            Mesh2d(m.target_ring.clone()),
+            MeshMaterial2d(ring_mat),
+            Transform::from_xyz(pl.x, pl.y, 264.0).with_scale(Vec3::splat(1.12)),
+            GlobalTransform::default(),
+            Visibility::default(),
+        ));
+    }
+}
 
-    let intent = GameplayIntent::Attack(AttackIntent {
-        target_owner,
-        troops: Some(send),
-    });
-
-    if let Some(mut buf) = local_buf {
-        // Single player mock
-        buf.0.push(StampedIntent {
-            player_id: pid,
-            intent,
-        });
-    } else {
-        // Multiplayer
-        for mut sender in senders.iter_mut() {
-            let _ = sender.send::<ReliableChannel>(ClientGameplayMessage {
-                intent: intent.clone(),
-            });
+fn system_sync_fleet_visuals(
+    mut commands: Commands,
+    game_opt: Option<Res<GameState>>,
+    mut boat_q: Query<(Entity, &mut FollowFleetBoat, &mut Transform), (Without<FollowFleetWake>, Without<FollowFleetTarget>)>,
+    mut wake_q: Query<(&FollowFleetWake, &mut Transform, &mut Visibility), (Without<FollowFleetBoat>, Without<FollowFleetTarget>)>,
+    mut target_q: Query<(Entity, &FollowFleetTarget, &mut Transform), (Without<FollowFleetBoat>, Without<FollowFleetWake>)>,
+    q_fleet: Query<&WarpFleet>,
+) {
+    let Some(game) = game_opt.as_deref() else {
+        return;
+    };
+    let mw = game.map.width;
+    let mh = game.map.height;
+    for (e, mut fb, mut tf) in boat_q.iter_mut() {
+        let Ok(f) = q_fleet.get(fb.fleet) else {
+            commands.entity(fb.wake).despawn();
+            commands.entity(e).despawn();
+            continue;
+        };
+        let cur = f.current_tile;
+        let p = tile_idx_to_world(cur, mw, mh);
+        tf.translation = Vec3::new(p.x, p.y, 272.0);
+        if let Ok((_, mut wtf, mut vis)) = wake_q.get_mut(fb.wake) {
+            if let Some(prev) = fb.prev_tile {
+                if prev != cur {
+                    let wp = tile_idx_to_world(prev, mw, mh);
+                    wtf.translation = Vec3::new(wp.x, wp.y, 269.0);
+                    wtf.scale = Vec3::ONE;
+                    *vis = Visibility::Visible;
+                }
+            }
+            fb.prev_tile = Some(cur);
+        }
+    }
+    for (e, ft, _tf) in target_q.iter_mut() {
+        if q_fleet.get(ft.fleet).is_err() {
+            commands.entity(e).despawn();
         }
     }
 }

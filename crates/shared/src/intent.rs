@@ -8,8 +8,11 @@ use crate::config;
 use crate::execution::{AttackExecution, PrioritizedTile};
 use crate::game::GameState;
 use crate::map::TerrainType;
+use crate::pathfinding::WaterPathfinderScratch;
 use crate::pseudo_random::PseudoRandom;
 use crate::protocol::{AttackIntent, GameplayIntent, StampedIntent};
+use crate::warp_fleet::{resolve_fleet_route, FleetRoute, WarpFleet};
+use crate::water_components::WaterComponents;
 
 /// Merge two frontiers: same cell keeps the tile with lower `priority` (better for expansion order).
 pub fn merge_frontiers(
@@ -32,7 +35,7 @@ pub fn merge_frontiers(
     BinaryHeap::from(v)
 }
 
-fn build_attack_frontier(
+pub fn build_attack_frontier(
     game: &GameState,
     player_id: u16,
     target_owner: u16,
@@ -79,15 +82,139 @@ fn build_attack_frontier(
     to_conquer
 }
 
+/// Spawn or merge an `AttackExecution` after a fleet lands (troops already reserved at launch).
+pub fn spawn_or_merge_attack_for_fleet_arrival(
+    commands: &mut Commands,
+    game: &mut GameState,
+    q_exec: &mut Query<(Entity, &mut AttackExecution)>,
+    owner_id: u16,
+    target_owner: u16,
+    troops: f64,
+    fleet_id: u64,
+) {
+    if troops < config::EXPAND_COST || !troops.is_finite() {
+        if let Some(p) = game.player_mut(owner_id) {
+            p.troops = (p.troops + troops.max(0.0)).min(p.max_troops);
+        }
+        return;
+    }
+
+    let exec_seed = game
+        .seed
+        .wrapping_add(game.tick)
+        .wrapping_add(fleet_id)
+        .wrapping_add(0xB04F_0000);
+    let mut rng = PseudoRandom::new(exec_seed);
+    let mut initial_seq = 0u32;
+    let Some(player) = game.player(owner_id) else {
+        return;
+    };
+    let border_tiles = player.border_coords(game.map.width);
+    let fresh = build_attack_frontier(
+        game,
+        owner_id,
+        target_owner,
+        &border_tiles,
+        &mut rng,
+        &mut initial_seq,
+    );
+
+    if fresh.is_empty() {
+        if let Some(p) = game.player_mut(owner_id) {
+            p.troops = (p.troops + troops).min(p.max_troops);
+        }
+        return;
+    }
+
+    let mut merge_candidates: Vec<(Entity, u64)> = q_exec
+        .iter()
+        .filter(|(_, ex)| {
+            ex.owner_id == owner_id && ex.target_owner == target_owner && !ex.retreating
+        })
+        .map(|(e, ex)| (e, ex.id))
+        .collect();
+    merge_candidates.sort_by_key(|(_, id)| *id);
+
+    if let Some((e_merge, _)) = merge_candidates.first().copied() {
+        let Ok((_, mut ex)) = q_exec.get_mut(e_merge) else {
+            return;
+        };
+        ex.troops += troops;
+        ex.initial_troops += troops;
+        let merged = merge_frontiers(std::mem::take(&mut ex.to_conquer), fresh);
+        ex.to_conquer = merged;
+        return;
+    }
+
+    let exec_id = game
+        .tick
+        .wrapping_shl(32)
+        .wrapping_add(fleet_id)
+        .wrapping_add(0xF1EE0000);
+
+    commands.spawn(AttackExecution {
+        id: exec_id,
+        owner_id,
+        target_owner,
+        troops,
+        initial_troops: troops,
+        to_conquer: fresh,
+        insert_seq_counter: initial_seq,
+        rng,
+        retreating: false,
+    });
+}
+
 /// Apply one stamped intent: mutates `GameState`, `AttackExecution` query, and queues spawns/despawns.
 pub fn apply_stamped_intent(
     commands: &mut Commands,
     game: &mut GameState,
     q_exec: &mut Query<(Entity, &mut AttackExecution)>,
+    q_fleet: &mut Query<(Entity, &mut WarpFleet)>,
     stamped: &StampedIntent,
     intent_index: u32,
+    path_scratch: &mut WaterPathfinderScratch,
+    water_components: &WaterComponents,
 ) {
     match &stamped.intent {
+        GameplayIntent::RecallFleet { fleet_id } => {
+            let pid = stamped.player_id;
+            let mut pairs: Vec<(Entity, u64)> = q_fleet.iter().map(|(e, w)| (e, w.id)).collect();
+            pairs.sort_by_key(|&(_, id)| id);
+            for (entity, fid) in pairs {
+                if fid != *fleet_id {
+                    continue;
+                }
+                let Ok((_, mut wf)) = q_fleet.get_mut(entity) else {
+                    continue;
+                };
+                if wf.owner_id != pid {
+                    continue;
+                }
+                wf.retreating = true;
+                wf.retreat_dst = None;
+                wf.path.clear();
+                wf.path_cursor = 0;
+                break;
+            }
+        }
+        GameplayIntent::LaunchFleet {
+            target_owner,
+            target_tile,
+            troops,
+        } => {
+            apply_launch_fleet_intent(
+                commands,
+                game,
+                path_scratch,
+                water_components,
+                q_fleet,
+                stamped.player_id,
+                *target_owner,
+                *target_tile,
+                *troops,
+            );
+        }
         GameplayIntent::CancelAttack { attack_id } => {
             let pid = stamped.player_id;
             for (_, mut exec) in q_exec.iter_mut() {
@@ -96,7 +223,7 @@ pub fn apply_stamped_intent(
                     return;
                 }
             }
-            warn!(
+            bevy::log::warn!(
                 "apply_stamped_intent: cancel attack_id={} for player {} — not found or not owner",
                 attack_id, pid
             );
@@ -105,6 +232,112 @@ pub fn apply_stamped_intent(
             apply_attack_intent(commands, game, q_exec, stamped.player_id, attack, intent_index);
         }
     }
+}
+
+fn apply_launch_fleet_intent(
+    commands: &mut Commands,
+    game: &mut GameState,
+    path_scratch: &mut WaterPathfinderScratch,
+    water_components: &WaterComponents,
+    _q_fleet: &mut Query<(Entity, &mut WarpFleet)>,
+    player_id: u16,
+    target_owner: u16,
+    target_tile: u32,
+    troops: f64,
+) {
+    let Some(player) = game.player(player_id) else {
+        bevy::log::warn!("apply_launch_fleet_intent: player {} not found", player_id);
+        return;
+    };
+    if !player.alive {
+        return;
+    }
+    if target_owner == player_id {
+        return;
+    }
+
+    let map_area = game.map.width.saturating_mul(game.map.height);
+    if map_area == 0 || target_tile >= map_area {
+        bevy::log::warn!(
+            "apply_launch_fleet_intent: out-of-range target_tile={} (player {})",
+            target_tile, player_id
+        );
+        return;
+    }
+
+    let border_tiles: &[u32] = match game.player(player_id) {
+        Some(p) => p.border_tiles.as_slice(),
+        None => return,
+    };
+
+    let target_border: Option<&[u32]> = if target_owner != 0 {
+        match game.player(target_owner) {
+            Some(p) => Some(p.border_tiles.as_slice()),
+            None => {
+                bevy::log::warn!(
+                    "apply_launch_fleet_intent: target_owner={} not found (player {})",
+                    target_owner, player_id
+                );
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
+    let route = match resolve_fleet_route(
+        &game.map,
+        water_components,
+        path_scratch,
+        player_id,
+        target_owner,
+        target_tile,
+        border_tiles,
+        target_border,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            bevy::log::warn!(
+                "apply_launch_fleet_intent: {} (player {}, target_owner={}, tile={})",
+                e,
+                player_id,
+                target_owner,
+                target_tile
+            );
+            return;
+        }
+    };
+
+    let pool_cap = player.troops;
+    let launch = troops.max(0.0).min(pool_cap);
+    if launch < config::EXPAND_COST {
+        return;
+    }
+
+    let FleetRoute {
+        src_tile: src,
+        landing_tile: landing,
+        path,
+    } = route;
+
+    let Some(p) = game.player_mut(player_id) else {
+        return;
+    };
+    p.troops -= launch;
+    p.troops = p.troops.max(0.0);
+
+    let fid = game.next_fleet_id;
+    game.next_fleet_id = game.next_fleet_id.wrapping_add(1).max(1);
+
+    commands.spawn(WarpFleet::new(
+        fid,
+        player_id,
+        target_owner,
+        launch,
+        src,
+        landing,
+        path,
+    ));
 }
 
 fn apply_attack_intent(
@@ -118,7 +351,7 @@ fn apply_attack_intent(
     let target_owner = attack.target_owner;
 
     let Some(player) = game.player(player_id) else {
-        warn!("apply_attack_intent: player {} not found", player_id);
+        bevy::log::warn!("apply_attack_intent: player {} not found", player_id);
         return;
     };
 
@@ -251,6 +484,9 @@ pub fn system_bot_think(
     mut commands: Commands,
     mut game: ResMut<GameState>,
     mut q_exec: Query<(Entity, &mut AttackExecution)>,
+    mut q_fleet: Query<(Entity, &mut WarpFleet)>,
+    mut path_scratch: ResMut<crate::pathfinding::WaterPathfinderScratch>,
+    water_components: Res<WaterComponents>,
     config_opt: Option<Res<crate::game_config::GameConfig>>,
 ) {
     if game.phase != crate::game::GamePhase::Playing {
@@ -359,8 +595,11 @@ pub fn system_bot_think(
             &mut commands,
             &mut game,
             &mut q_exec,
+            &mut q_fleet,
             &stamped,
             bot_id as u32,
+            &mut *path_scratch,
+            &water_components,
         );
     }
 }

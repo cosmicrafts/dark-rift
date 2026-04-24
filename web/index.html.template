@@ -172,9 +172,10 @@
     const bar = document.getElementById("loader-bar");
 
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const EXIT_FADE_MS = reduceMotion ? 200 : 380;
-    const PROGRESS_CAP = 0.9;
-    const MIN_SPLASH_MS = reduceMotion ? 450 : 1400;
+    const EXIT_FADE_MS = reduceMotion ? 150 : 250;
+    const PROGRESS_CAP = 0.95;
+    // Eliminamos el tiempo mínimo artificial para no hacer esperar al jugador
+    const MIN_SPLASH_MS = 0; 
 
     const splashStart = performance.now();
 
@@ -195,17 +196,24 @@
 
       let shown = 0;
       while (!settled) {
+        // Velocidad agresiva constante para comer chunks rápido hasta el 95%
+        let speed = 0.15;
+        let minStep = 0.025;
+
         shown = Math.min(
           PROGRESS_CAP,
-          shown + (PROGRESS_CAP - shown) * 0.045 + 0.0022
+          shown + (PROGRESS_CAP - shown) * speed + minStep
         );
         setBarScale(shown);
         await new Promise((r) => requestAnimationFrame(r));
       }
 
       await initPromise;
+      // Promesa resuelta: brincamos al 100%
       setBarScale(1);
-      await sleep(reduceMotion ? 80 : 140);
+      
+      // Damos 150ms exactos para que la barra se llene visualmente antes de desaparecer
+      await sleep(150);
     }
 
     async function ensureMinSplash() {

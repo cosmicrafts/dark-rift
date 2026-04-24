@@ -4,7 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-bevy = { workspace = true, features = ["serialize"] }
+# `std` enables `bevy_ecs::ParallelCommands` required by `lightyear_messages` when building this crate alone.
+bevy = { workspace = true, default-features = false, features = ["serialize", "std", "bevy_log"] }
 serde = { workspace = true }
 rand = { workspace = true }
 lightyear = { workspace = true }

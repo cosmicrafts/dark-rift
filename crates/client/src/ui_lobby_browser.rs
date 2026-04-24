@@ -12,14 +12,17 @@ use crate::{ClientSettings, Cli};
 use crate::ui_theme::*;
 use lightyear::prelude::{MessageReceiver, MessageSender};
 
-const GAME_VERSION_LABEL: &str = env!("CARGO_PKG_VERSION");
+const GAME_VERSION_LABEL: &str = include_str!("../../../version.txt");
 
 #[derive(Resource, Default)]
 pub struct JoinedLobby(pub Option<u64>);
 
 /// True while the nickname text field is capturing keyboard input.
 #[derive(Resource, Default)]
-pub struct LobbyNicknameFocused(pub bool);
+pub struct LobbyNicknameFocused {
+    pub is_focused: bool,
+    pub select_all: bool,
+}
 
 /// Debounced disk save after nickname edits (native only inside `save_client_settings_config`).
 #[derive(Resource)]
@@ -386,7 +389,7 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
     let nick_display = settings.config.profile.nickname.clone();
 
     commands.insert_resource(JoinedLobby(None));
-    commands.insert_resource(LobbyNicknameFocused(false));
+    commands.insert_resource(LobbyNicknameFocused::default());
     commands.insert_resource(NicknameSettingsAutosave::default());
 
     commands
@@ -421,114 +424,14 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                 },
             ))
             .with_children(|panel| {
-                panel
-                    .spawn((
-                        LobbyMenuAnimHeaderRow,
-                        UiTransform::from_translation(Val2::px(0.0, INTRO_HEADER_Y_PX)),
-                        Node {
-                            width: Val::Percent(100.0),
-                            flex_direction: FlexDirection::Row,
-                            justify_content: JustifyContent::SpaceBetween,
-                            align_items: AlignItems::FlexEnd,
-                            column_gap: Val::Px(20.0),
-                            row_gap: Val::Px(12.0),
-                            ..default()
-                        },
-                    ))
-                    .with_children(|header| {
-                        header
-                            .spawn((
-                                Node {
-                                    flex_direction: FlexDirection::Column,
-                                    align_items: AlignItems::FlexStart,
-                                    row_gap: Val::Px(6.0),
-                                    max_width: Val::Px(760.0),
-                                    ..default()
-                                },
-                            ))
-                            .with_children(|title_col| {
-                                title_col.spawn((
-                                    Text::new("DARK RIFT"),
-                                    LobbyMenuAnimatedText(LobbyMenuTextRole::TitleMain),
-                                    TextFont {
-                                        font: font.clone(),
-                                        font_size: 52.0,
-                                        ..default()
-                                    },
-                                    TextColor(base_text_color(LobbyMenuTextRole::TitleMain).with_alpha(0.0)),
-                                ));
-                                title_col.spawn((
-                                    Text::new(format!("v{GAME_VERSION_LABEL}")),
-                                    LobbyMenuAnimatedText(LobbyMenuTextRole::Version),
-                                    TextFont {
-                                        font: font.clone(),
-                                        font_size: 18.0,
-                                        ..default()
-                                    },
-                                    TextColor(base_text_color(LobbyMenuTextRole::Version).with_alpha(0.0)),
-                                ));
-                                title_col.spawn((
-                                    Text::new("Join the live sector or jump straight into a solo run."),
-                                    LobbyMenuAnimatedText(LobbyMenuTextRole::BodyCopy),
-                                    TextFont {
-                                        font: font.clone(),
-                                        font_size: 18.0,
-                                        ..default()
-                                    },
-                                    TextColor(base_text_color(LobbyMenuTextRole::BodyCopy).with_alpha(0.0)),
-                                ));
-                            });
-
-                        header
-                            .spawn(Node {
-                                flex_direction: FlexDirection::Column,
-                                align_items: AlignItems::FlexStart,
-                                row_gap: Val::Px(8.0),
-                                min_width: Val::Px(220.0),
-                                ..default()
-                            })
-                            .with_children(|meta| {
-                                meta.spawn((
-                                    Text::new("CALLSIGN"),
-                                    LobbyMenuAnimatedText(LobbyMenuTextRole::SectionLabel),
-                                    TextFont {
-                                        font: font.clone(),
-                                        font_size: 14.0,
-                                        ..default()
-                                    },
-                                    TextColor(base_text_color(LobbyMenuTextRole::SectionLabel).with_alpha(0.0)),
-                                ));
-                                meta.spawn((
-                                    Button,
-                                    NicknameFieldRoot,
-                                    Node {
-                                        width: Val::Percent(100.0),
-                                        min_height: Val::Px(56.0),
-                                        padding: UiRect::axes(Val::Px(16.0), Val::Px(12.0)),
-                                        border_radius: BorderRadius::all(Val::Px(14.0)),
-                                        border: UiRect::all(Val::Px(1.0)),
-                                        justify_content: JustifyContent::FlexStart,
-                                        align_items: AlignItems::Center,
-                                        ..default()
-                                    },
-                                    BackgroundColor(nickname_field_bg().with_alpha(0.0)),
-                                    BorderColor::all(nickname_field_border().with_alpha(0.0)),
-                                ))
-                                .with_children(|field| {
-                                    field.spawn((
-                                        Text::new(nick_display.clone()),
-                                        NicknameFieldText,
-                                        LobbyMenuAnimatedText(LobbyMenuTextRole::NicknameField),
-                                        TextFont {
-                                            font: font.clone(),
-                                            font_size: 18.0,
-                                            ..default()
-                                        },
-                                        TextColor(base_text_color(LobbyMenuTextRole::NicknameField).with_alpha(0.0)),
-                                    ));
-                                });
-                            });
-                    });
+                panel.spawn((
+                    LobbyMenuAnimHeaderRow,
+                    UiTransform::from_translation(Val2::px(0.0, INTRO_HEADER_Y_PX)),
+                    Node {
+                        display: Display::None,
+                        ..default()
+                    },
+                ));
 
                 panel
                     .spawn((
@@ -557,26 +460,37 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                             },
                         ))
                         .with_children(|left| {
+                            // Los textos de "OPEN LOBBIES" y descripcion fueron removidos por peticion
+
                             left.spawn((
-                                Text::new("OPEN LOBBIES"),
-                                LobbyMenuAnimatedText(LobbyMenuTextRole::SectionLabel),
-                                TextFont {
-                                    font: font.clone(),
-                                    font_size: 16.0,
+                                Button,
+                                NicknameFieldRoot,
+                                Node {
+                                    width: Val::Percent(100.0),
+                                    min_height: Val::Px(56.0),
+                                    padding: UiRect::axes(Val::Px(16.0), Val::Px(12.0)),
+                                    border_radius: BorderRadius::all(Val::Px(14.0)),
+                                    border: UiRect::all(Val::Px(1.0)),
+                                    justify_content: JustifyContent::FlexStart,
+                                    align_items: AlignItems::Center,
                                     ..default()
                                 },
-                                TextColor(base_text_color(LobbyMenuTextRole::SectionLabel).with_alpha(0.0)),
-                            ));
-                            left.spawn((
-                                Text::new("Pick the active sector below. The list adapts to the next match the server wants to fill."),
-                                LobbyMenuAnimatedText(LobbyMenuTextRole::BodyCopy),
-                                TextFont {
-                                    font: font.clone(),
-                                    font_size: 16.0,
-                                    ..default()
-                                },
-                                TextColor(base_text_color(LobbyMenuTextRole::BodyCopy).with_alpha(0.0)),
-                            ));
+                                BackgroundColor(nickname_field_bg().with_alpha(0.0)),
+                                BorderColor::all(nickname_field_border().with_alpha(0.0)),
+                            ))
+                            .with_children(|field| {
+                                field.spawn((
+                                    Text::new(nick_display.clone()),
+                                    NicknameFieldText,
+                                    LobbyMenuAnimatedText(LobbyMenuTextRole::NicknameField),
+                                    TextFont {
+                                        font: font.clone(),
+                                        font_size: 18.0,
+                                        ..default()
+                                    },
+                                    TextColor(base_text_color(LobbyMenuTextRole::NicknameField).with_alpha(0.0)),
+                                ));
+                            });
 
                             left.spawn((
                                 Node {
@@ -607,16 +521,7 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                             },
                         ))
                         .with_children(|right| {
-                            right.spawn((
-                                Text::new("PLAY"),
-                                LobbyMenuAnimatedText(LobbyMenuTextRole::SectionLabel),
-                                TextFont {
-                                    font: font.clone(),
-                                    font_size: 16.0,
-                                    ..default()
-                                },
-                                TextColor(base_text_color(LobbyMenuTextRole::SectionLabel).with_alpha(0.0)),
-                            ));
+                            // El texto de "PLAY" fue removido por peticion
                             right.spawn((
                                 Button,
                                 SinglePlayerButton,
@@ -755,6 +660,29 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                         ));
                     });
                 });
+            });
+
+            root.spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    bottom: Val::Px(16.0),
+                    width: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Row,
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+            ))
+            .with_children(|bottom_bar| {
+                bottom_bar.spawn((
+                    Text::new(format!("v{}", GAME_VERSION_LABEL.trim())),
+                    LobbyMenuAnimatedText(LobbyMenuTextRole::Version),
+                    TextFont {
+                        font: font.clone(),
+                        font_size: 14.0,
+                        ..default()
+                    },
+                    TextColor(base_text_color(LobbyMenuTextRole::Version).with_alpha(0.0)),
+                ));
             });
         });
 
@@ -978,7 +906,8 @@ pub fn system_nickname_field_focus_from_click(
 ) {
     for interaction in &q {
         if *interaction == Interaction::Pressed {
-            focus.0 = true;
+            focus.is_focused = true;
+            focus.select_all = true;
             for mut b in &mut nick_border {
                 *b = BorderColor::all(nickname_field_border_focused());
             }
@@ -1003,8 +932,8 @@ pub fn system_clear_lobby_nickname_focus(
             break;
         }
     }
-    if pressed_other && focus.0 {
-        focus.0 = false;
+    if pressed_other && focus.is_focused {
+        focus.is_focused = false;
         for mut b in &mut nick_border {
             *b = BorderColor::all(nickname_field_border());
         }
@@ -1017,16 +946,13 @@ pub fn system_nickname_keyboard_when_focused(
     mut auto: ResMut<NicknameSettingsAutosave>,
     mut settings: ResMut<ClientSettings>,
     mut reader: MessageReader<KeyboardInput>,
-    mut text_q: Query<&mut Text, With<NicknameFieldText>>,
     mut nick_border: Query<&mut BorderColor, With<NicknameFieldRoot>>,
 ) {
-    if !focus.0 {
+    if !focus.is_focused {
         return;
     }
 
-    let Ok(mut text) = text_q.single_mut() else {
-        return;
-    };
+    let mut changed = false;
 
     for ev in reader.read() {
         if !ev.state.is_pressed() {
@@ -1034,7 +960,7 @@ pub fn system_nickname_keyboard_when_focused(
         }
 
         if matches!(&ev.logical_key, Key::Escape) {
-            focus.0 = false;
+            focus.is_focused = false;
             for mut b in &mut nick_border {
                 *b = BorderColor::all(nickname_field_border());
             }
@@ -1043,7 +969,7 @@ pub fn system_nickname_keyboard_when_focused(
         }
 
         if matches!(&ev.logical_key, Key::Enter) {
-            focus.0 = false;
+            focus.is_focused = false;
             for mut b in &mut nick_border {
                 *b = BorderColor::all(nickname_field_border());
             }
@@ -1052,27 +978,60 @@ pub fn system_nickname_keyboard_when_focused(
         }
 
         if matches!(&ev.logical_key, Key::Backspace) {
-            text.0.pop();
-            settings.config.profile.nickname = text.0.clone();
-            settings.config.clamp_profile_nickname_in_place();
-            text.0 = settings.config.profile.nickname.clone();
-            queue_save(&mut auto);
+            if focus.select_all {
+                settings.config.profile.nickname.clear();
+                focus.select_all = false;
+            } else {
+                settings.config.profile.nickname.pop();
+            }
+            changed = true;
             continue;
         }
 
         if let Some(inserted) = ev.text.as_ref() {
             if inserted.chars().all(is_printable_char) {
+                if focus.select_all {
+                    settings.config.profile.nickname.clear();
+                    focus.select_all = false;
+                }
                 for ch in inserted.chars() {
-                    if text.0.chars().count() >= ProfileConfig::NICKNAME_MAX_CHARS {
+                    if settings.config.profile.nickname.chars().count() >= ProfileConfig::NICKNAME_MAX_CHARS {
                         break;
                     }
-                    text.0.push(ch);
+                    settings.config.profile.nickname.push(ch);
                 }
-                settings.config.profile.nickname = text.0.clone();
-                settings.config.clamp_profile_nickname_in_place();
-                text.0 = settings.config.profile.nickname.clone();
-                queue_save(&mut auto);
+                changed = true;
             }
+        }
+    }
+
+    if changed {
+        settings.config.clamp_profile_nickname_in_place();
+        queue_save(&mut auto);
+    }
+}
+
+pub fn system_nickname_cursor_blink(
+    time: Res<Time>,
+    focus: Res<LobbyNicknameFocused>,
+    settings: Res<ClientSettings>,
+    mut text_q: Query<(&mut Text, &mut TextColor), With<NicknameFieldText>>,
+) {
+    if let Ok((mut text, mut color)) = text_q.single_mut() {
+        if focus.is_focused {
+            let blink = (time.elapsed_secs() * 2.0).fract() > 0.5;
+            if focus.select_all {
+                // Highlight color when selected all
+                color.0 = Color::srgb(0.4, 0.9, 1.0);
+                text.0 = settings.config.profile.nickname.clone();
+            } else {
+                color.0 = base_text_color(LobbyMenuTextRole::NicknameField);
+                let cursor = if blink { "|" } else { " " };
+                text.0 = format!("{}{}", settings.config.profile.nickname, cursor);
+            }
+        } else {
+            color.0 = base_text_color(LobbyMenuTextRole::NicknameField);
+            text.0 = settings.config.profile.nickname.clone();
         }
     }
 }

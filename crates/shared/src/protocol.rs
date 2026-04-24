@@ -21,6 +21,13 @@ pub struct AttackIntent {
 pub enum GameplayIntent {
     Attack(AttackIntent),
     CancelAttack { attack_id: u64 },
+    /// Water transport: raw clicked tile (`y * width + x`); sim snaps to nearest owned shoreline.
+    LaunchFleet {
+        target_owner: u16,
+        target_tile: u32,
+        troops: f64,
+    },
+    RecallFleet { fleet_id: u64 },
 }
 
 /// Stamped intent bundled into a turn (attack or cancel).

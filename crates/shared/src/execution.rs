@@ -3,8 +3,12 @@ use std::collections::BinaryHeap;
 use bevy::prelude::*;
 use crate::config;
 use crate::game::{GameState, GamePhase, GameEvent};
+use crate::intent::spawn_or_merge_attack_for_fleet_arrival;
 use crate::map::TerrainType;
+use crate::pathfinding::WaterPathfinderScratch;
 use crate::pseudo_random::PseudoRandom;
+use crate::warp_fleet::{best_shore_spawn_for_transport, WarpFleet};
+use crate::water_components::WaterComponents;
 
 /// Fraction of refunded troops lost when retreating from an attack on another player (OpenFront parity).
 pub const RETREAT_PENALTY_VS_PLAYER: f64 = 0.25;
@@ -283,4 +287,138 @@ pub fn system_attack_execution(
 pub fn system_game_tick(game_opt: Option<ResMut<GameState>>) {
     let Some(mut game) = game_opt else { return };
     game.tick();
+}
+
+fn refund_fleet_troops_to_player(game: &mut GameState, owner_id: u16, troops: f64) {
+    if let Some(p) = game.player_mut(owner_id) {
+        p.troops = (p.troops + troops.max(0.0)).min(p.max_troops);
+    }
+}
+
+/// OpenFront `TransportShipExecution`: 1 tile/tick over water, retreat, landing → conquer + `AttackExecution`.
+pub fn system_warp_fleet_execution(
+    mut commands: Commands,
+    game_opt: Option<ResMut<GameState>>,
+    mut path_res: ResMut<WaterPathfinderScratch>,
+    water_components: Res<WaterComponents>,
+    mut q_fleet: Query<(Entity, &mut WarpFleet)>,
+    mut q_exec: Query<(Entity, &mut AttackExecution)>,
+    mut scratch: Local<Vec<(Entity, u64)>>,
+) {
+    let Some(mut game) = game_opt else {
+        return;
+    };
+    if game.phase != GamePhase::Playing {
+        return;
+    }
+
+    scratch.clear();
+    scratch.extend(q_fleet.iter().map(|(e, w)| (e, w.id)));
+    scratch.sort_by_key(|&(_, id)| id);
+
+    let astar = &mut path_res.astar;
+
+    for &(entity, _) in scratch.iter() {
+        let Ok((_, mut fleet)) = q_fleet.get_mut(entity) else {
+            continue;
+        };
+
+        if fleet.retreating && fleet.retreat_dst.is_none() {
+            if let Some(player) = game.player(fleet.owner_id) {
+                let here_comp = water_components.component_of(fleet.current_tile);
+                let comp_filter = if here_comp == 0 {
+                    None
+                } else {
+                    Some((&*water_components, here_comp))
+                };
+                if let Some(r_dst) = best_shore_spawn_for_transport(
+                    &game.map,
+                    fleet.owner_id,
+                    &player.border_tiles,
+                    fleet.current_tile,
+                    comp_filter,
+                ) {
+                    fleet.retreat_dst = Some(r_dst);
+                    if let Some(path) = astar.find_path(&game.map, &[fleet.current_tile], r_dst) {
+                        fleet.path = path;
+                        fleet.path_cursor = 0;
+                    } else {
+                        refund_fleet_troops_to_player(&mut game, fleet.owner_id, fleet.troops);
+                        commands.entity(entity).despawn();
+                        continue;
+                    }
+                } else {
+                    refund_fleet_troops_to_player(&mut game, fleet.owner_id, fleet.troops);
+                    commands.entity(entity).despawn();
+                    continue;
+                }
+            } else {
+                commands.entity(entity).despawn();
+                continue;
+            }
+        }
+
+        if fleet.path.is_empty() {
+            refund_fleet_troops_to_player(&mut game, fleet.owner_id, fleet.troops);
+            commands.entity(entity).despawn();
+            continue;
+        }
+
+        if fleet.path_cursor < fleet.path.len() {
+            fleet.current_tile = fleet.path[fleet.path_cursor];
+            fleet.path_cursor += 1;
+        }
+
+        if fleet.path_cursor < fleet.path.len() {
+            continue;
+        }
+
+        let w = game.map.width;
+        let lx = fleet.current_tile % w;
+        let ly = fleet.current_tile / w;
+        let owner_here = game.map.owner_id(lx, ly);
+
+        if fleet.retreating {
+            if owner_here == fleet.owner_id {
+                let deaths = fleet.troops * crate::warp_fleet::FLEET_RETREAT_SHORE_MALUS;
+                let survivors = fleet.troops - deaths;
+                if let Some(p) = game.player_mut(fleet.owner_id) {
+                    p.troops = (p.troops + survivors).min(p.max_troops);
+                }
+            } else {
+                refund_fleet_troops_to_player(&mut game, fleet.owner_id, fleet.troops);
+            }
+            commands.entity(entity).despawn();
+            continue;
+        }
+
+        if owner_here == fleet.owner_id {
+            let deaths = fleet.troops * crate::warp_fleet::FLEET_RETREAT_SHORE_MALUS;
+            let survivors = fleet.troops - deaths;
+            if let Some(p) = game.player_mut(fleet.owner_id) {
+                p.troops = (p.troops + survivors).min(p.max_troops);
+            }
+            commands.entity(entity).despawn();
+            continue;
+        }
+
+        let prev_owner = owner_here;
+        game.set_tile_owner(lx, ly, fleet.owner_id);
+        game.events.push(GameEvent::TileCaptured {
+            x: lx,
+            y: ly,
+            new_owner: fleet.owner_id,
+        });
+
+        spawn_or_merge_attack_for_fleet_arrival(
+            &mut commands,
+            &mut game,
+            &mut q_exec,
+            fleet.owner_id,
+            prev_owner,
+            fleet.troops,
+            fleet.id,
+        );
+        commands.entity(entity).despawn();
+    }
 }
