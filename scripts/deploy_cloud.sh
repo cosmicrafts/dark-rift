@@ -45,12 +45,31 @@ cyan "==> 2. Empaquetando Frontend (wasm-bindgen)..."
 rm -rf dist
 mkdir -p dist
 
-# Generar version dinamica
-VERSION=$(date +%s)
-JS_FILE="dark_rift_client_${VERSION}.js"
-WASM_FILE="dark_rift_client_${VERSION}_bg.wasm"
+# Generar version secuencial limpia (0.1.0, 0.1.1, etc.)
+VERSION_FILE="${ROOT}/version.txt"
+if [[ ! -f "${VERSION_FILE}" ]]; then
+  echo "0.1.0" > "${VERSION_FILE}"
+fi
 
-~/.cargo/bin/wasm-bindgen --out-dir dist --target web --out-name "dark_rift_client_${VERSION}" --no-typescript "${WASM_IN}"
+# Leer version actual y separar
+CURRENT_VERSION=$(cat "${VERSION_FILE}")
+MAJOR_MINOR=$(echo "${CURRENT_VERSION}" | cut -d. -f1,2)
+PATCH=$(echo "${CURRENT_VERSION}" | cut -d. -f3)
+
+# Incrementar el parche
+NEW_PATCH=$((PATCH + 1))
+CLEAN_VERSION="${MAJOR_MINOR}.${NEW_PATCH}"
+
+# Guardar la nueva versión para el siguiente deploy
+echo "${CLEAN_VERSION}" > "${VERSION_FILE}"
+
+# Para engañar al caché del navegador seguimos ocupando un archivo de nombre único,
+# pero internamente y en la UI se muestra la versión limpia.
+BUILD_TS=$(date +%s)
+JS_FILE="dark_rift_client_${BUILD_TS}.js"
+WASM_FILE="dark_rift_client_${BUILD_TS}_bg.wasm"
+
+~/.cargo/bin/wasm-bindgen --out-dir dist --target web --out-name "dark_rift_client_${BUILD_TS}" --no-typescript "${WASM_IN}"
 
 cp -a assets dist/assets
 
@@ -59,7 +78,12 @@ if [[ ! -f "${LOADER_TEMPLATE}" ]]; then
   red "Missing loader template: ${LOADER_TEMPLATE}"
   exit 1
 fi
-sed -e "s/__VERSION__/${VERSION}/g" -e "s/__JS_FILE__/${JS_FILE}/g" -e "s/__WASM_FILE__/${WASM_FILE}/g" "${LOADER_TEMPLATE}" > dist/index.html
+# Reemplazar tanto el hash de archivo (__BUILD_TS__) como la versión visual (__VERSION__)
+sed -e "s/__VERSION__/${CLEAN_VERSION}/g" \
+    -e "s/__JS_FILE__/${JS_FILE}/g" \
+    -e "s/__WASM_FILE__/${WASM_FILE}/g" \
+    -e "s/__BUILD_TS__/${BUILD_TS}/g" \
+    "${LOADER_TEMPLATE}" > dist/index.html
 
 cyan "==> 3. Comprimiendo archivos estáticos (Brotli)..."
 # Comprimir en paralelo y limpiar versiones viejas pre-comprimidas
