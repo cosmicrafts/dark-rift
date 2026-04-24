@@ -71,6 +71,8 @@ WASM_FILE="dark_rift_client_${BUILD_TS}_bg.wasm"
 
 ~/.cargo/bin/wasm-bindgen --out-dir dist --target web --out-name "dark_rift_client_${BUILD_TS}" --no-typescript "${WASM_IN}"
 
+
+
 cp -a assets dist/assets
 
 LOADER_TEMPLATE="${ROOT}/web/index.html.template"

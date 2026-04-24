@@ -25,7 +25,7 @@ aeronet_websocket = "0.19.1"
 opt-level = 3
 
 [profile.release]
-opt-level = 's'      # Optimizar para tamaño
+opt-level = 'z'      # Optimizar máximo para tamaño (z es más agresivo que s)
 lto = true           # Link Time Optimization (corta código muerto)
 codegen-units = 1    # Compilación más lenta pero binario más chico
-strip = "debuginfo"  # Quitar símbolos de debug
+strip = true         # Quitar TODOS los símbolos (no solo debuginfo)

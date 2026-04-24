@@ -117,7 +117,7 @@ fn apply_attack_intent(
 ) {
     let target_owner = attack.target_owner;
 
-    let Some(player) = game.players.iter().find(|p| p.id == player_id) else {
+    let Some(player) = game.player(player_id) else {
         warn!("apply_attack_intent: player {} not found", player_id);
         return;
     };
@@ -137,7 +137,7 @@ fn apply_attack_intent(
         return;
     }
 
-    let Some(p) = game.players.iter_mut().find(|p| p.id == player_id) else {
+    let Some(p) = game.player_mut(player_id) else {
         return;
     };
     p.troops -= requested;
@@ -182,7 +182,7 @@ fn apply_attack_intent(
     }
 
     if remaining < config::EXPAND_COST {
-        if let Some(p) = game.players.iter_mut().find(|p| p.id == player_id) {
+        if let Some(p) = game.player_mut(player_id) {
             p.troops = (p.troops + remaining).min(p.max_troops);
         }
         return;
@@ -206,7 +206,7 @@ fn apply_attack_intent(
     );
 
     if fresh.is_empty() {
-        if let Some(p) = game.players.iter_mut().find(|p| p.id == player_id) {
+        if let Some(p) = game.player_mut(player_id) {
             p.troops = (p.troops + remaining).min(p.max_troops);
         }
         return;
@@ -257,42 +257,46 @@ pub fn system_bot_think(
         return;
     }
 
-    let bot_ids: Vec<u16> = game
-        .players
-        .iter()
-        .filter(|p| !p.is_human() && p.alive)
-        .map(|p| p.id)
-        .collect();
-    if bot_ids.is_empty() {
-        return;
-    }
-
-    let mut rng = PseudoRandom::new(game.seed.wrapping_add(game.tick));
-
     let config = config_opt.map(|c| c.clone()).unwrap_or_default();
     let expand_cost = config.expand_cost;
 
-    // Adjusted for 60 ticks per second (OpenFront was 4 ticks per second. Multiply by 15x)
     let (attack_interval_base, trigger_ratio, reserve_ratio) = match config.bot_difficulty {
         crate::game_config::BotDifficulty::BrainDead => (500, 0.9, 0.8),
         crate::game_config::BotDifficulty::Vanilla => (250, 0.6, 0.3),
         crate::game_config::BotDifficulty::Terminator => (125, 0.4, 0.1),
     };
 
-    for bot_id in bot_ids {
-        let Some(player) = game.player(bot_id) else {
-            continue;
-        };
+    let tick = game.tick;
+    let seed = game.seed;
 
-        // Use a unique setup RNG for each bot that does not pollute the global PRNG
-        let mut bot_setup_rng = PseudoRandom::new(game.seed.wrapping_add(bot_id as u64).wrapping_add(1337));
-        // Bot interval varies between base and 2x base (e.g., Vanilla: 30 to 60)
+    // Amortized collection of active bots
+    let mut active_bots = Vec::new();
+
+    for player in game.players.iter() {
+        if player.is_human() || !player.alive {
+            continue;
+        }
+        
+        let bot_id = player.id;
+        let mut bot_setup_rng = PseudoRandom::new(seed.wrapping_add(bot_id as u64).wrapping_add(1337));
         let my_interval = bot_setup_rng.next_int(attack_interval_base as i32, (attack_interval_base as i32 * 2).max(1)) as u64;
         let my_offset = bot_setup_rng.next_int(0, my_interval as i32) as u64;
 
-        if game.tick % my_interval != my_offset {
-            continue;
+        if tick % my_interval == my_offset {
+            active_bots.push(bot_id);
         }
+    }
+
+    if active_bots.is_empty() {
+        return;
+    }
+
+    let mut rng = PseudoRandom::new(seed.wrapping_add(tick));
+
+    for bot_id in active_bots {
+        let Some(player) = game.player(bot_id) else {
+            continue;
+        };
 
         let border_tiles = player.border_coords(game.map.width);
         if border_tiles.is_empty() { continue; }

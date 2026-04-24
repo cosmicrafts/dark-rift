@@ -95,8 +95,6 @@ pub fn system_player_income(game_opt: Option<ResMut<GameState>>) {
             continue;
         }
 
-        player.max_troops =
-            config::MAX_TROOPS_BASE + (tiles_owned as f64).powf(0.6) * config::MAX_TROOPS_SCALE;
 
         // Defensive mathematical bound: if player troops violently drain below zero during massive intent execution bursts, 
         // the calculation mathematically breaks and introduces desyncing NaN generations universally. We clamp to safely avoid this!
@@ -156,11 +154,7 @@ pub fn system_attack_execution(
                     1.0 - RETREAT_PENALTY_VS_PLAYER
                 };
                 let back = refund * factor;
-                if let Some(player) = game
-                    .players
-                    .iter_mut()
-                    .find(|p| p.id == execution.owner_id)
-                {
+                if let Some(player) = game.player_mut(execution.owner_id) {
                     player.troops = (player.troops + back).min(player.max_troops);
                 }
             }
@@ -275,11 +269,7 @@ pub fn system_attack_execution(
             } else {
                 let refund = execution.troops.max(0.0);
                 if refund > 0.0 && refund.is_finite() {
-                    if let Some(player) = game
-                        .players
-                        .iter_mut()
-                        .find(|p| p.id == execution.owner_id)
-                    {
+                    if let Some(player) = game.player_mut(execution.owner_id) {
                         player.troops = (player.troops + refund).min(player.max_troops);
                     }
                 }

@@ -28,6 +28,8 @@ pub struct GameState {
     pub phase: GamePhase,
     pub map: GameMap,
     pub players: Vec<Player>,
+    #[serde(skip)]
+    pub player_lookup: Vec<Option<usize>>,
     pub tick: u64,
     pub winner: Option<u16>,
     pub events: Vec<GameEvent>,
@@ -41,6 +43,7 @@ impl GameState {
             phase: GamePhase::Playing,
             map: GameMap::new(width, height),
             players: Vec::new(),
+            player_lookup: Vec::new(),
             tick: 0,
             winner: None,
             events: Vec::new(),
@@ -50,7 +53,14 @@ impl GameState {
     /// Spawn a player at the given center with a cluster of tiles.
     pub fn spawn_player(&mut self, player: Player, cx: u32, cy: u32) {
         let pid = player.id;
+        let index = self.players.len();
         self.players.push(player);
+        
+        let pid_usize = pid as usize;
+        if pid_usize >= self.player_lookup.len() {
+            self.player_lookup.resize(pid_usize + 1, None);
+        }
+        self.player_lookup[pid_usize] = Some(index);
 
         let r = config::SPAWN_RADIUS as i32;
         for dy in -r..=r {
@@ -87,11 +97,23 @@ impl GameState {
     }
 
     pub fn player(&self, id: PlayerId) -> Option<&Player> {
-        self.players.iter().find(|p| p.id == id)
+        let id_usize = id as usize;
+        if id_usize < self.player_lookup.len() {
+            if let Some(idx) = self.player_lookup[id_usize] {
+                return self.players.get(idx);
+            }
+        }
+        None
     }
 
     pub fn player_mut(&mut self, id: PlayerId) -> Option<&mut Player> {
-        self.players.iter_mut().find(|p| p.id == id)
+        let id_usize = id as usize;
+        if id_usize < self.player_lookup.len() {
+            if let Some(idx) = self.player_lookup[id_usize] {
+                return self.players.get_mut(idx);
+            }
+        }
+        None
     }
 
     pub fn set_tile_owner(&mut self, x: u32, y: u32, new_owner: u16) {
@@ -115,7 +137,7 @@ impl GameState {
 
         // Deduct from old owner
         if old_owner != 0 {
-            if let Some(p) = self.players.iter_mut().find(|p| p.id == old_owner) {
+            if let Some(p) = self.player_mut(old_owner) {
                 p.sum_x = p.sum_x.saturating_sub(x as u64);
                 p.sum_y = p.sum_y.saturating_sub(y as u64);
                 p.tile_count = p.tile_count.saturating_sub(1);
@@ -125,7 +147,7 @@ impl GameState {
 
         // Add to new owner
         if new_owner != 0 {
-            if let Some(p) = self.players.iter_mut().find(|p| p.id == new_owner) {
+            if let Some(p) = self.player_mut(new_owner) {
                 p.sum_x += x as u64;
                 p.sum_y += y as u64;
                 p.tile_count += 1;
@@ -138,7 +160,7 @@ impl GameState {
         if new_owner != 0 {
             let is_border = self.map.is_border_tile(x, y, new_owner);
             if is_border {
-                if let Some(p) = self.players.iter_mut().find(|p| p.id == new_owner) {
+                if let Some(p) = self.player_mut(new_owner) {
                     insert_sorted(&mut p.border_tiles, linear_idx);
                 }
             }
@@ -152,7 +174,7 @@ impl GameState {
 
             if n_owner == old_owner {
                 if old_owner != 0 {
-                    if let Some(p) = self.players.iter_mut().find(|p| p.id == old_owner) {
+                    if let Some(p) = self.player_mut(old_owner) {
                         insert_sorted(&mut p.border_tiles, n_idx);
                     }
                 }
@@ -160,7 +182,7 @@ impl GameState {
                 if new_owner != 0 {
                     let is_border = self.map.is_border_tile(nx, ny, new_owner);
                     if !is_border {
-                        if let Some(p) = self.players.iter_mut().find(|p| p.id == new_owner) {
+                        if let Some(p) = self.player_mut(new_owner) {
                             remove_sorted(&mut p.border_tiles, n_idx);
                         }
                     }

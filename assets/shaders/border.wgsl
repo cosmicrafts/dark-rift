@@ -156,18 +156,20 @@ fn get_terrain_color(tile: u32, coord: vec2<i32>) -> vec4<f32> {
 fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     // Discrete tile coordinate for this fragment.
     let pixel_coord = vec2<i32>(mesh.uv * uniforms.texture_size.xy);
+    let offset = i32(uniforms.border_thickness.x);
 
     let center_terrain = get_map_tile_at(pixel_coord);
     let center_owner   = get_owner_at(pixel_coord);
+
+    let t_n = get_map_tile_at(pixel_coord + vec2<i32>( 0,  offset));
+    let t_s = get_map_tile_at(pixel_coord + vec2<i32>( 0, -offset));
+    let t_e = get_map_tile_at(pixel_coord + vec2<i32>( offset,  0));
+    let t_w = get_map_tile_at(pixel_coord + vec2<i32>(-offset,  0));
 
     var terrain_color = get_terrain_color(center_terrain, pixel_coord);
 
     // Shoreline sand blend for land tiles adjacent to water.
     if tile_is_land(center_terrain) {
-        let t_n = get_map_tile_at(pixel_coord + vec2<i32>( 0,  1));
-        let t_s = get_map_tile_at(pixel_coord + vec2<i32>( 0, -1));
-        let t_e = get_map_tile_at(pixel_coord + vec2<i32>( 1,  0));
-        let t_w = get_map_tile_at(pixel_coord + vec2<i32>(-1,  0));
         if tile_is_water(t_n) || tile_is_water(t_s) || tile_is_water(t_e) || tile_is_water(t_w) {
             terrain_color = mix(terrain_color, SAND_COLOR, SAND_BLEND);
         }
@@ -190,16 +192,10 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     if uniforms.enable_players.x != 0u {
         let center_is_water = tile_is_water(center_terrain);
         if !center_is_water {
-            let offset = i32(uniforms.border_thickness.x);
             let own_n = get_owner_at(pixel_coord + vec2<i32>( 0,  offset));
             let own_s = get_owner_at(pixel_coord + vec2<i32>( 0, -offset));
             let own_e = get_owner_at(pixel_coord + vec2<i32>( offset,  0));
             let own_w = get_owner_at(pixel_coord + vec2<i32>(-offset,  0));
-
-            let t_n = get_map_tile_at(pixel_coord + vec2<i32>( 0,  offset));
-            let t_s = get_map_tile_at(pixel_coord + vec2<i32>( 0, -offset));
-            let t_e = get_map_tile_at(pixel_coord + vec2<i32>( offset,  0));
-            let t_w = get_map_tile_at(pixel_coord + vec2<i32>(-offset,  0));
 
             let ownership_change = (center_owner != own_n || center_owner != own_s ||
                                     center_owner != own_e || center_owner != own_w);

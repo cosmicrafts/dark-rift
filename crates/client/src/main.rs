@@ -1739,7 +1739,7 @@ fn player_click(
     let Some((x, y)) = target else { return };
 
     let pid = my_id.0;
-    let Some(player) = game.players.iter().find(|p| p.id == pid) else { return };
+    let Some(player) = game.player(pid) else { return };
     if !player.alive || player.troops < config::EXPAND_COST { return; }
 
     let target_owner = game.map.owner_id(x, y);
@@ -1940,15 +1940,18 @@ fn system_home_button(
 /// Write changed owner IDs into the GPU ShaderStorageBuffer.
 fn handle_tile_change(
     game_opt: Option<ResMut<GameState>>,
-    shader_map_opt: Option<Res<ShaderMapData>>,
+    shader_map_opt: Option<ResMut<ShaderMapData>>,
     mut images: ResMut<Assets<Image>>,
 ) {
     let Some(mut game) = game_opt else { return };
     if !game.is_changed() { return; }
-    let Some(shader_map) = shader_map_opt else { return };
+    let Some(mut shader_map) = shader_map_opt else { return };
 
-    if let Some(colors_img) = images.get_mut(&shader_map.player_colors) {
-        sync_player_colors(&game, colors_img);
+    if shader_map.colors_dirty {
+        if let Some(colors_img) = images.get_mut(&shader_map.player_colors) {
+            sync_player_colors(&game, colors_img);
+            shader_map.colors_dirty = false;
+        }
     }
 
     if let Some(board_img) = images.get_mut(&shader_map.board_data) {
@@ -2364,12 +2367,13 @@ fn system_handle_cancel_click(
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-const CHUNK_SIZE: u32 = 256;
+
 
 #[derive(Resource)]
 pub struct ShaderMapData {
     pub board_data: Handle<Image>,
     pub player_colors: Handle<Image>,
+    pub colors_dirty: bool,
 }
 
 fn sync_player_colors(game: &GameState, image: &mut Image) {
@@ -2489,6 +2493,7 @@ fn spawn_shader_map(
     ShaderMapData {
         board_data: board_handle,
         player_colors: colors_handle,
+        colors_dirty: false,
     }
 }
 
@@ -2781,7 +2786,7 @@ fn system_evaluate_game_over(
     if panel_q.iter().next().is_some() { return; }
 
     let alive_count = game.players.iter().filter(|p| p.alive).count();
-    let am_i_alive = game.players.iter().find(|p| p.id == my_id.0).map(|p| p.alive).unwrap_or(false);
+    let am_i_alive = game.player(my_id.0).map(|p| p.alive).unwrap_or(false);
 
     let mut show_panel = false;
     let mut victory = false;
