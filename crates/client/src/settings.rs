@@ -12,6 +12,11 @@ fn default_attack_ratio() -> f32 {
     0.2
 }
 
+/// Default HUD / map feedback scale (plan: ~2× vs legacy hardcoded sizes).
+fn default_hud_scale_2() -> f32 {
+    2.0
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct VisualSettingsConfig {
     /// Reserved for a future particle path; Enoki was removed (despawn races + perf).
@@ -60,6 +65,27 @@ pub struct UiSettingsConfig {
     /// Initial attack troop fraction (OpenFront `settings.attackRatio`); slider clamps to [0.01, 1.0].
     #[serde(default = "default_attack_ratio")]
     pub attack_ratio: f32,
+    /// Annulus radii for the click attack ring mesh (`setup_attack_ring_mesh`).
+    #[serde(default = "default_hud_scale_2")]
+    pub click_feedback_scale: f32,
+    /// Troop number label size and offset on the attack ping.
+    #[serde(default = "default_hud_scale_2")]
+    pub click_troop_label_scale: f32,
+    /// Local transport disc mesh scale (`FleetVisualMeshes` boat annulus).
+    #[serde(default = "default_hud_scale_2")]
+    pub fleet_boat_scale: f32,
+    /// Landing target ring mesh scale.
+    #[serde(default = "default_hud_scale_2")]
+    pub fleet_target_ring_scale: f32,
+    /// Wake speck mesh scale.
+    #[serde(default = "default_hud_scale_2")]
+    pub fleet_wake_scale: f32,
+    /// Bottom combat HUD: fonts, row paddings, slider, gaps (`spawn_bottom_combat_hud` + row sync).
+    #[serde(default = "default_hud_scale_2")]
+    pub combat_hud_scale: f32,
+    /// Show outgoing `WarpFleet` payload rows with recall (OpenFront `AttacksDisplay` transport list).
+    #[serde(default = "default_true")]
+    pub combat_hud_fleet_rows: bool,
 }
 
 impl Default for UiSettingsConfig {
@@ -71,6 +97,13 @@ impl Default for UiSettingsConfig {
             label_size_ref_tiles: 64.0,
             label_max_scale: 5.0,
             attack_ratio: 0.2,
+            click_feedback_scale: 2.0,
+            click_troop_label_scale: 2.0,
+            fleet_boat_scale: 2.0,
+            fleet_target_ring_scale: 2.0,
+            fleet_wake_scale: 2.0,
+            combat_hud_scale: 2.0,
+            combat_hud_fleet_rows: true,
         }
     }
 }

@@ -66,6 +66,10 @@ When we finally ported the new GPU map renderer (`border.wgsl`) to WASM, it work
 * **The Culprit:** Desktop OpenGL 4.x natively supports massive 32-bit texture formats (`R32Uint`, `Rgba32Float`), so our initial GPU architecture used them to store player IDs and colors. However, mobile WebGL2 is bound by **OpenGL ES 3.0** constraints. Mobile GPUs physically lack hardware support for filtering 32-bit floats without obscure extensions (`OES_texture_float_linear`), and many Adreno/Mali chips outright reject `R32Uint` framebuffers or storage textures.
 * **The Poka-Yoke (Mistake-Proofing):** When targeting WASM/Mobile with `wgpu`, never use 32-bit texture formats unless mathematically unavoidable. We downgraded the GPU data pipeline to strictly mobile-safe formats: `R32Uint` -> `R16Uint` (since player IDs only go up to 4095, fitting in 12 bits), and `Rgba32Float` -> `Rgba8Unorm` (since colors are 8-bit sRGB anyway). The shader `textureLoad` syntax `texture_2d<u32>` handled the WGSL-side type promotion automatically. The crash instantly vanished across all mobile devices with zero loss in visual precision.
 
+### 13. The B0001 Query Conflict Trap (Disjoint Queries)
+When querying the same components mutably (like `&mut Node`) across multiple `Query` parameters in the same system, Bevy will statically panic at startup with `error[B0001]` if it detects a potential intersection.
+* **The Poka-Yoke (Mistake-Proofing):** You MUST create perfectly disjoint sets using exhaustive `Without<T>` filters. If you have three UI queries `Query<&mut Node, With<A>>`, `Query<&mut Node, With<B>>`, and `Query<&mut Node, With<C>>`, the first query MUST explicitly define `(Without<B>, Without<C>)`, the second `(Without<A>, Without<C>)`, and so on. Do not assume Bevy knows `A`, `B`, and `C` are mutually exclusive; you must mathematically prove it to the ECS type system.
+
 ---
 ### 🤖 OpenClaw Integration Test
 This repository is currently being orchestrated and optimized via OpenClaw AI. Automated deployments, config management, and stress-testing logic have been validated.

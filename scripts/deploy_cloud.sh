@@ -74,7 +74,7 @@ WASM_FILE="dark_rift_client_${BUILD_TS}_bg.wasm"
 
 
 cp -a assets dist/assets
-
+cp -a web/favicon_io/* dist/
 LOADER_TEMPLATE="${ROOT}/web/index.html.template"
 if [[ ! -f "${LOADER_TEMPLATE}" ]]; then
   red "Missing loader template: ${LOADER_TEMPLATE}"

@@ -441,7 +441,8 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                         flex_grow: 1.0,
                         min_height: Val::Px(200.0),
                         flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(24.0),
+                        justify_content: JustifyContent::Center,
+                        column_gap: Val::Px(16.0),
                         row_gap: Val::Px(18.0),
                         align_items: AlignItems::Stretch,
                         ..default()
@@ -528,14 +529,12 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                                 UiTransform::default(),
                                 Node {
                                     width: Val::Percent(100.0),
-                                    min_height: Val::Px(92.0),
-                                    padding: UiRect::axes(Val::Px(24.0), Val::Px(20.0)),
-                                    flex_direction: FlexDirection::Column,
-                                    row_gap: Val::Px(6.0),
-                                    border_radius: BorderRadius::all(Val::Px(18.0)),
+                                    min_height: Val::Px(72.0),
+                                    padding: UiRect::axes(Val::Px(20.0), Val::Px(16.0)),
+                                    border_radius: BorderRadius::all(Val::Px(16.0)),
                                     border: UiRect::all(Val::Px(2.0)),
                                     justify_content: JustifyContent::Center,
-                                    align_items: AlignItems::FlexStart,
+                                    align_items: AlignItems::Center,
                                     ..default()
                                 },
                                 BackgroundColor(accent_solo_cyan().with_alpha(0.0)),
@@ -543,24 +542,14 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                             ))
                             .with_children(|btn| {
                                 btn.spawn((
-                                    Text::new("SOLO"),
+                                    Text::new("SINGLE PLAYER"),
                                     LobbyMenuAnimatedText(LobbyMenuTextRole::SoloPrimary),
                                     TextFont {
                                         font: font.clone(),
-                                        font_size: 28.0,
+                                        font_size: 22.0,
                                         ..default()
                                     },
                                     TextColor(base_text_color(LobbyMenuTextRole::SoloPrimary).with_alpha(0.0)),
-                                ));
-                                btn.spawn((
-                                    Text::new("Start a fast local match instantly."),
-                                    LobbyMenuAnimatedText(LobbyMenuTextRole::SoloSecondary),
-                                    TextFont {
-                                        font: font.clone(),
-                                        font_size: 16.0,
-                                        ..default()
-                                    },
-                                    TextColor(base_text_color(LobbyMenuTextRole::SoloSecondary).with_alpha(0.0)),
                                 ));
                             });
 

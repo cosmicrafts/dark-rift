@@ -172,9 +172,6 @@ struct HomeButton;
 struct ExitButton;
 
 #[derive(Component)]
-struct HudText;
-
-#[derive(Component)]
 struct FpsText;
 
 #[derive(Resource)]
@@ -326,6 +323,28 @@ struct CancelAttackButton(u64);
 #[derive(Resource, Default)]
 struct OutgoingAttackRowMap(std::collections::HashMap<u64, (Entity, Entity)>);
 
+/// Outgoing `WarpFleet` rows (OpenFront transport list); keys are `WarpFleet.id`.
+#[derive(Resource, Default)]
+struct OutgoingFleetRowMap(HashMap<u64, (Entity, Entity)>);
+
+#[derive(Component)]
+struct OutgoingFleetRowRoot;
+
+#[derive(Component)]
+struct OutgoingFleetLineText;
+
+#[derive(Component)]
+struct CancelFleetButton(u64);
+
+/// Slider inner rail (fixed height in design space; scaled by `combat_hud_scale`).
+#[derive(Component)]
+struct AttackRatioBarShell;
+
+#[inline]
+fn clamp_ui_scale(s: f32) -> f32 {
+    s.clamp(0.25, 8.0)
+}
+
 #[derive(Parser, Resource, Clone)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
@@ -413,8 +432,15 @@ fn main() {
             .init_resource::<FreshlyPaintedTiles>()
             .init_resource::<AttackRatio>()
             .init_resource::<OutgoingAttackRowMap>()
+            .init_resource::<OutgoingFleetRowMap>()
             .init_resource::<WaterPathfinderScratch>()
             .init_resource::<WaterComponents>();
+
+        // `StartGameParams` includes `ClientSettings` (HUD scale / attack ratio); headless still runs `start_game_core`.
+        app.insert_resource(ClientSettings {
+            config: build_client_settings_config(),
+            font: Handle::default(),
+        });
 
         // Network stack — same as normal client, but no visual plugins
         app.add_plugins(SharedProtocolPlugin)
@@ -465,9 +491,10 @@ fn main() {
         .init_resource::<PinchState>()
         .init_resource::<TouchGestureState>()
         .init_resource::<FreshlyPaintedTiles>()
-        .init_resource::<AttackRatio>()
-        .init_resource::<OutgoingAttackRowMap>()
-        .init_resource::<NetTiming>()
+            .init_resource::<AttackRatio>()
+            .init_resource::<OutgoingAttackRowMap>()
+            .init_resource::<OutgoingFleetRowMap>()
+            .init_resource::<NetTiming>()
         .init_resource::<OverlayDiagnostics>()
         .init_resource::<UiShellState>()
         .init_resource::<WaterPathfinderScratch>()
@@ -595,6 +622,7 @@ fn main() {
             system_sync_bottom_combat_hud,
             system_sync_outgoing_attack_rows,
             system_handle_cancel_click,
+            system_handle_recall_fleet_click,
         ).run_if(in_state(AppState::InGame)));
 
         app.add_systems(Update,
@@ -839,16 +867,21 @@ fn camera_movement_and_zoom(
         let mut drag_delta = Vec2::ZERO;
         
         if drag_state.is_dragging && !is_pinching {
-            // Process Mouse
-            for ev in motion_evr.read() {
-                drag_delta += ev.delta;
-            }
-            // Add Touch if mouse delta is null
-            if drag_delta == Vec2::ZERO && touch_delta != Vec2::ZERO {
-                drag_delta = touch_delta;
+            let mut raw_drag = Vec2::ZERO;
+            
+            if touches.iter().count() > 0 {
+                // Prefer touch on mobile (avoids DPI-scaled emulated MouseMotion spikes)
+                raw_drag = touch_delta;
+                drag_delta = raw_drag * 0.5; // Dampen mobile sensitivity significantly
+                let _ = motion_evr.read().count(); // Drain mouse events
+            } else {
+                for ev in motion_evr.read() {
+                    raw_drag += ev.delta;
+                }
+                drag_delta = raw_drag * 0.85; // Slightly dampen desktop mouse
             }
             
-            drag_state.accumulated_drag += drag_delta.length();
+            drag_state.accumulated_drag += raw_drag.length();
             
             if drag_delta != Vec2::ZERO {
                 // Screen coordinates: +X is right, +Y is down
@@ -898,34 +931,7 @@ fn setup_offline(
     overlay.status_line = "Replay Mode".to_string();
     overlay.ping_value = "offline".to_string();
 
-    commands
-        .spawn((
-            ChildOf(shell.top_bar),
-            Node {
-                align_self: AlignSelf::FlexStart,
-                width: Val::Auto,
-                min_width: Val::Px(200.0),
-                max_width: Val::Percent(72.0),
-                padding: UiRect::all(Val::Px(12.0)),
-                border: UiRect::all(Val::Px(2.0)),
-                border_radius: BorderRadius::all(Val::Px(12.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.05, 0.08, 0.1, 0.85)),
-            BorderColor::all(panel_border()),
-        ))
-        .with_children(|p| {
-            p.spawn((
-                HudText,
-                Text::new("Replay Mode\nTick: 0\nPing: offline"),
-                TextFont {
-                    font: settings.font.clone(),
-                    font_size: 15.0,
-                    ..default()
-                },
-                TextColor(Color::srgba(0.8, 0.8, 0.8, 1.0)),
-            ));
-        });
+
 
     commands
         .spawn((
@@ -939,21 +945,21 @@ fn setup_offline(
             },
         ))
         .with_children(|right_group| {
-            // FPS Pill
+            // Dev Diagnostics (FPS, Ping, Status) Pill
             right_group.spawn((
                 Node {
-                    padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                    padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
                     border_radius: BorderRadius::all(Val::Px(8.0)),
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.8)),
-            )).with_children(|fps_pill| {
-                fps_pill.spawn((
+            )).with_children(|pill| {
+                pill.spawn((
                     FpsText,
-                    Text::new("… FPS"),
+                    Text::new("Connecting…"),
                     TextFont {
                         font: settings.font.clone(),
-                        font_size: 16.0,
+                        font_size: 15.0,
                         ..default()
                     },
                     TextColor(Color::srgba(0.4, 0.9, 0.4, 1.0)),
@@ -1032,35 +1038,6 @@ fn setup_live(
             ChildOf(shell.top_bar),
             Node {
                 align_self: AlignSelf::FlexStart,
-                width: Val::Auto,
-                min_width: Val::Px(200.0),
-                max_width: Val::Percent(72.0),
-                padding: UiRect::all(Val::Px(12.0)),
-                border: UiRect::all(Val::Px(2.0)),
-                border_radius: BorderRadius::all(Val::Px(12.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.05, 0.08, 0.1, 0.85)),
-            BorderColor::all(panel_border()),
-        ))
-        .with_children(|p| {
-            p.spawn((
-                HudText,
-                Text::new("Connecting to server...\nTick: 0\nPing: connecting…"),
-                TextFont {
-                    font: settings.font.clone(),
-                    font_size: 15.0,
-                    ..default()
-                },
-                TextColor(Color::srgba(0.8, 0.8, 0.8, 1.0)),
-            ));
-        });
-
-    commands
-        .spawn((
-            ChildOf(shell.top_bar),
-            Node {
-                align_self: AlignSelf::FlexStart,
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
                 column_gap: Val::Px(12.0),
@@ -1068,24 +1045,24 @@ fn setup_live(
             },
         ))
         .with_children(|right_group| {
-            // FPS Pill
+            // Dev Diagnostics (FPS, Ping, Status) Pill
             right_group.spawn((
                 Node {
-                    padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                    padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
                     border_radius: BorderRadius::all(Val::Px(8.0)),
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.8)),
-            )).with_children(|fps_pill| {
-                fps_pill.spawn((
+            )).with_children(|pill| {
+                pill.spawn((
                     FpsText,
-                    Text::new("… FPS"),
+                    Text::new("Connecting…"),
                     TextFont {
                         font: settings.font.clone(),
-                        font_size: 16.0,
+                        font_size: 15.0,
                         ..default()
                     },
-                    TextColor(Color::srgba(0.4, 0.9, 0.4, 1.0)), // Bright green FPS
+                    TextColor(Color::srgba(0.4, 0.9, 0.4, 1.0)),
                 ));
             });
 
@@ -1305,7 +1282,8 @@ fn system_update_perf_overlay(
 }
 
 /// Bottom-center stack: attack summary (OpenFront `AttacksDisplay`) + ratio slider row (`ControlPanel` row 2).
-fn spawn_bottom_combat_hud(commands: &mut Commands, shell: &HudShellRegions, observer: bool) {
+fn spawn_bottom_combat_hud(commands: &mut Commands, shell: &HudShellRegions, observer: bool, hud_scale: f32) {
+    let s = clamp_ui_scale(hud_scale);
     let vis = if observer {
         Visibility::Hidden
     } else {
@@ -1322,8 +1300,8 @@ fn spawn_bottom_combat_hud(commands: &mut Commands, shell: &HudShellRegions, obs
                 width: Val::Percent(100.0),
                 align_items: AlignItems::Center,
                 flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(12.0),
-                padding: UiRect::bottom(Val::Px(16.0)),
+                row_gap: Val::Px(12.0 * s),
+                padding: UiRect::bottom(Val::Px(16.0 * s)),
                 ..default()
             },
         ))
@@ -1331,13 +1309,13 @@ fn spawn_bottom_combat_hud(commands: &mut Commands, shell: &HudShellRegions, obs
             root.spawn((
                 Node {
                     width: Val::Percent(96.0),
-                    min_width: Val::Px(280.0),
-                    max_width: Val::Px(800.0),
-                    padding: UiRect::all(Val::Px(16.0)),
+                    min_width: Val::Px(280.0 * s),
+                    max_width: Val::Px(800.0 * s),
+                    padding: UiRect::all(Val::Px(16.0 * s)),
                     flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(8.0),
-                    border: UiRect::all(Val::Px(2.0)),
-                    border_radius: BorderRadius::all(Val::Px(12.0)),
+                    row_gap: Val::Px(8.0 * s),
+                    border: UiRect::all(Val::Px(2.0 * s)),
+                    border_radius: BorderRadius::all(Val::Px(12.0 * s)),
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.05, 0.08, 0.1, 0.9)),
@@ -1345,7 +1323,7 @@ fn spawn_bottom_combat_hud(commands: &mut Commands, shell: &HudShellRegions, obs
                 AttackSummaryText,
                 Text::new(""),
                 TextFont {
-                    font_size: 16.0,
+                    font_size: 16.0 * s,
                     ..default()
                 },
                 TextColor(Color::srgba(0.9, 0.9, 0.9, 1.0)),
@@ -1355,11 +1333,11 @@ fn spawn_bottom_combat_hud(commands: &mut Commands, shell: &HudShellRegions, obs
                 OutgoingRowsContainer,
                 Node {
                     width: Val::Percent(96.0),
-                    min_width: Val::Px(280.0),
-                    max_width: Val::Px(800.0),
+                    min_width: Val::Px(280.0 * s),
+                    max_width: Val::Px(800.0 * s),
                     flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(8.0),
-                    max_height: Val::Px(280.0),
+                    row_gap: Val::Px(8.0 * s),
+                    max_height: Val::Px(280.0 * s),
                     overflow: Overflow::scroll_y(),
                     ..default()
                 },
@@ -1368,13 +1346,13 @@ fn spawn_bottom_combat_hud(commands: &mut Commands, shell: &HudShellRegions, obs
             root.spawn((
                 Node {
                     width: Val::Percent(96.0),
-                    max_width: Val::Px(800.0),
+                    max_width: Val::Px(800.0 * s),
                     flex_direction: FlexDirection::Row,
                     align_items: AlignItems::Center,
-                    column_gap: Val::Px(16.0),
+                    column_gap: Val::Px(16.0 * s),
                     flex_wrap: FlexWrap::Wrap,
-                    padding: UiRect::all(Val::Px(12.0)),
-                    border_radius: BorderRadius::all(Val::Px(12.0)),
+                    padding: UiRect::all(Val::Px(12.0 * s)),
+                    border_radius: BorderRadius::all(Val::Px(12.0 * s)),
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.1, 0.1, 0.15, 0.85)),
@@ -1384,12 +1362,12 @@ fn spawn_bottom_combat_hud(commands: &mut Commands, shell: &HudShellRegions, obs
                     AttackRatioReadout,
                     Text::new(""),
                     TextFont {
-                        font_size: 18.0,
+                        font_size: 18.0 * s,
                         ..default()
                     },
                     TextColor(Color::WHITE),
                     Node {
-                        width: Val::Px(180.0),
+                        width: Val::Px(180.0 * s),
                         ..default()
                     },
                 ));
@@ -1400,7 +1378,7 @@ fn spawn_bottom_combat_hud(commands: &mut Commands, shell: &HudShellRegions, obs
                     RelativeCursorPosition::default(),
                     Node {
                         flex_grow: 1.0,
-                        height: Val::Px(32.0),
+                        height: Val::Px(32.0 * s),
                         align_items: AlignItems::Center,
                         justify_content: JustifyContent::Stretch,
                         ..default()
@@ -1409,12 +1387,13 @@ fn spawn_bottom_combat_hud(commands: &mut Commands, shell: &HudShellRegions, obs
                 .with_children(|track| {
                     track
                         .spawn((
+                            AttackRatioBarShell,
                             Node {
                                 width: Val::Percent(100.0),
-                                height: Val::Px(16.0),
+                                height: Val::Px(16.0 * s),
                                 flex_direction: FlexDirection::Row,
                                 overflow: Overflow::clip(),
-                                border_radius: BorderRadius::all(Val::Px(8.0)),
+                                border_radius: BorderRadius::all(Val::Px(8.0 * s)),
                                 ..default()
                             },
                         ))
@@ -1475,6 +1454,7 @@ pub struct StartGameParams<'w> {
     highest: ResMut<'w, HighestReceivedTurn>,
     overlay: Option<ResMut<'w, OverlayDiagnostics>>,
     shell: Option<Res<'w, HudShellRegions>>,
+    settings: Res<'w, ClientSettings>,
     meshes: Option<ResMut<'w, Assets<Mesh>>>,
     materials: Option<ResMut<'w, Assets<border_material::BorderMaterial>>>,
     images: Option<ResMut<'w, Assets<Image>>>,
@@ -1587,6 +1567,8 @@ fn start_game_core(
 ) {
             if params.ready.0 { return; }
 
+            let hud_s = clamp_ui_scale(params.settings.config.ui.combat_hud_scale);
+
             if let Some(pid) = msg.my_player_id {
                 info!("🎮 Game starting! I am player {}", pid);
                 params.my_id.0 = pid;
@@ -1646,7 +1628,7 @@ fn start_game_core(
             params.next_state.set(AppState::InGame);
 
             if let Some(s) = &params.shell {
-                spawn_bottom_combat_hud(commands, s, msg.my_player_id.is_none());
+                spawn_bottom_combat_hud(commands, s, msg.my_player_id.is_none(), hud_s);
             }
 
             if let Some(over) = params.overlay.as_mut() {
@@ -1702,24 +1684,36 @@ fn handle_server_turns(
 
 // ─── Input ────────────────────────────────────────────────────────────────────
 
-fn setup_attack_ring_mesh(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
-    let mesh = Annulus::new(5.0, 8.8)
+fn setup_attack_ring_mesh(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    settings: Res<ClientSettings>,
+) {
+    let s = clamp_ui_scale(settings.config.ui.click_feedback_scale);
+    let mesh = Annulus::new(5.0 * s, 8.8 * s)
         .mesh()
         .resolution(56)
         .build();
     commands.insert_resource(AttackRingMesh(meshes.add(mesh)));
 }
 
-fn setup_fleet_visual_meshes(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
-    let boat = Annulus::new(0.35, 2.9)
+fn setup_fleet_visual_meshes(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    settings: Res<ClientSettings>,
+) {
+    let sb = clamp_ui_scale(settings.config.ui.fleet_boat_scale);
+    let sw = clamp_ui_scale(settings.config.ui.fleet_wake_scale);
+    let st = clamp_ui_scale(settings.config.ui.fleet_target_ring_scale);
+    let boat = Annulus::new(0.35 * sb, 2.9 * sb)
         .mesh()
         .resolution(28)
         .build();
-    let wake_dot = Annulus::new(0.1, 1.15)
+    let wake_dot = Annulus::new(0.1 * sw, 1.15 * sw)
         .mesh()
         .resolution(14)
         .build();
-    let target_ring = Annulus::new(4.0, 7.4)
+    let target_ring = Annulus::new(4.0 * st, 7.4 * st)
         .mesh()
         .resolution(52)
         .build();
@@ -1804,8 +1798,10 @@ fn spawn_attack_command_ring(
     let [r, g, b] = player_color;
     let mat = materials.add(ColorMaterial::from_color(Color::srgba(r, g, b, 0.97)));
     let label = format!("{:.0}", send);
-    let ox = TILE_SIZE * 1.75;
-    let oy = TILE_SIZE * 0.35;
+    let ls = clamp_ui_scale(settings.config.ui.click_troop_label_scale);
+    let ox = TILE_SIZE * 1.75 * ls;
+    let oy = TILE_SIZE * 0.35 * ls;
+    let troop_font = 28.0 * ls;
     commands
         .spawn((
             AttackCommandRing {
@@ -1830,7 +1826,7 @@ fn spawn_attack_command_ring(
                 Text2d::new(label),
                 TextFont {
                     font: settings.font.clone(),
-                    font_size: 28.0,
+                    font_size: troop_font,
                     weight: FontWeight::BOLD,
                     ..default()
                 },
@@ -2420,20 +2416,12 @@ fn handle_tile_change(
 fn update_hud(
     game_opt:  Option<Res<GameState>>,
     overlay: Res<OverlayDiagnostics>,
-    mut hud_q: Query<&mut Text, (With<HudText>, Without<FpsText>)>,
-    mut fps_q: Query<&mut Text, (With<FpsText>, Without<HudText>)>,
+    mut fps_q: Query<&mut Text, With<FpsText>>,
 ) {
     let tick = game_opt.map(|g| g.tick).unwrap_or(0);
     
-    if let Some(mut text) = hud_q.iter_mut().next() {
-        let final_str = format!("{}\nTick: {}\nPing: {}", overlay.status_line, tick, overlay.ping_value);
-        if **text != final_str {
-            **text = final_str;
-        }
-    }
-
     if let Some(mut fps_text) = fps_q.iter_mut().next() {
-        let fps_str = format!("{} FPS", overlay.fps_value);
+        let fps_str = format!("{}  |  Ping: {}  |  {} FPS", overlay.status_line, overlay.ping_value, overlay.fps_value);
         if **fps_text != fps_str {
             **fps_text = fps_str;
         }
@@ -2570,19 +2558,70 @@ fn system_sync_bottom_combat_hud(
     game_opt: Option<Res<GameState>>,
     my_id: Res<MyPlayerId>,
     attack_ratio: Res<AttackRatio>,
+    settings: Res<ClientSettings>,
     q_exec: Query<&AttackExecution>,
-    mut q_summary: Query<&mut Text, (With<AttackSummaryText>, Without<AttackRatioReadout>)>,
-    mut q_readout: Query<&mut Text, (With<AttackRatioReadout>, Without<AttackSummaryText>)>,
-    mut q_fill: Query<&mut Node, With<AttackRatioFill>>,
+    mut q_summary: Query<
+        (&mut Text, &mut TextFont),
+        (With<AttackSummaryText>, Without<AttackRatioReadout>),
+    >,
+    mut q_readout: Query<
+        (&mut Text, &mut TextFont, &mut Node),
+        (
+            With<AttackRatioReadout>,
+            Without<AttackSummaryText>,
+            Without<AttackRatioTrack>,
+            Without<AttackRatioBarShell>,
+            Without<AttackRatioFill>,
+        ),
+    >,
+    mut q_track: Query<
+        &mut Node,
+        (
+            With<AttackRatioTrack>,
+            Without<AttackRatioReadout>,
+            Without<AttackRatioBarShell>,
+            Without<AttackRatioFill>,
+        ),
+    >,
+    mut q_bar_shell: Query<
+        &mut Node,
+        (
+            With<AttackRatioBarShell>,
+            Without<AttackRatioReadout>,
+            Without<AttackRatioTrack>,
+            Without<AttackRatioFill>,
+        ),
+    >,
+    mut q_fill: Query<
+        &mut Node,
+        (
+            With<AttackRatioFill>,
+            Without<AttackRatioReadout>,
+            Without<AttackRatioTrack>,
+            Without<AttackRatioBarShell>,
+        ),
+    >,
 ) {
     let Some(game) = game_opt else { return };
-    let (Ok(mut summary), Ok(mut readout), Ok(mut fill)) = (
+    let (Ok((mut summary, mut sum_font)), Ok((mut readout, mut read_font, mut read_node)), Ok(mut fill)) = (
         q_summary.single_mut(),
         q_readout.single_mut(),
         q_fill.single_mut(),
     ) else {
         return;
     };
+
+    let s = clamp_ui_scale(settings.config.ui.combat_hud_scale);
+    sum_font.font_size = 16.0 * s;
+    read_font.font_size = 18.0 * s;
+    read_node.width = Val::Px(180.0 * s);
+    if let Ok(mut n) = q_track.single_mut() {
+        n.height = Val::Px(32.0 * s);
+    }
+    if let Ok(mut n) = q_bar_shell.single_mut() {
+        n.height = Val::Px(16.0 * s);
+        n.border_radius = BorderRadius::all(Val::Px(8.0 * s));
+    }
 
     let r = attack_ratio.0.clamp(0.01, 1.0);
     fill.width = Val::Percent(r * 100.0);
@@ -2651,11 +2690,14 @@ fn system_sync_outgoing_attack_rows(
     game_opt: Option<Res<GameState>>,
     slot_q: Query<Entity, With<OutgoingRowsContainer>>,
     q_exec: Query<&AttackExecution>,
+    q_fleet: Query<&WarpFleet>,
     my_id: Res<MyPlayerId>,
     settings: Res<ClientSettings>,
     ui_shell: Res<UiShellState>,
     mut row_map: ResMut<OutgoingAttackRowMap>,
-    mut q_line: Query<&mut Text, With<OutgoingAttackLineText>>,
+    mut fleet_row_map: ResMut<OutgoingFleetRowMap>,
+    mut q_attack_line: Query<(&mut Text, &mut TextFont), (With<OutgoingAttackLineText>, Without<OutgoingFleetLineText>)>,
+    mut q_fleet_line: Query<(&mut Text, &mut TextFont), (With<OutgoingFleetLineText>, Without<OutgoingAttackLineText>)>,
 ) {
     let Ok(slot) = slot_q.single() else {
         return;
@@ -2665,11 +2707,22 @@ fn system_sync_outgoing_attack_rows(
         for (_, (row_e, _)) in row_map.0.drain() {
             commands.entity(row_e).despawn();
         }
+        for (_, (row_e, _)) in fleet_row_map.0.drain() {
+            commands.entity(row_e).despawn();
+        }
         return;
     }
     let Some(game) = game_opt else {
         return;
     };
+
+    let s = clamp_ui_scale(settings.config.ui.combat_hud_scale);
+    let row_font = 11.5 * s;
+    let cancel_icon_font = 14.0 * s;
+    let (tw, th) = touch_target_for_breakpoint(ui_shell.breakpoint);
+    let cancel_w = tw * s;
+    let cancel_h = th * s;
+    let row_radius = panel_radius_for_breakpoint(ui_shell.breakpoint) * s;
 
     let mut outgoing: Vec<&AttackExecution> = q_exec
         .iter()
@@ -2692,7 +2745,6 @@ fn system_sync_outgoing_attack_rows(
     }
 
     for exec in outgoing {
-        let (cancel_w, cancel_h) = touch_target_for_breakpoint(ui_shell.breakpoint);
         let who = if exec.target_owner == 0 {
             "Neutral".to_string()
         } else {
@@ -2709,10 +2761,11 @@ fn system_sync_outgoing_attack_rows(
         );
 
         if let Some((_, text_e)) = row_map.0.get(&exec.id).copied() {
-            if let Ok(mut t) = q_line.get_mut(text_e) {
+            if let Ok((mut t, mut tf)) = q_attack_line.get_mut(text_e) {
                 if **t != line {
                     **t = line;
                 }
+                tf.font_size = row_font;
             }
         } else {
             let font = settings.font.clone();
@@ -2726,10 +2779,10 @@ fn system_sync_outgoing_attack_rows(
                         flex_direction: FlexDirection::Row,
                         align_items: AlignItems::Center,
                         justify_content: JustifyContent::SpaceBetween,
-                        column_gap: Val::Px(8.0),
-                        padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                        border: UiRect::all(Val::Px(1.0)),
-                        border_radius: BorderRadius::all(Val::Px(panel_radius_for_breakpoint(ui_shell.breakpoint))),
+                        column_gap: Val::Px(8.0 * s),
+                        padding: UiRect::axes(Val::Px(10.0 * s), Val::Px(6.0 * s)),
+                        border: UiRect::all(Val::Px(1.0 * s)),
+                        border_radius: BorderRadius::all(Val::Px(row_radius)),
                         ..default()
                     },
                     BackgroundColor(panel_bg()),
@@ -2744,7 +2797,7 @@ fn system_sync_outgoing_attack_rows(
                     Text::new(line),
                     TextFont {
                         font: font.clone(),
-                        font_size: 11.5,
+                        font_size: row_font,
                         ..default()
                     },
                     TextColor(text_primary()),
@@ -2765,7 +2818,7 @@ fn system_sync_outgoing_attack_rows(
                         height: Val::Px(cancel_h),
                         justify_content: JustifyContent::Center,
                         align_items: AlignItems::Center,
-                        border_radius: BorderRadius::all(Val::Px(8.0)),
+                        border_radius: BorderRadius::all(Val::Px(8.0 * s)),
                         ..default()
                     },
                     BackgroundColor(accent_danger()),
@@ -2776,7 +2829,7 @@ fn system_sync_outgoing_attack_rows(
                         Text::new("✕"),
                         TextFont {
                             font,
-                            font_size: 14.0,
+                            font_size: cancel_icon_font,
                             ..default()
                         },
                         TextColor(Color::WHITE),
@@ -2784,6 +2837,128 @@ fn system_sync_outgoing_attack_rows(
                 });
 
             row_map.0.insert(exec_id, (row_e, text_e));
+        }
+    }
+
+    // Outgoing boats (`WarpFleet`) — OpenFront `AttacksDisplay` transport rows + recall.
+    if !settings.config.ui.combat_hud_fleet_rows {
+        for (_, (row_e, _)) in fleet_row_map.0.drain() {
+            commands.entity(row_e).despawn();
+        }
+        return;
+    }
+
+    let mut fleets: Vec<&WarpFleet> = q_fleet
+        .iter()
+        .filter(|f| f.owner_id == my_id.0 && !f.retreating)
+        .collect();
+    fleets.sort_by_key(|f| f.id);
+
+    let desired_f: HashSet<u64> = fleets.iter().map(|f| f.id).collect();
+    let stale_f: Vec<u64> = fleet_row_map
+        .0
+        .keys()
+        .copied()
+        .filter(|id| !desired_f.contains(id))
+        .collect();
+    for id in stale_f {
+        if let Some((row_e, _)) = fleet_row_map.0.remove(&id) {
+            commands.entity(row_e).despawn();
+        }
+    }
+
+    for fleet in fleets {
+        let who = if fleet.target_owner == 0 {
+            "Neutral".to_string()
+        } else {
+            game
+                .player(fleet.target_owner)
+                .map(|p| hud_trunc_name(&p.name, 14))
+                .unwrap_or_else(|| format!("{}", fleet.target_owner))
+        };
+        let line = format!(
+            "⛵ → {} — {:.0} trp",
+            who,
+            fleet.troops.max(0.0),
+        );
+
+        if let Some((_, text_e)) = fleet_row_map.0.get(&fleet.id).copied() {
+            if let Ok((mut t, mut tf)) = q_fleet_line.get_mut(text_e) {
+                if **t != line {
+                    **t = line;
+                }
+                tf.font_size = row_font;
+            }
+        } else {
+            let font = settings.font.clone();
+            let fleet_id = fleet.id;
+            let row_e = commands
+                .spawn((
+                    ChildOf(slot),
+                    OutgoingFleetRowRoot,
+                    Node {
+                        width: Val::Percent(100.0),
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::SpaceBetween,
+                        column_gap: Val::Px(8.0 * s),
+                        padding: UiRect::axes(Val::Px(10.0 * s), Val::Px(6.0 * s)),
+                        border: UiRect::all(Val::Px(1.0 * s)),
+                        border_radius: BorderRadius::all(Val::Px(row_radius)),
+                        ..default()
+                    },
+                    BackgroundColor(panel_bg()),
+                    BorderColor::all(panel_border()),
+                ))
+                .id();
+
+            let text_e = commands
+                .spawn((
+                    ChildOf(row_e),
+                    OutgoingFleetLineText,
+                    Text::new(line),
+                    TextFont {
+                        font: font.clone(),
+                        font_size: row_font,
+                        ..default()
+                    },
+                    TextColor(text_primary()),
+                    Node {
+                        flex_grow: 1.0,
+                        ..default()
+                    },
+                ))
+                .id();
+
+            commands
+                .spawn((
+                    ChildOf(row_e),
+                    Button,
+                    CancelFleetButton(fleet_id),
+                    Node {
+                        width: Val::Px(cancel_w),
+                        height: Val::Px(cancel_h),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border_radius: BorderRadius::all(Val::Px(8.0 * s)),
+                        ..default()
+                    },
+                    BackgroundColor(accent_danger()),
+                    BorderColor::all(accent_danger_border()),
+                ))
+                .with_children(|b| {
+                    b.spawn((
+                        Text::new("✕"),
+                        TextFont {
+                            font,
+                            font_size: cancel_icon_font,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                    ));
+                });
+
+            fleet_row_map.0.insert(fleet_id, (row_e, text_e));
         }
     }
 }
@@ -2803,6 +2978,26 @@ fn system_handle_cancel_click(
         for mut sender in senders.iter_mut() {
             let _ = sender.send::<ReliableChannel>(ClientGameplayMessage {
                 intent: GameplayIntent::CancelAttack { attack_id },
+            });
+        }
+    }
+}
+
+fn system_handle_recall_fleet_click(
+    interaction_q: Query<
+        (&Interaction, &CancelFleetButton),
+        (Changed<Interaction>, With<Button>),
+    >,
+    mut senders: Query<&mut MessageSender<ClientGameplayMessage>>,
+) {
+    for (interaction, btn) in &interaction_q {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        let fleet_id = btn.0;
+        for mut sender in senders.iter_mut() {
+            let _ = sender.send::<ReliableChannel>(ClientGameplayMessage {
+                intent: GameplayIntent::RecallFleet { fleet_id },
             });
         }
     }
@@ -3188,6 +3383,7 @@ fn system_cleanup_ingame_entities(
     mut pending: ResMut<PendingTicks>,
     mut highest: ResMut<HighestReceivedTurn>,
     mut outgoing_map: ResMut<OutgoingAttackRowMap>,
+    mut outgoing_fleet_map: ResMut<OutgoingFleetRowMap>,
     mut fresh_tiles: ResMut<FreshlyPaintedTiles>,
     q_ingame: Query<Entity, With<InGameEntity>>,
     q_execs: Query<Entity, With<AttackExecution>>,
@@ -3197,6 +3393,7 @@ fn system_cleanup_ingame_entities(
     pending.0 = 0;
     highest.0 = None;
     outgoing_map.0.clear();
+    outgoing_fleet_map.0.clear();
     fresh_tiles.tiles.clear();
     
     for e in q_ingame.iter() {

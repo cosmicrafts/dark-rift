@@ -7,8 +7,21 @@ use crate::InGameEntity;
 #[derive(Component)]
 pub struct LeaderboardRoot;
 
-#[derive(Component)]
-pub struct LeaderboardEntryText(pub usize);
+#[derive(Component)] pub struct LbCellRank(pub usize);
+#[derive(Component)] pub struct LbCellName(pub usize);
+#[derive(Component)] pub struct LbCellOwned(pub usize);
+#[derive(Component)] pub struct LbCellGold(pub usize);
+#[derive(Component)] pub struct LbCellMax(pub usize);
+
+pub fn format_short(v: f64) -> String {
+    if v >= 1_000_000.0 {
+        format!("{:.2}M", v / 1_000_000.0)
+    } else if v >= 1_000.0 {
+        format!("{:.0}K", v / 1_000.0)
+    } else {
+        format!("{:.0}", v)
+    }
+}
 
 pub fn setup_leaderboard(
     mut commands: Commands,
@@ -29,47 +42,63 @@ pub fn setup_leaderboard(
                 left: Val::Px(SPACE_3),
                 flex_direction: FlexDirection::Column,
                 padding: UiRect::all(Val::Px(SPACE_3)),
-                row_gap: Val::Px(SPACE_2),
+                row_gap: Val::Px(10.0),
                 border_radius: BorderRadius::all(Val::Px(PANEL_RADIUS)),
+                width: Val::Px(420.0),
                 ..default()
             },
-            BackgroundColor(panel_bg()),
+            BackgroundColor(Color::srgba(0.08, 0.11, 0.16, 0.95)),
         ))
         .insert(BorderColor::all(panel_border()))
         .insert(GlobalZIndex(850))
         .with_children(|parent| {
-        parent.spawn((
-            Text::new("LEADERBOARD"),
-            TextFont {
-                font: font.clone(),
-                font_size: 16.0,
+            // Header Row
+            parent.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                width: Val::Percent(100.0),
+                border: UiRect::bottom(Val::Px(1.0)),
+                padding: UiRect::bottom(Val::Px(6.0)),
                 ..default()
-            },
-            TextColor(accent_primary()),
-            Node {
-                margin: UiRect::bottom(Val::Px(SPACE_2)),
-                ..default()
-            },
-        ));
+            }).insert(BorderColor::all(Color::srgba(0.3, 0.4, 0.5, 0.5)))
+            .with_children(|row| {
+                let fs = 14.0;
+                let c = Color::srgba(0.8, 0.8, 0.85, 1.0);
+                row.spawn((Text::new("#"), TextFont { font: font.clone(), font_size: fs, ..default() }, TextColor(c), Node { width: Val::Px(30.0), ..default() }));
+                row.spawn((Text::new("Player"), TextFont { font: font.clone(), font_size: fs, ..default() }, TextColor(c), Node { width: Val::Px(140.0), ..default() }));
+                row.spawn((Text::new("Owned..."), TextFont { font: font.clone(), font_size: fs, ..default() }, TextColor(c), Node { width: Val::Px(70.0), ..default() }));
+                row.spawn((Text::new("Gold"), TextFont { font: font.clone(), font_size: fs, ..default() }, TextColor(c), Node { width: Val::Px(60.0), ..default() }));
+                row.spawn((Text::new("Max troops"), TextFont { font: font.clone(), font_size: fs, ..default() }, TextColor(c), Node { width: Val::Px(80.0), ..default() }));
+            });
 
-        for i in 0..5 {
-            parent.spawn((
-                LeaderboardEntryText(i),
-                Text::new(""),
-                TextFont {
-                    font: font.clone(),
-                    font_size: 14.0,
+            // 5 Rows
+            for i in 0..5 {
+                parent.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    width: Val::Percent(100.0),
+                    border: UiRect::bottom(Val::Px(1.0)),
+                    padding: UiRect::bottom(Val::Px(4.0)),
                     ..default()
-                },
-                TextColor(text_primary()),
-            ));
-        }
-    });
+                }).insert(BorderColor::all(Color::srgba(0.3, 0.4, 0.5, 0.2)))
+                .with_children(|row| {
+                    let fs = 15.0;
+                    let c = Color::WHITE;
+                    row.spawn((LbCellRank(i), Text::new(""), TextFont { font: font.clone(), font_size: fs, ..default() }, TextColor(c), Node { width: Val::Px(30.0), ..default() }));
+                    row.spawn((LbCellName(i), Text::new(""), TextFont { font: font.clone(), font_size: fs, ..default() }, TextColor(c), Node { width: Val::Px(140.0), ..default() }));
+                    row.spawn((LbCellOwned(i), Text::new(""), TextFont { font: font.clone(), font_size: fs, ..default() }, TextColor(c), Node { width: Val::Px(70.0), ..default() }));
+                    row.spawn((LbCellGold(i), Text::new(""), TextFont { font: font.clone(), font_size: fs, ..default() }, TextColor(c), Node { width: Val::Px(60.0), ..default() }));
+                    row.spawn((LbCellMax(i), Text::new(""), TextFont { font: font.clone(), font_size: fs, ..default() }, TextColor(c), Node { width: Val::Px(80.0), ..default() }));
+                });
+            }
+        });
 }
 
 pub fn system_update_leaderboard(
     game_opt: Option<Res<GameState>>,
-    mut q_entries: Query<(&LeaderboardEntryText, &mut Text, &mut TextColor)>,
+    mut q_rank: Query<(&LbCellRank, &mut Text), (Without<LbCellName>, Without<LbCellOwned>, Without<LbCellGold>, Without<LbCellMax>)>,
+    mut q_name: Query<(&LbCellName, &mut Text, &mut TextColor), (Without<LbCellRank>, Without<LbCellOwned>, Without<LbCellGold>, Without<LbCellMax>)>,
+    mut q_owned: Query<(&LbCellOwned, &mut Text), (Without<LbCellRank>, Without<LbCellName>, Without<LbCellGold>, Without<LbCellMax>)>,
+    mut q_gold: Query<(&LbCellGold, &mut Text), (Without<LbCellRank>, Without<LbCellName>, Without<LbCellOwned>, Without<LbCellMax>)>,
+    mut q_max: Query<(&LbCellMax, &mut Text), (Without<LbCellRank>, Without<LbCellName>, Without<LbCellOwned>, Without<LbCellGold>)>,
     my_id: Option<Res<crate::MyPlayerId>>,
     mut cached_land: Local<Option<f32>>,
 ) {
@@ -80,7 +109,6 @@ pub fn system_update_leaderboard(
     let mut sorted_players: Vec<_> = game.players.iter().filter(|p| p.alive).collect();
     sorted_players.sort_by(|a, b| b.tile_count.cmp(&a.tile_count));
     
-    // Lazy count total land tiles (since terrain is immutable) only ONCE
     let total_land = match *cached_land {
         Some(val) => val,
         None => {
@@ -89,20 +117,38 @@ pub fn system_update_leaderboard(
             val
         }
     };
-    
-    for (entry, mut text, mut text_color) in q_entries.iter_mut() {
-        if let Some(p) = sorted_players.get(entry.0) {
-            let percentage = (p.tile_count as f32 / total_land) * 100.0;
-            text.0 = format!("{}. {} - {:.1}%", entry.0 + 1, p.name, percentage);
-            
-            // Highlight my player
-            if p.id == my_player_id {
-                text_color.0 = accent_primary();
-            } else {
-                text_color.0 = text_primary();
-            }
-        } else {
-            text.0 = String::new();
+
+    let mut update_cell = |idx: usize, p_opt: Option<&&dark_rift_shared::player::Player>| {
+        let (rank_str, name_str, owned_str, gold_str, max_str, is_me) = match p_opt {
+            Some(p) => {
+                let percentage = (p.tile_count as f32 / total_land) * 100.0;
+                let mut trunc_name = p.name.clone();
+                if trunc_name.chars().count() > 14 {
+                    trunc_name = trunc_name.chars().take(12).collect::<String>() + "...";
+                }
+                (
+                    format!("{}", idx + 1),
+                    trunc_name,
+                    format!("{:.1}%", percentage),
+                    format_short(p.troops),
+                    format_short(p.max_troops),
+                    p.id == my_player_id
+                )
+            },
+            None => (String::new(), String::new(), String::new(), String::new(), String::new(), false)
+        };
+
+        if let Some((_, mut text)) = q_rank.iter_mut().find(|(c, _)| c.0 == idx) { text.0 = rank_str; }
+        if let Some((_, mut text, mut color)) = q_name.iter_mut().find(|(c, _, _)| c.0 == idx) { 
+            text.0 = name_str; 
+            color.0 = if is_me { accent_primary() } else { Color::WHITE };
         }
+        if let Some((_, mut text)) = q_owned.iter_mut().find(|(c, _)| c.0 == idx) { text.0 = owned_str; }
+        if let Some((_, mut text)) = q_gold.iter_mut().find(|(c, _)| c.0 == idx) { text.0 = gold_str; }
+        if let Some((_, mut text)) = q_max.iter_mut().find(|(c, _)| c.0 == idx) { text.0 = max_str; }
+    };
+
+    for i in 0..5 {
+        update_cell(i, sorted_players.get(i));
     }
 }
