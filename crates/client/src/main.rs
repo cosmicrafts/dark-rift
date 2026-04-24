@@ -391,15 +391,21 @@ fn main() {
            ).chain().run_if(in_state(AppState::InGame)));
     } else {
         // ── NORMAL (GRAPHICAL) MODE ────────────────────────────────────────────
-        app.add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "Dark Rift — Multiplayer".to_string(),
-                resolution: (1280u32, 720u32).into(),
-                fit_canvas_to_parent: true,
+        app.add_plugins(DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "Dark Rift — Multiplayer".to_string(),
+                    resolution: (1280u32, 720u32).into(),
+                    fit_canvas_to_parent: true,
+                    ..default()
+                }),
                 ..default()
-            }),
-            ..default()
-        }));
+            })
+            // Disable AudioPlugin: no audio is used, and on WASM it crashes due to
+            // browser autoplay policy blocking AudioBufferSourceNode.start() before
+            // user gesture (cpal/rodio → bevy_audio fatal error).
+            .disable::<bevy::audio::AudioPlugin>()
+        );
 
         app.insert_resource(bevy::winit::WinitSettings {
             focused_mode: bevy::winit::UpdateMode::Continuous,
@@ -465,6 +471,7 @@ fn main() {
         if !cli.bot {
             // Visual-only plugins — skip entirely in headless mode
             app.add_plugins(EnokiPlugin)
+               .add_plugins(bevy::sprite_render::Material2dPlugin::<border_material::BorderMaterial>::default())
                .init_resource::<CombatVfxCache>();
         }
 
@@ -556,7 +563,7 @@ fn main() {
         // eliminating the old chunk texture uploads entirely.
         app.add_systems(Update, (
             handle_tile_change,
-
+            update_water_animation_time,
         ).run_if(in_state(AppState::InGame)));
         
         app.add_systems(
@@ -804,7 +811,7 @@ fn setup_offline(
     mut ready: ResMut<GameReady>,
     director: NonSend<ReplayDirector>,
     mut meshes: ResMut<Assets<Mesh>>,
-
+    mut materials: ResMut<Assets<border_material::BorderMaterial>>,
     mut images: ResMut<Assets<Image>>,
     settings: Res<ClientSettings>,
     mut overlay: ResMut<OverlayDiagnostics>,
@@ -927,7 +934,7 @@ fn setup_offline(
         game.spawn_player(player, info.spawn_x, info.spawn_y);
     }
 
-    let grid = spawn_chunked_texture_tilemap(&mut commands, &game, &mut images, false);
+    let grid = spawn_shader_map(&mut commands, &game, &mut images, &mut materials, &mut meshes, false);
     commands.insert_resource(grid);
 
     commands.insert_resource(game);
@@ -1407,7 +1414,7 @@ pub struct StartGameParams<'w> {
     overlay: Option<ResMut<'w, OverlayDiagnostics>>,
     shell: Option<Res<'w, HudShellRegions>>,
     meshes: Option<ResMut<'w, Assets<Mesh>>>,
-
+    materials: Option<ResMut<'w, Assets<border_material::BorderMaterial>>>,
     images: Option<ResMut<'w, Assets<Image>>>,
     next_state: ResMut<'w, NextState<AppState>>,
 }
@@ -1567,7 +1574,7 @@ fn start_game_core(
                 cam.translation = Vec3::new(cx, cy, 999.0);
             }
             if let Some(images_res) = params.images.as_mut() {
-                let grid = spawn_chunked_texture_tilemap(commands, &game, images_res, true);
+                let grid = spawn_shader_map(commands, &game, images_res, params.materials.as_mut().unwrap(), params.meshes.as_mut().unwrap(), true);
                 commands.insert_resource(grid);
             }
 
@@ -1933,37 +1940,30 @@ fn system_home_button(
 /// Write changed owner IDs into the GPU ShaderStorageBuffer.
 fn handle_tile_change(
     game_opt: Option<ResMut<GameState>>,
-    grid_opt: Option<Res<MapChunkGrid>>,
+    shader_map_opt: Option<Res<ShaderMapData>>,
     mut images: ResMut<Assets<Image>>,
 ) {
     let Some(mut game) = game_opt else { return };
     if !game.is_changed() { return; }
-    let Some(grid) = grid_opt else { return };
+    let Some(shader_map) = shader_map_opt else { return };
 
-    let color_lookup = build_player_color_lookup(&game);
-    let mut dirty_tiles = Vec::new();
-
-    for ev in &game.events {
-        if let GameEvent::TileCaptured { x, y, .. } = ev {
-            let cx = *x as i32;
-            let cy = *y as i32;
-            dirty_tiles.push((cx, cy));
-            dirty_tiles.push((cx, cy - 1));
-            dirty_tiles.push((cx + 1, cy));
-            dirty_tiles.push((cx, cy + 1));
-            dirty_tiles.push((cx - 1, cy));
-        }
+    if let Some(colors_img) = images.get_mut(&shader_map.player_colors) {
+        sync_player_colors(&game, colors_img);
     }
 
-    dirty_tiles.sort_by(|a, b| match a.0.cmp(&b.0) {
-        std::cmp::Ordering::Equal => a.1.cmp(&b.1),
-        ord => ord,
-    });
-    dirty_tiles.dedup();
-
-    for &(nx, ny) in &dirty_tiles {
-        if game.map.is_valid_coord(nx, ny) {
-            paint_tile_to_chunk(&mut images, &grid, &game, &color_lookup, nx as u32, ny as u32);
+    if let Some(board_img) = images.get_mut(&shader_map.board_data) {
+        if let Some(ref mut data) = board_img.data {
+            for ev in &game.events {
+                if let GameEvent::TileCaptured { x, y, new_owner: owner, .. } = ev {
+                    // Update single owner ID at (x, y)
+                    let linear_index = (*y as usize * game.map.width as usize) + *x as usize;
+                    let byte_offset = linear_index * 4;
+                    if byte_offset + 3 < data.len() {
+                        let owner_u32 = *owner as u32;
+                        data[byte_offset..byte_offset+4].copy_from_slice(&owner_u32.to_ne_bytes());
+                    }
+                }
+            }
         }
     }
 
@@ -2368,177 +2368,133 @@ fn system_handle_cancel_click(
 const CHUNK_SIZE: u32 = 256;
 
 #[derive(Resource)]
-struct MapChunkGrid {
-    chunk_handles: HashMap<(u32, u32), Handle<Image>>,
-    chunk_width: HashMap<u32, u32>,
-    chunk_height: HashMap<u32, u32>,
+pub struct ShaderMapData {
+    pub board_data: Handle<Image>,
+    pub player_colors: Handle<Image>,
 }
 
-impl MapChunkGrid {
-    fn chunk_handle(&self, x: u32, y: u32) -> &Handle<Image> {
-        let cx = x / CHUNK_SIZE;
-        let cy = y / CHUNK_SIZE;
-        self.chunk_handles.get(&(cx, cy)).unwrap()
-    }
-    fn chunk_w(&self, cx: u32) -> u32 {
-        *self.chunk_width.get(&cx).unwrap()
-    }
-    fn chunk_h(&self, cy: u32) -> u32 {
-        *self.chunk_height.get(&cy).unwrap()
-    }
-}
-
-fn build_player_color_lookup(game: &GameState) -> [[f32; 3]; 4096] {
-    let mut lookup = [[0.0; 3]; 4096];
-    for p in &game.players {
-        let idx = (p.id & 0x0FFF) as usize;
-        lookup[idx] = [p.color[0], p.color[1], p.color[2]];
-    }
-    lookup
-}
-
-fn openfront_tile_color(game: &GameState, color_lookup: &[[f32; 3]; 4096], cx: i32, cy: i32) -> Color {
-    let owner = game.map.owner_id(cx as u32, cy as u32) as u16;
-    let base = color_lookup[(owner & 0x0FFF) as usize];
-
-    let is_border = [(cx, cy - 1), (cx + 1, cy), (cx, cy + 1), (cx - 1, cy)]
-        .iter()
-        .any(|&(nx, ny)| {
-            game.map.is_valid_coord(nx, ny)
-                && game.map.owner_id(nx as u32, ny as u32) != owner
-        });
-
-    if owner == 0 {
-        let terrain = game.map.terrain_type(cx as u32, cy as u32);
-        match terrain {
-            dark_rift_shared::map::TerrainType::Water | dark_rift_shared::map::TerrainType::Lake => Color::srgb(0.1, 0.3, 0.6),
-            dark_rift_shared::map::TerrainType::Land => Color::srgb(0.4, 0.7, 0.3),
-            dark_rift_shared::map::TerrainType::Highland => Color::srgb(0.2, 0.5, 0.2),
-            dark_rift_shared::map::TerrainType::Mountain => Color::srgb(0.6, 0.5, 0.4),
-        }
-    } else if is_border {
-        let m = 0.6; // config::TERRITORY_BORDER_RGB_MULTIPLIER
-        Color::srgba(base[0] * m, base[1] * m, base[2] * m, 1.0)
-    } else {
-        Color::srgba(base[0], base[1], base[2], 1.0)
-    }
-}
-
-fn paint_tile_to_chunk(
-    images: &mut Assets<Image>,
-    grid: &MapChunkGrid,
-    game: &GameState,
-    color_lookup: &[[f32; 3]; 4096],
-    x: u32, y: u32,
-) {
-    let handle = grid.chunk_handle(x, y);
-    let Some(image) = images.get_mut(handle) else { return };
-
-    let cx = x / CHUNK_SIZE;
-    let cy = y / CHUNK_SIZE;
-    let local_x = x % CHUNK_SIZE;
-    let local_y = y % CHUNK_SIZE;
-    let cw = grid.chunk_w(cx);
-    let ch = grid.chunk_h(cy);
-    
-    let color = openfront_tile_color(game, color_lookup, x as i32, y as i32);
-    let rgba = color.to_srgba();
-    let r = (rgba.red * 255.0) as u8;
-    let g = (rgba.green * 255.0) as u8;
-    let b = (rgba.blue * 255.0) as u8;
-    let a = (rgba.alpha * 255.0) as u8;
-
+fn sync_player_colors(game: &GameState, image: &mut Image) {
     if let Some(ref mut data) = image.data {
-        let linear_index = (local_y * cw + local_x) as usize;
-        let byte_offset = linear_index * 4;
-        if byte_offset + 3 < data.len() {
-            data[byte_offset] = r;
-            data[byte_offset + 1] = g;
-            data[byte_offset + 2] = b;
-            data[byte_offset + 3] = a;
-        }
-    }
-}
-
-fn spawn_chunked_texture_tilemap(
-    commands: &mut Commands,
-    game: &GameState,
-    images: &mut Assets<Image>,
-    in_game: bool,
-) -> MapChunkGrid {
-    let mut chunk_handles = HashMap::new();
-    let mut chunk_width = HashMap::new();
-    let mut chunk_height = HashMap::new();
-    
-    let num_chunks_x = (game.map.width + CHUNK_SIZE - 1) / CHUNK_SIZE;
-    let num_chunks_y = (game.map.height + CHUNK_SIZE - 1) / CHUNK_SIZE;
-
-    for cx in 0..num_chunks_x {
-        let cw = if cx == num_chunks_x - 1 {
-            let rem = game.map.width % CHUNK_SIZE;
-            if rem == 0 { CHUNK_SIZE } else { rem }
-        } else {
-            CHUNK_SIZE
-        };
-        chunk_width.insert(cx, cw);
-        
-        for cy in 0..num_chunks_y {
-            let ch = if cy == num_chunks_y - 1 {
-                let rem = game.map.height % CHUNK_SIZE;
-                if rem == 0 { CHUNK_SIZE } else { rem }
-            } else {
-                CHUNK_SIZE
-            };
-            chunk_height.insert(cy, ch);
-            
-            let total_pixels = (cw * ch) as usize;
-            let initial_data = vec![0u8; total_pixels * 4];
-
-            let mut img = Image::new(
-                bevy::render::render_resource::Extent3d { width: cw, height: ch, depth_or_array_layers: 1 },
-                bevy::render::render_resource::TextureDimension::D2,
-                initial_data,
-                bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
-                bevy::asset::RenderAssetUsages::MAIN_WORLD | bevy::asset::RenderAssetUsages::RENDER_WORLD,
-            );
-            img.sampler = bevy::image::ImageSampler::nearest();
-
-            let handle = images.add(img);
-            chunk_handles.insert((cx, cy), handle.clone());
-
-            let screen_w = cw as f32 * TILE_SIZE;
-            let screen_h = ch as f32 * TILE_SIZE;
-            
-            let offset_x = (cx * CHUNK_SIZE) as f32 * TILE_SIZE + (cw as f32 - 1.0) * TILE_SIZE / 2.0;
-            let start_y = cy * CHUNK_SIZE;
-            let world_y_top = (game.map.height as f32 - 1.0 - start_y as f32) * TILE_SIZE;
-            let offset_y = world_y_top - (ch as f32 - 1.0) * TILE_SIZE / 2.0;
-
-            let mut ecmd = commands.spawn((
-                Sprite {
-                    image: handle.clone(),
-                    custom_size: Some(Vec2::new(screen_w, screen_h)),
-                    ..default()
-                },
-                Transform::from_xyz(offset_x, offset_y, 0.0),
-            ));
-            if in_game {
-                ecmd.insert(InGameEntity);
+        for p in &game.players {
+            let idx = (p.id & 0x0FFF) as usize;
+            let byte_offset = idx * 16;
+            if byte_offset + 15 < data.len() {
+                let rgba = bevy::color::Color::srgb(p.color[0], p.color[1], p.color[2]).to_srgba();
+                let r = rgba.red.to_ne_bytes();
+                let g = rgba.green.to_ne_bytes();
+                let b = rgba.blue.to_ne_bytes();
+                let a = rgba.alpha.to_ne_bytes();
+                data[byte_offset..byte_offset+4].copy_from_slice(&r);
+                data[byte_offset+4..byte_offset+8].copy_from_slice(&g);
+                data[byte_offset+8..byte_offset+12].copy_from_slice(&b);
+                data[byte_offset+12..byte_offset+16].copy_from_slice(&a);
             }
         }
     }
+}
 
-    let grid = MapChunkGrid { chunk_handles, chunk_width, chunk_height };
 
-    let color_lookup = build_player_color_lookup(game);
+fn spawn_shader_map(
+    commands: &mut Commands,
+    game: &GameState,
+    images: &mut Assets<Image>,
+    materials: &mut Assets<border_material::BorderMaterial>,
+    meshes: &mut Assets<Mesh>,
+    in_game: bool,
+) -> ShaderMapData {
+    let width = game.map.width;
+    let height = game.map.height;
 
-    for y in 0..game.map.height {
-        for x in 0..game.map.width {
-            paint_tile_to_chunk(images, &grid, game, &color_lookup, x, y);
+    // 1. Board Data (Owner IDs): R32Uint
+    let mut board_data = vec![0u8; (width * height * 4) as usize];
+    for y in 0..height {
+        for x in 0..width {
+            let owner = game.map.owner_id(x, y) as u32;
+            let idx = ((y * width) + x) as usize * 4;
+            board_data[idx..idx+4].copy_from_slice(&owner.to_ne_bytes());
         }
     }
+    let mut board_img = Image::new(
+        bevy::render::render_resource::Extent3d { width, height, depth_or_array_layers: 1 },
+        bevy::render::render_resource::TextureDimension::D2,
+        board_data,
+        bevy::render::render_resource::TextureFormat::R32Uint,
+        bevy::asset::RenderAssetUsages::MAIN_WORLD | bevy::asset::RenderAssetUsages::RENDER_WORLD,
+    );
+    board_img.sampler = bevy::image::ImageSampler::nearest();
+    let board_handle = images.add(board_img);
 
-    grid
+    // 2. Player Colors: Rgba32Float
+    let mut colors_data = vec![0u8; 4096 * 16];
+    let mut colors_img = Image::new(
+        bevy::render::render_resource::Extent3d { width: 4096, height: 1, depth_or_array_layers: 1 },
+        bevy::render::render_resource::TextureDimension::D2,
+        colors_data,
+        bevy::render::render_resource::TextureFormat::Rgba32Float,
+        bevy::asset::RenderAssetUsages::MAIN_WORLD | bevy::asset::RenderAssetUsages::RENDER_WORLD,
+    );
+    colors_img.sampler = bevy::image::ImageSampler::nearest();
+    sync_player_colors(game, &mut colors_img);
+    let colors_handle = images.add(colors_img);
+
+    // 3. Map Terrain: R32Uint
+    let mut terrain_data = vec![0u8; (width * height * 4) as usize];
+    for y in 0..height {
+        for x in 0..width {
+            let is_water = game.map.terrain_type(x, y) == dark_rift_shared::map::TerrainType::Water || game.map.terrain_type(x, y) == dark_rift_shared::map::TerrainType::Lake;
+            let mut tile_u32 = 0u32;
+            if is_water { tile_u32 |= 0x20; } else { tile_u32 |= 0x80; }
+            let idx = ((y * width) + x) as usize * 4;
+            terrain_data[idx..idx+4].copy_from_slice(&tile_u32.to_ne_bytes());
+        }
+    }
+    let mut terrain_img = Image::new(
+        bevy::render::render_resource::Extent3d { width, height, depth_or_array_layers: 1 },
+        bevy::render::render_resource::TextureDimension::D2,
+        terrain_data,
+        bevy::render::render_resource::TextureFormat::R32Uint,
+        bevy::asset::RenderAssetUsages::MAIN_WORLD | bevy::asset::RenderAssetUsages::RENDER_WORLD,
+    );
+    terrain_img.sampler = bevy::image::ImageSampler::nearest();
+    let terrain_handle = images.add(terrain_img);
+
+    // 4. Material
+    let material = border_material::BorderMaterial {
+        board_data: board_handle.clone(),
+        uniforms: border_material::BorderUniforms {
+            border_color: LinearRgba::new(0.6, 0.6, 0.6, 1.0),
+            border_thickness: Vec4::new(1.0, 0.0, 0.0, 0.0),
+            texture_size: Vec4::new(width as f32, height as f32, 0.0, 0.0),
+            time: Vec4::new(0.0, 0.0, 0.0, 0.0),
+            enable_water_animation: UVec4::new(1, 0, 0, 0),
+            enable_players: UVec4::new(1, 0, 0, 0),
+        },
+        player_colors: colors_handle.clone(),
+        map_terrain: terrain_handle,
+    };
+    let material_handle = materials.add(material);
+
+    let screen_w = width as f32 * TILE_SIZE;
+    let screen_h = height as f32 * TILE_SIZE;
+    let mesh = meshes.add(Rectangle::new(screen_w, screen_h));
+
+    // Center the map at (screen_w / 2, screen_h / 2) because coordinates are from (0,0) bottom-left.
+    let offset_x = screen_w / 2.0 - TILE_SIZE / 2.0;
+    let offset_y = screen_h / 2.0 - TILE_SIZE / 2.0;
+
+    let mut ecmd = commands.spawn((
+        Mesh2d(mesh.into()),
+        bevy::sprite_render::MeshMaterial2d(material_handle),
+        Transform::from_xyz(offset_x, offset_y, 0.0),
+    ));
+    if in_game {
+        ecmd.insert(InGameEntity);
+    }
+
+    ShaderMapData {
+        board_data: board_handle,
+        player_colors: colors_handle,
+    }
 }
 
 
@@ -2960,13 +2916,14 @@ fn system_headless_bot_engine(
     let expand_ratio = bot_state.profile.expand_ratio;
     
     let player = game.player(bot_id).unwrap();
-    if player.border_tiles.is_empty() { return; }
+    let border_tiles = game.map.border_tiles_of(bot_id);
+    if border_tiles.is_empty() { return; }
 
     let mut has_neutral = false;
     let mut player_targets = Vec::new();
 
-    for &(bx, by) in &player.border_tiles {
-        for (nx, ny) in game.map.neighbors(bx, by) {
+    for &(bx, by) in &border_tiles {
+        game.map.for_each_neighbor(bx, by, |nx, ny| {
             let owner = game.map.owner_id(nx, ny);
             if owner != bot_id {
                 if owner == 0 {
@@ -2975,7 +2932,7 @@ fn system_headless_bot_engine(
                     player_targets.push(owner);
                 }
             }
-        }
+        });
     }
 
     let mut bot_rng = PseudoRandom::new(game.seed.wrapping_add(game.tick as u64).wrapping_add(1999));
@@ -3014,3 +2971,12 @@ fn system_headless_bot_engine(
 }
 
 
+
+fn update_water_animation_time(
+    time: Res<Time>,
+    mut materials: ResMut<Assets<border_material::BorderMaterial>>,
+) {
+    for (_, material) in materials.iter_mut() {
+        material.uniforms.time.x = time.elapsed_secs();
+    }
+}

@@ -44,26 +44,29 @@ green "✅ Compilaciones de Rust exitosas."
 cyan "==> 2. Empaquetando Frontend (wasm-bindgen)..."
 rm -rf dist
 mkdir -p dist
-~/.cargo/bin/wasm-bindgen --out-dir dist --target web --out-name "${OUT_NAME}" --no-typescript "${WASM_IN}"
+
+# Generar version dinamica
+VERSION=$(date +%s)
+JS_FILE="dark_rift_client_${VERSION}.js"
+WASM_FILE="dark_rift_client_${VERSION}_bg.wasm"
+
+~/.cargo/bin/wasm-bindgen --out-dir dist --target web --out-name "dark_rift_client_${VERSION}" --no-typescript "${WASM_IN}"
 
 cp -a assets dist/assets
-
-# Generar timestamp para cache busting
-BUILD_TS=$(date +%s)
 
 LOADER_TEMPLATE="${ROOT}/web/index.html.template"
 if [[ ! -f "${LOADER_TEMPLATE}" ]]; then
   red "Missing loader template: ${LOADER_TEMPLATE}"
   exit 1
 fi
-sed "s/__BUILD_TS__/${BUILD_TS}/g" "${LOADER_TEMPLATE}" > dist/index.html
+sed -e "s/__VERSION__/${VERSION}/g" -e "s/__JS_FILE__/${JS_FILE}/g" -e "s/__WASM_FILE__/${WASM_FILE}/g" "${LOADER_TEMPLATE}" > dist/index.html
 
 cyan "==> 3. Comprimiendo archivos estáticos (Brotli)..."
-# Comprimir en paralelo
+# Comprimir en paralelo y limpiar versiones viejas pre-comprimidas
 if command -v brotli >/dev/null 2>&1; then
-  brotli -f -Z dist/${OUT_NAME}_bg.wasm &
+  brotli -f -Z dist/${WASM_FILE} &
   BROTLI_WASM_PID=$!
-  brotli -f -Z dist/${OUT_NAME}.js &
+  brotli -f -Z dist/${JS_FILE} &
   BROTLI_JS_PID=$!
   
   wait $BROTLI_WASM_PID

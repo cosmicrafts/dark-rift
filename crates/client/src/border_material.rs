@@ -17,10 +17,20 @@
 use bevy::{
     prelude::*,
     reflect::TypePath,
-    render::render_resource::AsBindGroup,
+    render::render_resource::{AsBindGroup, ShaderType},
     shader::ShaderRef,
     sprite_render::Material2d,
 };
+
+#[derive(Clone, Default, ShaderType, Debug)]
+pub struct BorderUniforms {
+    pub border_color: LinearRgba,
+    pub border_thickness: Vec4,
+    pub texture_size: Vec4,
+    pub time: Vec4,
+    pub enable_water_animation: UVec4,
+    pub enable_players: UVec4,
+}
 
 /// Custom 2D material that renders the entire map via a fragment shader.
 /// All ownership and terrain data live on GPU storage buffers — no RGBA texture uploads.
@@ -31,38 +41,17 @@ pub struct BorderMaterial {
     #[texture(0, dimension = "2d", sample_type = "u_int", visibility(fragment))]
     pub board_data: Handle<Image>,
 
-    /// Border darkening multiplier (applied to rgb of border tiles).
     #[uniform(1, visibility(fragment))]
-    pub border_color: LinearRgba,
-
-    /// Border width in tiles (typically 1.0).
-    #[uniform(2, visibility(fragment))]
-    pub border_thickness: f32,
-
-    /// Map dimensions as (width, height) in tiles.
-    #[uniform(3, visibility(fragment))]
-    pub texture_size: Vec2,
+    pub uniforms: BorderUniforms,
 
     /// Player RGBA colors: one `vec4<f32>` per player ID, index 0 = wilderness.
-    #[texture(4, dimension = "2d", sample_type = "float", visibility(fragment))]
+    #[texture(2, dimension = "2d", sample_type = "float", visibility(fragment))]
     pub player_colors: Handle<Image>,
 
     /// Packed terrain bytes: four `MapTile` u8s per u32.
     /// `MapTile` bit layout: bit7=land, bit6=shoreline, bit5=ocean, bits[4:0]=magnitude.
-    #[texture(5, dimension = "2d", sample_type = "u_int", visibility(fragment))]
+    #[texture(3, dimension = "2d", sample_type = "u_int", visibility(fragment))]
     pub map_terrain: Handle<Image>,
-
-    /// Elapsed seconds for water animation.
-    #[uniform(6, visibility(fragment))]
-    pub time: f32,
-
-    /// 1 = animated water, 0 = static water.
-    #[uniform(7, visibility(fragment))]
-    pub enable_water_animation: u32,
-
-    /// 1 = render player territory + borders, 0 = terrain-only.
-    #[uniform(8, visibility(fragment))]
-    pub enable_players: u32,
 }
 
 impl Material2d for BorderMaterial {

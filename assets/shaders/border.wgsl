@@ -9,14 +9,18 @@
 #import "shaders/simplex.wgsl"::animated_simplex_noise
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var board_data:    texture_2d<u32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(1) var<uniform>        border_color:  vec4<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(2) var<uniform>        border_thickness: f32;
-@group(#{MATERIAL_BIND_GROUP}) @binding(3) var<uniform>        texture_size:  vec2<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(4) var player_colors: texture_2d<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(5) var map_terrain:   texture_2d<u32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(6) var<uniform>        time:          f32;
-@group(#{MATERIAL_BIND_GROUP}) @binding(7) var<uniform>        enable_water_animation: u32;
-@group(#{MATERIAL_BIND_GROUP}) @binding(8) var<uniform>        enable_players: u32;
+struct BorderUniforms {
+    border_color: vec4<f32>,
+    border_thickness: vec4<f32>,
+    texture_size: vec4<f32>,
+    time: vec4<f32>,
+    enable_water_animation: vec4<u32>,
+    enable_players: vec4<u32>,
+};
+
+@group(#{MATERIAL_BIND_GROUP}) @binding(1) var<uniform> uniforms: BorderUniforms;
+@group(#{MATERIAL_BIND_GROUP}) @binding(2) var player_colors: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(3) var map_terrain:   texture_2d<u32>;
 
 // ============================================================================
 // CONSTANTS
@@ -61,7 +65,7 @@ const COAST_FAKE_DIST: f32 = 4.0;
 /// Read raw MapTile byte for a tile coordinate.
 /// Packing: 4 u8s per u32, byte index = linear_index % 4, word = linear_index / 4.
 fn get_map_tile_at(coord: vec2<i32>) -> u32 {
-    if coord.x < 0 || coord.x >= i32(texture_size.x) || coord.y < 0 || coord.y >= i32(texture_size.y) {
+    if coord.x < 0 || coord.x >= i32(uniforms.texture_size.x) || coord.y < 0 || coord.y >= i32(uniforms.texture_size.y) {
         return 0u;
     }
     return textureLoad(map_terrain, coord, 0).r;
@@ -84,7 +88,7 @@ fn tile_magnitude(tile: u32)   -> u32  { return tile & 0x1Fu; }
 ///   shift = (linear_index % 2) * 16
 ///   player_id = low 12 bits of the u16
 fn get_owner_at(coord: vec2<i32>) -> u32 {
-    if coord.x < 0 || coord.x >= i32(texture_size.x) || coord.y < 0 || coord.y >= i32(texture_size.y) {
+    if coord.x < 0 || coord.x >= i32(uniforms.texture_size.x) || coord.y < 0 || coord.y >= i32(uniforms.texture_size.y) {
         return 0u;
     }
     let tile_data = textureLoad(board_data, coord, 0).r;
@@ -129,10 +133,10 @@ fn get_terrain_color(tile: u32, coord: vec2<i32>) -> vec4<f32> {
             base_color = DEEP_OCEAN_COLOR;
         }
 
-        if enable_water_animation != 0u {
-            let wave1 = animated_simplex_noise(f_coord, WAVE1_SPEED, WAVE1_SCALE, time);
-            let wave2 = animated_simplex_noise(f_coord, WAVE2_SPEED, WAVE2_SCALE, time);
-            let wave3 = animated_simplex_noise(f_coord, WAVE3_SPEED, WAVE3_SCALE, time);
+        if uniforms.enable_water_animation.x != 0u {
+            let wave1 = animated_simplex_noise(f_coord, WAVE1_SPEED, WAVE1_SCALE, uniforms.time.x);
+            let wave2 = animated_simplex_noise(f_coord, WAVE2_SPEED, WAVE2_SCALE, uniforms.time.x);
+            let wave3 = animated_simplex_noise(f_coord, WAVE3_SPEED, WAVE3_SCALE, uniforms.time.x);
             let combined = (wave1 * WAVE1_W + wave2 * WAVE2_W + wave3 * WAVE3_W) * WAVE_COMBINED;
             base_color = mix(base_color, WAVE_HIGHLIGHT, combined * WAVE_STRENGTH);
         }
@@ -151,7 +155,7 @@ fn get_terrain_color(tile: u32, coord: vec2<i32>) -> vec4<f32> {
 @fragment
 fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     // Discrete tile coordinate for this fragment.
-    let pixel_coord = vec2<i32>(mesh.uv * texture_size);
+    let pixel_coord = vec2<i32>(mesh.uv * uniforms.texture_size.xy);
 
     let center_terrain = get_map_tile_at(pixel_coord);
     let center_owner   = get_owner_at(pixel_coord);
@@ -171,7 +175,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
 
     // Mix in player color.
     var base_color: vec4<f32>;
-    if enable_players != 0u {
+    if uniforms.enable_players.x != 0u {
         if center_owner == 0u {
             base_color = terrain_color;
         } else {
@@ -183,10 +187,10 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // Border detection: check 4 cardinal neighbors for ownership change.
-    if enable_players != 0u {
+    if uniforms.enable_players.x != 0u {
         let center_is_water = tile_is_water(center_terrain);
         if !center_is_water {
-            let offset = i32(border_thickness);
+            let offset = i32(uniforms.border_thickness.x);
             let own_n = get_owner_at(pixel_coord + vec2<i32>( 0,  offset));
             let own_s = get_owner_at(pixel_coord + vec2<i32>( 0, -offset));
             let own_e = get_owner_at(pixel_coord + vec2<i32>( offset,  0));
@@ -210,7 +214,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
             }
 
             if is_border {
-                return vec4<f32>(base_color.rgb * border_color.rgb, base_color.a);
+                return vec4<f32>(base_color.rgb * uniforms.border_color.rgb, base_color.a);
             }
         }
     }

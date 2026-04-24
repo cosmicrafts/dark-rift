@@ -6,11 +6,11 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <title>Dark Rift</title>
-  <link rel="modulepreload" href="./dark_rift_client.js?v=__BUILD_TS__" />
-  <link rel="preload" href="./dark_rift_client_bg.wasm?v=__BUILD_TS__" as="fetch" crossorigin />
-  <link rel="preload" href="./assets/ui/loader_frame.webp?v=__BUILD_TS__" as="image" />
-  <link rel="preload" href="./assets/ui/loader_fill.webp?v=__BUILD_TS__" as="image" />
+  <title>Dark Rift v__VERSION__</title>
+  <link rel="modulepreload" href="./__JS_FILE__" />
+  <link rel="preload" href="./__WASM_FILE__" as="fetch" crossorigin />
+  <link rel="preload" href="./assets/ui/loader_frame.webp?v=__VERSION__" as="image" />
+  <link rel="preload" href="./assets/ui/loader_fill.webp?v=__VERSION__" as="image" />
   <style>
     html, body {
       margin: 0;
@@ -119,7 +119,7 @@
   <div id="splash-stack" aria-live="polite" role="status" aria-busy="true">
     <img
       id="splash-art"
-      src="./assets/ui/darkrift.webp?v=__BUILD_TS__"
+      src="./assets/ui/darkrift.webp?v=__VERSION__"
       alt=""
       decoding="async"
       fetchpriority="high"
@@ -129,7 +129,7 @@
         <div class="loader-bar-fill-wrap">
           <img
             class="loader-bar-fill"
-            src="./assets/ui/loader_fill.webp?v=__BUILD_TS__"
+            src="./assets/ui/loader_fill.webp?v=__VERSION__"
             width="1227"
             height="137"
             alt=""
@@ -139,7 +139,7 @@
         </div>
         <img
           class="loader-bar-frame"
-          src="./assets/ui/loader_frame.webp?v=__BUILD_TS__"
+          src="./assets/ui/loader_frame.webp?v=__VERSION__"
           width="1227"
           height="137"
           alt=""
@@ -147,12 +147,15 @@
           fetchpriority="high"
         />
       </div>
+      <div style="color: rgba(255,255,255,0.3); font-family: monospace; font-size: 10px; position: absolute; bottom: -20px; right: 0;">
+        v__VERSION__
+      </div>
     </div>
   </div>
   <script type="module">
-    import init from "./dark_rift_client.js?v=__BUILD_TS__";
+    import init from "./__JS_FILE__";
 
-    const V = "__BUILD_TS__";
+    const V = "__VERSION__";
     const q = (path) => path + "?v=" + V;
 
     function filterWasmBindgenNoise(promise) {
@@ -163,7 +166,7 @@
       });
     }
 
-    const initPromise = filterWasmBindgenNoise(init(q("./dark_rift_client_bg.wasm")));
+    const initPromise = filterWasmBindgenNoise(init({ module_or_path: "./__WASM_FILE__" }));
 
     const stack = document.getElementById("splash-stack");
     const bar = document.getElementById("loader-bar");
