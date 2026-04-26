@@ -26,8 +26,8 @@ use dark_rift_shared::protocol::*;
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 /// Turn interval: how often the server bundles + broadcasts a turn.
-/// Mirrors OpenFront's config.turnIntervalMs() (200ms = 5 turns/sec).
-const TURN_INTERVAL_MS: f32 = 40.0;
+/// Mirrors OpenFront's config.turnIntervalMs() (100ms = 10 turns/sec).
+const TURN_INTERVAL_MS: f32 = 100.0;
 
 /// Auto-start timer when lobby reaches top of queue 
 const LOBBY_COUNTDOWN_SECS: f32 = 15.0;
