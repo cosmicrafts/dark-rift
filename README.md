@@ -70,6 +70,44 @@ When we finally ported the new GPU map renderer (`border.wgsl`) to WASM, it work
 When querying the same components mutably (like `&mut Node`) across multiple `Query` parameters in the same system, Bevy will statically panic at startup with `error[B0001]` if it detects a potential intersection.
 * **The Poka-Yoke (Mistake-Proofing):** You MUST create perfectly disjoint sets using exhaustive `Without<T>` filters. If you have three UI queries `Query<&mut Node, With<A>>`, `Query<&mut Node, With<B>>`, and `Query<&mut Node, With<C>>`, the first query MUST explicitly define `(Without<B>, Without<C>)`, the second `(Without<A>, Without<C>)`, and so on. Do not assume Bevy knows `A`, `B`, and `C` are mutually exclusive; you must mathematically prove it to the ECS type system.
 
+### 14. The Unsorted Query Iteration Trap (Lockstep Divergence)
+When iterating over Bevy `Query` results in simulation code, the default iteration order is **not deterministic** across platforms and entity generations. This caused lockstep desyncs where clients would process buildings/fleets in different orders, consuming the RNG state differently and diverging immediately.
+* **The Symptom:** Game worked perfectly in single-player, but multiplayer desynced within seconds when multiple buildings or fleets existed. Clients stayed in sync during idle moments but diverged during fleet launches or building construction.
+* **The Root Cause:** `q_building.iter().map(|(_, b)| *b).collect()` collects buildings in memory-layout order, which varies by platform architecture (x86_64 vs ARM), Bevy's internal entity allocation, and entity spawn order.
+* **The Fix:** ALL Query iterations in simulation code MUST be sorted by a stable, monotonic ID before any state mutation or RNG consumption:
+```rust
+// BEFORE (WRONG - diverges across clients):
+let buildings: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
+
+// AFTER (CORRECT - deterministic):
+let mut buildings: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
+buildings.sort_by_key(|b| b.id);
+```
+* **Files Fixed:** `crates/shared/src/intent/mod.rs` (line 66-67) - Added sorting before passing buildings to `apply_launch_fleet_intent`.
+* **Verification:** All 38 existing tests pass, including `bot_think_is_stable_across_player_insertion_order` and `bot_think_is_repeatable_same_seed_and_order`.
+
+### 15. The Window Focus Input Leak (winit `WindowFocused` Events)
+When a player alt-tabbed, minimized the browser, or clicked outside the game window, input events (keyboard/mouse) were NOT being cleared. This caused phantom inputs to accumulate and fire when the player returned focus, triggering unintended fleet launches or building placements that desynced all clients.
+* **The Symptom:** Player alt-tabs to check Discord, returns to game, and suddenly 5 fleets launch at random tiles. All clients desync because only ONE client sent the intents.
+* **The Root Cause:** Bevy's `ButtonInput<KeyCode>` and `ButtonInput<MouseButton>` resources persist their state across window focus changes. Without explicit clearing, a held key (like 'B' for force-boat) would trigger again when focus returned.
+* **The Fix:** Added a `clear_inputs_on_focus_loss` system that listens to `WindowFocused` events and clears both keyboard and mouse input buffers when `!ev.focused`:
+```rust
+fn clear_inputs_on_focus_loss(
+    mut events: MessageReader<bevy::window::WindowFocused>,
+    mut mouse: ResMut<ButtonInput<MouseButton>>,
+    mut kb: ResMut<ButtonInput<KeyCode>>,
+) {
+    for ev in events.read() {
+        if !ev.focused {
+            mouse.clear();
+            kb.clear();
+        }
+    }
+}
+```
+* **Commit:** `fdb15da` (April 13, 2026)
+* **Files Modified:** `crates/client/src/main.rs`, `crates/client/src/gameplay/input.rs`
+
 ---
 ### 🤖 OpenClaw Integration Test
 This repository is currently being orchestrated and optimized via OpenClaw AI. Automated deployments, config management, and stress-testing logic have been validated.
@@ -157,6 +195,19 @@ above.
 `query.iter()` order is NOT stable across `Entity` generations. Always
 collect `(Entity, id)` and `sort_by_key(|&(_, id)| id)` before mutating — see
 `system_attack_execution` and `apply_attack_intent`.
+
+**Critical:** This applies to ALL Query iterations in simulation code, not just
+attack execution. Building queries, fleet queries, and any other dynamic entity
+iteration MUST be sorted by ID before processing:
+```rust
+// Simulation code - MUST sort:
+let mut buildings: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
+buildings.sort_by_key(|b| b.id);
+
+// Bot code - MUST sort:
+let mut buildings_snapshot: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
+buildings_snapshot.sort_unstable_by_key(|b| b.id);
+```
 
 ### 9. No `std::time` / `Instant` / `SystemTime` in simulation
 Wall-clock drifts per platform. All time inside the sim comes from
