@@ -1,0 +1,726 @@
+    Checking dark-rift-client v0.1.0 (/home/bizkit/Github/openfrontio/dark-rift/crates/client)
+warning: unused import: `DiagnosticsStore`
+ --> crates/client/src/main.rs:2:24
+  |
+2 | use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
+  |                        ^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `bevy::text::FontWeight`
+ --> crates/client/src/main.rs:3:5
+  |
+3 | use bevy::text::FontWeight;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: private item shadows public glob re-export
+  --> crates/client/src/main.rs:4:5
+   |
+ 4 | use bevy::ui::RelativeCursorPosition;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+note: the name `RelativeCursorPosition` in the type namespace is supposed to be publicly re-exported here
+  --> crates/client/src/main.rs:85:9
+   |
+85 | pub use state::*;
+   |         ^^^^^^^^
+note: but the private item here shadows it
+  --> crates/client/src/main.rs:4:5
+   |
+ 4 | use bevy::ui::RelativeCursorPosition;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: `#[warn(hidden_glob_reexports)]` on by default
+
+warning: unused import: `bevy::ui::RelativeCursorPosition`
+ --> crates/client/src/main.rs:4:5
+  |
+4 | use bevy::ui::RelativeCursorPosition;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `bevy::core_pipeline::tonemapping::Tonemapping`
+ --> crates/client/src/main.rs:6:5
+  |
+6 | use bevy::core_pipeline::tonemapping::Tonemapping;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `BloomCompositeMode` and `Bloom`
+ --> crates/client/src/main.rs:7:33
+  |
+7 | use bevy::post_process::bloom::{Bloom, BloomCompositeMode};
+  |                                 ^^^^^  ^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `HashMap` and `HashSet`
+ --> crates/client/src/main.rs:9:24
+  |
+9 | use std::collections::{HashMap, HashSet};
+  |                        ^^^^^^^  ^^^^^^^
+
+warning: unused imports: `MouseScrollUnit` and `MouseWheel`
+  --> crates/client/src/main.rs:10:26
+   |
+10 | use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
+   |                          ^^^^^^^^^^^^^^^  ^^^^^^^^^^
+
+warning: unused import: `lightyear::prelude::*`
+  --> crates/client/src/main.rs:11:5
+   |
+11 | use lightyear::prelude::*;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `NetcodeClient`
+  --> crates/client/src/main.rs:13:26
+   |
+13 | use lightyear::netcode::{NetcodeClient, Key};
+   |                          ^^^^^^^^^^^^^
+
+warning: unused import: `lightyear::netcode::prelude::client::NetcodeConfig`
+  --> crates/client/src/main.rs:14:5
+   |
+14 | use lightyear::netcode::prelude::client::NetcodeConfig;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `lightyear::netcode::auth::Authentication`
+  --> crates/client/src/main.rs:15:5
+   |
+15 | use lightyear::netcode::auth::Authentication;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `lightyear::websocket::client::WebSocketClientIo`
+  --> crates/client/src/main.rs:16:5
+   |
+16 | use lightyear::websocket::client::WebSocketClientIo;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `lightyear::websocket::client::WebSocketScheme`
+  --> crates/client/src/main.rs:18:5
+   |
+18 | use lightyear::websocket::client::WebSocketScheme;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `aeronet_io::connection::PeerAddr`
+  --> crates/client/src/main.rs:19:5
+   |
+19 | use aeronet_io::connection::PeerAddr;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `BuildableEntry`, `compute_buildables_for_player`, and `patch_buildable_entries_gold_and_counts`
+  --> crates/client/src/main.rs:27:5
+   |
+27 |     compute_buildables_for_player, existing_structure_positions_with_width, find_upgrade_target_id,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+28 |     patch_buildable_entries_gold_and_counts,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+29 |     resolve_structure_spawn_tile, structure_build_cost_gold, system_building_construction,
+30 |     BuildableEntry, Building,
+   |     ^^^^^^^^^^^^^^
+
+warning: unused imports: `BuildingKind` and `GameState`
+  --> crates/client/src/main.rs:32:30
+   |
+32 | use dark_rift_shared::game::{BuildingKind, GameEvent, GameState};
+   |                              ^^^^^^^^^^^^             ^^^^^^^^^
+
+warning: unused imports: `player_water_components` and `shares_border_with`
+  --> crates/client/src/main.rs:45:5
+   |
+45 |     player_water_components, resolve_fleet_route, shares_border_with, WarpFleet,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^                       ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `dark_rift_shared::pseudo_random::PseudoRandom`
+  --> crates/client/src/main.rs:48:5
+   |
+48 | use dark_rift_shared::pseudo_random::PseudoRandom;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `HashMap` and `HashSet`
+ --> crates/client/src/network.rs:2:24
+  |
+2 | use std::collections::{HashMap, HashSet};
+  |                        ^^^^^^^  ^^^^^^^
+
+warning: unused import: `BuildingKind`
+ --> crates/client/src/network.rs:3:41
+  |
+3 | use dark_rift_shared::game::{GameState, BuildingKind};
+  |                                         ^^^^^^^^^^^^
+
+warning: unused imports: `HashMap` and `HashSet`
+ --> crates/client/src/simulation.rs:2:24
+  |
+2 | use std::collections::{HashMap, HashSet};
+  |                        ^^^^^^^  ^^^^^^^
+
+warning: unused import: `BuildingKind`
+ --> crates/client/src/simulation.rs:3:41
+  |
+3 | use dark_rift_shared::game::{GameState, BuildingKind};
+  |                                         ^^^^^^^^^^^^
+
+warning: unused import: `lightyear::prelude::client::*`
+ --> crates/client/src/simulation.rs:5:5
+  |
+5 | use lightyear::prelude::client::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `HashMap` and `HashSet`
+ --> crates/client/src/lifecycle.rs:2:24
+  |
+2 | use std::collections::{HashMap, HashSet};
+  |                        ^^^^^^^  ^^^^^^^
+
+warning: unused import: `BuildingKind`
+ --> crates/client/src/lifecycle.rs:3:41
+  |
+3 | use dark_rift_shared::game::{GameState, BuildingKind};
+  |                                         ^^^^^^^^^^^^
+
+warning: unused import: `lightyear::prelude::client::*`
+ --> crates/client/src/lifecycle.rs:5:5
+  |
+5 | use lightyear::prelude::client::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `HashMap` and `HashSet`
+ --> crates/client/src/environment.rs:2:24
+  |
+2 | use std::collections::{HashMap, HashSet};
+  |                        ^^^^^^^  ^^^^^^^
+
+warning: unused import: `BuildingKind`
+ --> crates/client/src/environment.rs:3:41
+  |
+3 | use dark_rift_shared::game::{GameState, BuildingKind};
+  |                                         ^^^^^^^^^^^^
+
+warning: unused import: `dark_rift_shared::protocol::*`
+ --> crates/client/src/environment.rs:4:5
+  |
+4 | use dark_rift_shared::protocol::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `lightyear::prelude::client::*`
+ --> crates/client/src/environment.rs:5:5
+  |
+5 | use lightyear::prelude::client::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `HashMap` and `HashSet`
+ --> crates/client/src/vfx.rs:2:24
+  |
+2 | use std::collections::{HashMap, HashSet};
+  |                        ^^^^^^^  ^^^^^^^
+
+warning: unused imports: `BuildingKind` and `GameState`
+ --> crates/client/src/vfx.rs:3:30
+  |
+3 | use dark_rift_shared::game::{GameState, BuildingKind};
+  |                              ^^^^^^^^^  ^^^^^^^^^^^^
+
+warning: unused import: `dark_rift_shared::protocol::*`
+ --> crates/client/src/vfx.rs:4:5
+  |
+4 | use dark_rift_shared::protocol::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `lightyear::prelude::client::*`
+ --> crates/client/src/vfx.rs:5:5
+  |
+5 | use lightyear::prelude::client::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `lightyear::prelude::*`
+ --> crates/client/src/vfx.rs:6:5
+  |
+6 | use lightyear::prelude::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `HashMap` and `HashSet`
+ --> crates/client/src/buildings.rs:2:24
+  |
+2 | use std::collections::{HashMap, HashSet};
+  |                        ^^^^^^^  ^^^^^^^
+
+warning: unused import: `dark_rift_shared::protocol::*`
+ --> crates/client/src/buildings.rs:4:5
+  |
+4 | use dark_rift_shared::protocol::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `lightyear::prelude::client::*`
+ --> crates/client/src/buildings.rs:5:5
+  |
+5 | use lightyear::prelude::client::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `lightyear::prelude::*`
+ --> crates/client/src/buildings.rs:6:5
+  |
+6 | use lightyear::prelude::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+ --> crates/client/src/ui/hud_combat.rs:2:5
+  |
+2 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `dark_rift_shared::game::BuildingKind`
+ --> crates/client/src/ui/hud_combat.rs:5:5
+  |
+5 | use dark_rift_shared::game::BuildingKind;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `InGameEntity`, `TILE_SIZE`, and `tile_idx_to_world`
+ --> crates/client/src/ui/hud_combat.rs:6:29
+  |
+6 | use crate::{ClientSettings, InGameEntity, MyPlayerId, TILE_SIZE, tile_idx_to_world, clamp_ui_scale};
+  |                             ^^^^^^^^^^^^              ^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `lightyear::prelude::client::*`
+ --> crates/client/src/ui/hud_combat.rs:8:5
+  |
+8 | use lightyear::prelude::client::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `touch_target_for_breakpoint`
+  --> crates/client/src/ui/hud_combat.rs:10:24
+   |
+10 | use crate::ui::shell::{touch_target_for_breakpoint, UiBreakpoint, UiShellState};
+   |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+ --> crates/client/src/ui/hud_build.rs:2:5
+  |
+2 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `dark_rift_shared::protocol::*`
+ --> crates/client/src/ui/hud_build.rs:4:5
+  |
+4 | use dark_rift_shared::protocol::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `ClientSettings`, `InGameEntity`, `TILE_SIZE`, `clamp_ui_scale`, and `tile_idx_to_world`
+ --> crates/client/src/ui/hud_build.rs:7:13
+  |
+7 | use crate::{ClientSettings, InGameEntity, MyPlayerId, TILE_SIZE, tile_idx_to_world, clamp_ui_scale, OverlayDiagnostics, Building};
+  |             ^^^^^^^^^^^^^^  ^^^^^^^^^^^^              ^^^^^^^^^  ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^
+
+warning: unused import: `lightyear::prelude::*`
+ --> crates/client/src/ui/hud_build.rs:8:5
+  |
+8 | use lightyear::prelude::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `UiBreakpoint`, `UiShellState`, and `touch_target_for_breakpoint`
+  --> crates/client/src/ui/hud_build.rs:10:24
+   |
+10 | use crate::ui::shell::{touch_target_for_breakpoint, UiBreakpoint, UiShellState};
+   |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^^^^
+
+warning: unused import: `dark_rift_shared::protocol::*`
+ --> crates/client/src/ui/hud_events.rs:4:5
+  |
+4 | use dark_rift_shared::protocol::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `InGameEntity`, `TILE_SIZE`, and `tile_idx_to_world`
+ --> crates/client/src/ui/hud_events.rs:5:29
+  |
+5 | use crate::{ClientSettings, InGameEntity, MyPlayerId, TILE_SIZE, tile_idx_to_world, clamp_ui_scale, panel_radius_for_breakpoint};
+  |                             ^^^^^^^^^^^^              ^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `UiBreakpoint`
+  --> crates/client/src/ui/hud_events.rs:14:53
+   |
+14 | use crate::ui::shell::{touch_target_for_breakpoint, UiBreakpoint, UiShellState};
+   |                                                     ^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+ --> crates/client/src/ui/labels.rs:2:5
+  |
+2 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `dark_rift_shared::protocol::*`
+ --> crates/client/src/ui/labels.rs:4:5
+  |
+4 | use dark_rift_shared::protocol::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `dark_rift_shared::game::BuildingKind`
+ --> crates/client/src/ui/labels.rs:5:5
+  |
+5 | use dark_rift_shared::game::BuildingKind;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `MyPlayerId`, `clamp_ui_scale`, and `tile_idx_to_world`
+ --> crates/client/src/ui/labels.rs:6:43
+  |
+6 | use crate::{ClientSettings, InGameEntity, MyPlayerId, TILE_SIZE, tile_idx_to_world, clamp_ui_scale, building_kind_short, player_label...
+  |                                           ^^^^^^^^^^             ^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ui::theme::*`
+ --> crates/client/src/ui/labels.rs:7:5
+  |
+7 | use crate::ui::theme::*;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `UiBreakpoint`, `UiShellState`, and `touch_target_for_breakpoint`
+ --> crates/client/src/ui/labels.rs:8:24
+  |
+8 | use crate::ui::shell::{touch_target_for_breakpoint, UiBreakpoint, UiShellState};
+  |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^^^^
+
+warning: unused import: `bevy::text::FontWeight`
+ --> crates/client/src/ui/setup.rs:7:5
+  |
+7 | use bevy::text::FontWeight;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::time::Duration`
+ --> crates/client/src/ui/setup.rs:8:5
+  |
+8 | use std::time::Duration;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `dark_rift_shared::protocol::*`
+ --> crates/client/src/ui/setup.rs:9:5
+  |
+9 | use dark_rift_shared::protocol::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `BuildStructureMode` is ambiguous
+   --> crates/client/src/ui/setup.rs:436:21
+    |
+436 |     build_mode: Res<BuildStructureMode>,
+    |                     ^^^^^^^^^^^^^^^^^^ ambiguous name
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #114095 <https://github.com/rust-lang/rust/issues/114095>
+    = note: ambiguous because of multiple glob imports of a name in the same module
+note: `BuildStructureMode` could refer to the struct imported here
+   --> crates/client/src/ui/setup.rs:12:5
+    |
+ 12 | use crate::ui::*;
+    |     ^^^^^^^^^^^^
+    = help: consider adding an explicit import of `BuildStructureMode` to disambiguate
+note: `BuildStructureMode` could also refer to the struct imported here
+   --> crates/client/src/ui/setup.rs:11:5
+    |
+ 11 | use crate::state::*;
+    |     ^^^^^^^^^^^^^^^
+    = help: consider adding an explicit import of `BuildStructureMode` to disambiguate
+    = note: `#[warn(ambiguous_glob_imports)]` (part of `#[warn(future_incompatible)]`) on by default
+
+warning: unused import: `bevy_enoki::prelude::*`
+ --> crates/client/src/state.rs:4:5
+  |
+4 | use bevy_enoki::prelude::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `GameState`
+ --> crates/client/src/state.rs:8:44
+  |
+8 | use dark_rift_shared::game::{BuildingKind, GameState};
+  |                                            ^^^^^^^^^
+
+warning: unused import: `clap::Parser`
+ --> crates/client/src/state.rs:9:5
+  |
+9 | use clap::Parser;
+  |     ^^^^^^^^^^^^
+
+warning: unused import: `dark_rift_shared::pathfinding::WaterPathfinderScratch`
+  --> crates/client/src/state.rs:10:5
+   |
+10 | use dark_rift_shared::pathfinding::WaterPathfinderScratch;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `dark_rift_shared::water_components::WaterComponents`
+  --> crates/client/src/state.rs:11:5
+   |
+11 | use dark_rift_shared::water_components::WaterComponents;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ReplayFile`
+  --> crates/client/src/state.rs:13:5
+   |
+13 | use crate::ReplayFile;
+   |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ui::*`
+  --> crates/client/src/state.rs:14:5
+   |
+14 | use crate::ui::*;
+   |     ^^^^^^^^^^^^
+
+warning: unused import: `bevy::text::FontWeight`
+  --> crates/client/src/startup.rs:13:5
+   |
+13 | use bevy::text::FontWeight;
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::time::Duration`
+  --> crates/client/src/startup.rs:14:5
+   |
+14 | use std::time::Duration;
+   |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `dark_rift_shared::protocol::*`
+  --> crates/client/src/startup.rs:15:5
+   |
+15 | use dark_rift_shared::protocol::*;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `dark_rift_shared::building::*`
+  --> crates/client/src/startup.rs:17:5
+   |
+17 | use dark_rift_shared::building::*;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `lightyear::prelude::*`
+  --> crates/client/src/startup.rs:20:5
+   |
+20 | use lightyear::prelude::*;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `lightyear::prelude::client::*`
+  --> crates/client/src/startup.rs:21:5
+   |
+21 | use lightyear::prelude::client::*;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::net::SocketAddr`
+  --> crates/client/src/startup.rs:22:5
+   |
+22 | use std::net::SocketAddr;
+   |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: ambiguous glob re-exports
+  --> crates/client/src/main.rs:77:9
+   |
+77 | pub use buildings::*;
+   |         ^^^^^^^^^^^^ the name `building_kind_icon_path` in the value namespace is first re-exported here
+...
+85 | pub use state::*;
+   |         -------- but the name `building_kind_icon_path` in the value namespace is also re-exported here
+   |
+   = note: `#[warn(ambiguous_glob_reexports)]` on by default
+
+warning: ambiguous glob re-exports
+  --> crates/client/src/main.rs:83:9
+   |
+83 | pub use visuals::*;
+   |         ^^^^^^^^^^ the name `FollowFleetBoat` in the type namespace is first re-exported here
+84 | pub use ui::*;
+85 | pub use state::*;
+   |         -------- but the name `FollowFleetBoat` in the type namespace is also re-exported here
+
+warning: ambiguous glob re-exports
+  --> crates/client/src/main.rs:83:9
+   |
+83 | pub use visuals::*;
+   |         ^^^^^^^^^^ the name `FollowFleetWake` in the type namespace is first re-exported here
+84 | pub use ui::*;
+85 | pub use state::*;
+   |         -------- but the name `FollowFleetWake` in the type namespace is also re-exported here
+
+warning: ambiguous glob re-exports
+  --> crates/client/src/main.rs:83:9
+   |
+83 | pub use visuals::*;
+   |         ^^^^^^^^^^ the name `FollowFleetWake` in the value namespace is first re-exported here
+84 | pub use ui::*;
+85 | pub use state::*;
+   |         -------- but the name `FollowFleetWake` in the value namespace is also re-exported here
+
+warning: ambiguous glob re-exports
+  --> crates/client/src/main.rs:83:9
+   |
+83 | pub use visuals::*;
+   |         ^^^^^^^^^^ the name `FollowFleetTarget` in the type namespace is first re-exported here
+84 | pub use ui::*;
+85 | pub use state::*;
+   |         -------- but the name `FollowFleetTarget` in the type namespace is also re-exported here
+
+warning: ambiguous glob re-exports
+  --> crates/client/src/main.rs:83:9
+   |
+83 | pub use visuals::*;
+   |         ^^^^^^^^^^ the name `FleetClientVisuals` in the type namespace is first re-exported here
+84 | pub use ui::*;
+85 | pub use state::*;
+   |         -------- but the name `FleetClientVisuals` in the type namespace is also re-exported here
+
+warning: ambiguous glob re-exports
+  --> crates/client/src/main.rs:83:9
+   |
+83 | pub use visuals::*;
+   |         ^^^^^^^^^^ the name `FleetClientVisuals` in the value namespace is first re-exported here
+84 | pub use ui::*;
+85 | pub use state::*;
+   |         -------- but the name `FleetClientVisuals` in the value namespace is also re-exported here
+
+warning: ambiguous glob re-exports
+  --> crates/client/src/main.rs:83:9
+   |
+83 | pub use visuals::*;
+   |         ^^^^^^^^^^ the name `CombatVfx` in the type namespace is first re-exported here
+84 | pub use ui::*;
+85 | pub use state::*;
+   |         -------- but the name `CombatVfx` in the type namespace is also re-exported here
+
+warning: ambiguous glob re-exports
+  --> crates/client/src/main.rs:84:9
+   |
+84 | pub use ui::*;
+   |         ^^^^^ the name `BuildStructureMode` in the type namespace is first re-exported here
+85 | pub use state::*;
+   |         -------- but the name `BuildStructureMode` in the type namespace is also re-exported here
+
+warning: ambiguous glob re-exports
+  --> crates/client/src/main.rs:84:9
+   |
+84 | pub use ui::*;
+   |         ^^^^^ the name `BuildStructureMode` in the value namespace is first re-exported here
+85 | pub use state::*;
+   |         -------- but the name `BuildStructureMode` in the value namespace is also re-exported here
+
+warning: `BuildStructureMode` is ambiguous
+  --> crates/client/src/input.rs:17:49
+   |
+17 |     MyPlayerId, AttackRatio, LocalIntentBuffer, BuildStructureMode,
+   |                                                 ^^^^^^^^^^^^^^^^^^ ambiguous name
+   |
+   = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+   = note: for more information, see issue #114095 <https://github.com/rust-lang/rust/issues/114095>
+   = note: ambiguous because of multiple glob imports of a name in the same module
+note: `BuildStructureMode` could refer to the struct imported here
+  --> crates/client/src/main.rs:84:9
+   |
+84 | pub use ui::*;
+   |         ^^^^^
+   = help: consider adding an explicit import of `BuildStructureMode` to disambiguate
+note: `BuildStructureMode` could also refer to the struct imported here
+  --> crates/client/src/main.rs:85:9
+   |
+85 | pub use state::*;
+   |         ^^^^^^^^
+   = help: consider adding an explicit import of `BuildStructureMode` to disambiguate
+
+warning: `BuildStructureMode` is ambiguous
+   --> crates/client/src/lifecycle.rs:190:28
+    |
+190 |     mut build_mode: ResMut<BuildStructureMode>,
+    |                            ^^^^^^^^^^^^^^^^^^ ambiguous name
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #114095 <https://github.com/rust-lang/rust/issues/114095>
+    = note: ambiguous because of multiple glob imports of a name in the same module
+note: `BuildStructureMode` could refer to the struct imported here
+   --> crates/client/src/main.rs:84:9
+    |
+ 84 | pub use ui::*;
+    |         ^^^^^
+    = help: consider adding an explicit import of `BuildStructureMode` to disambiguate
+note: `BuildStructureMode` could also refer to the struct imported here
+   --> crates/client/src/main.rs:85:9
+    |
+ 85 | pub use state::*;
+    |         ^^^^^^^^
+    = help: consider adding an explicit import of `BuildStructureMode` to disambiguate
+
+warning: `BuildStructureMode` is ambiguous
+  --> crates/client/src/buildings.rs:35:15
+   |
+35 |     mode: Res<BuildStructureMode>,
+   |               ^^^^^^^^^^^^^^^^^^ ambiguous name
+   |
+   = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+   = note: for more information, see issue #114095 <https://github.com/rust-lang/rust/issues/114095>
+   = note: ambiguous because of multiple glob imports of a name in the same module
+note: `BuildStructureMode` could refer to the struct imported here
+  --> crates/client/src/main.rs:84:9
+   |
+84 | pub use ui::*;
+   |         ^^^^^
+   = help: consider adding an explicit import of `BuildStructureMode` to disambiguate
+note: `BuildStructureMode` could also refer to the struct imported here
+  --> crates/client/src/main.rs:85:9
+   |
+85 | pub use state::*;
+   |         ^^^^^^^^
+   = help: consider adding an explicit import of `BuildStructureMode` to disambiguate
+
+warning: `BuildStructureMode` is ambiguous
+   --> crates/client/src/input.rs:178:21
+    |
+178 |     build_mode: Res<BuildStructureMode>,
+    |                     ^^^^^^^^^^^^^^^^^^ ambiguous name
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #114095 <https://github.com/rust-lang/rust/issues/114095>
+    = note: ambiguous because of multiple glob imports of a name in the same module
+note: `BuildStructureMode` could refer to the struct imported here
+   --> crates/client/src/main.rs:84:9
+    |
+ 84 | pub use ui::*;
+    |         ^^^^^
+    = help: consider adding an explicit import of `BuildStructureMode` to disambiguate
+note: `BuildStructureMode` could also refer to the struct imported here
+   --> crates/client/src/main.rs:85:9
+    |
+ 85 | pub use state::*;
+    |         ^^^^^^^^
+    = help: consider adding an explicit import of `BuildStructureMode` to disambiguate
+
+warning: `BuildStructureMode` is ambiguous
+   --> crates/client/src/main.rs:213:26
+    |
+213 |         .init_resource::<BuildStructureMode>()
+    |                          ^^^^^^^^^^^^^^^^^^ ambiguous name
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #114095 <https://github.com/rust-lang/rust/issues/114095>
+    = note: ambiguous because of multiple glob imports of a name in the same module
+note: `BuildStructureMode` could refer to the struct imported here
+   --> crates/client/src/main.rs:84:9
+    |
+ 84 | pub use ui::*;
+    |         ^^^^^
+    = help: consider adding an explicit import of `BuildStructureMode` to disambiguate
+note: `BuildStructureMode` could also refer to the struct imported here
+   --> crates/client/src/main.rs:85:9
+    |
+ 85 | pub use state::*;
+    |         ^^^^^^^^
+    = help: consider adding an explicit import of `BuildStructureMode` to disambiguate
+
+warning: unused import: `lightyear::prelude`
+ --> crates/client/src/simulation.rs:6:5
+  |
+6 | use lightyear::prelude::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `lightyear::prelude`
+ --> crates/client/src/environment.rs:6:5
+  |
+6 | use lightyear::prelude::*;
+  |     ^^^^^^^^^^^^^^^^^^
+
+error: lifetime may not live long enough
+  --> crates/client/src/state.rs:46:10
+   |
+46 | #[derive(bevy::ecs::system::SystemParam)] pub struct StartGameParams<'w> { pub cmds: Commands<'w, 'w>, pub net: ResMut<'w, NetTiming...
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |          |
+   |          lifetime `'s` defined here
+   |          lifetime `'w` defined here
+   |          associated function was supposed to return data with lifetime `'w` but it is returning data with lifetime `'s`
+   |
+   = help: consider adding the following bound: `'s: 'w`
+   = note: this error originates in the derive macro `bevy::ecs::system::SystemParam` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `dark-rift-client` (bin "dark-rift-client") generated 94 warnings
+error: could not compile `dark-rift-client` (bin "dark-rift-client") due to 1 previous error; 100 warnings emitted

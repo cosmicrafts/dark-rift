@@ -35,6 +35,7 @@ cyan "📦 Building Windows release v${CLEAN_VERSION} for ${TARGET}"
 
 # ── 2. Patch server IP for production ──────────────────────────
 cyan "==> Patching server IP to ${VPS_IP}..."
+cp crates/client/src/main.rs crates/client/src/main.rs.bak
 if sed --version 2>/dev/null | grep -q GNU; then
   sed -i "s/127.0.0.1:25565/${VPS_IP}:25565/g" crates/client/src/main.rs
 else
@@ -46,10 +47,10 @@ cyan "==> Compiling Windows executable..."
 rustup target add "${TARGET}" || true
 
 cargo build --release -p dark-rift-client --target "${TARGET}" 2>&1 \
-  || { red "❌ Compilation failed"; git checkout crates/client/src/main.rs; exit 1; }
+  || { red "❌ Compilation failed"; mv crates/client/src/main.rs.bak crates/client/src/main.rs; exit 1; }
 
 # ── 4. Restore source ────────────────────────────────────────
-git checkout crates/client/src/main.rs
+mv crates/client/src/main.rs.bak crates/client/src/main.rs
 green "✅ Source restored to localhost."
 
 # ── 5. Package into Archive (Binary + Assets) ─────────────────

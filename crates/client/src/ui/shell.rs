@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
-use crate::ui_layers::HUD_SHELL;
-use crate::ui_theme::{BUTTON_RADIUS, PANEL_RADIUS, SPACE_2, SPACE_3, SPACE_4};
+use crate::ui::layers::HUD_SHELL;
+use crate::ui::theme::{BUTTON_RADIUS, PANEL_RADIUS, SPACE_2, SPACE_3, SPACE_4};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UiBreakpoint {

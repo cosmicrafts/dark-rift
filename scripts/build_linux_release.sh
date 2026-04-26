@@ -28,6 +28,7 @@ cyan "📦 Building Linux release v${CLEAN_VERSION}"
 
 # ── 2. Patch server IP for production ──────────────────────────
 cyan "==> Patching server IP to ${VPS_IP}..."
+cp crates/client/src/main.rs crates/client/src/main.rs.bak
 sed -i "s/127.0.0.1:25565/${VPS_IP}:25565/g" crates/client/src/main.rs
 
 # ── 3. Build static release (NO dynamic_linking) ──────────────
@@ -36,10 +37,10 @@ cyan "==> Compiling release binary (static, no libbevy_dylib)..."
 # This ensures bevy is linked statically and the binary is
 # fully self-contained with zero .so dependencies.
 cargo build --release -p dark-rift-client --target "${TARGET}" 2>&1 \
-  || { red "❌ Compilation failed"; git checkout crates/client/src/main.rs; exit 1; }
+  || { red "❌ Compilation failed"; mv crates/client/src/main.rs.bak crates/client/src/main.rs; exit 1; }
 
 # ── 4. Restore source ────────────────────────────────────────
-git checkout crates/client/src/main.rs
+mv crates/client/src/main.rs.bak crates/client/src/main.rs
 green "✅ Source restored to localhost."
 
 # ── 5. Verify no dynamic bevy dependency ──────────────────────

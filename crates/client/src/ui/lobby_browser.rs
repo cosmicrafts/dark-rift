@@ -6,13 +6,13 @@ use bevy::ui::{UiTransform, Val2};
 use dark_rift_shared::player::PlayerType;
 use dark_rift_shared::protocol::*;
 use crate::settings::{save_client_settings_config, ProfileConfig};
-use crate::ui_shell::{touch_target_for_breakpoint, UiBreakpoint, UiShellState};
-use crate::ui_layers::LOBBY_BROWSER;
+use crate::ui::shell::{touch_target_for_breakpoint, UiBreakpoint, UiShellState};
+use crate::ui::layers::LOBBY_BROWSER;
 use crate::{ClientSettings, Cli};
-use crate::ui_theme::*;
+use crate::ui::theme::*;
 use lightyear::prelude::{MessageReceiver, MessageSender};
 
-const GAME_VERSION_LABEL: &str = include_str!("../../../version.txt");
+const GAME_VERSION_LABEL: &str = include_str!("../../../../version.txt");
 
 #[derive(Resource, Default)]
 pub struct JoinedLobby(pub Option<u64>);
@@ -869,7 +869,7 @@ pub fn system_apply_lobby_controls_responsive(
         waiting_content.row_gap = Val::Px(section_gap);
     }
     if let Ok(mut nick) = q.nodes.p1().single_mut() {
-        nick.min_height = Val::Px((touch_h + 22.0).max(52.0));
+        nick.min_height = Val::Px((touch_h + 22.0).max(52.0) as f32);
         nick.padding = UiRect::axes(Val::Px(16.0), Val::Px(12.0));
     }
     if let Ok(mut solo) = q.nodes.p2().single_mut() {
@@ -879,7 +879,7 @@ pub fn system_apply_lobby_controls_responsive(
         stub.min_height = Val::Px((action_min_height - 10.0).max(60.0));
     }
     for mut cancel in &mut q.nodes.p4() {
-        cancel.min_height = Val::Px((touch_h + 24.0).max(54.0));
+        cancel.min_height = Val::Px((touch_h + 24.0).max(54.0) as f32);
     }
     for mut card in &mut q.nodes.p5() {
         card.min_height = Val::Px(card_min_height);

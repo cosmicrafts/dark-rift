@@ -58,6 +58,7 @@ SERVER_PID=$!
 
 # Preparar Cliente Nativo Linux (reemplazando IP temporalmente)
 cyan "==> 2.1 [PARALELO] Compilando Cliente Nativo Linux..."
+cp crates/client/src/main.rs crates/client/src/main.rs.bak
 sed -i "s/127.0.0.1:25565/${VPS_IP}:25565/g" crates/client/src/main.rs
 
 # Lanzar compilar Cliente Nativo en background
@@ -68,10 +69,10 @@ LINUX_CLIENT_PID=$!
 # Esperar a que terminen todos
 wait $CLIENT_PID || { red "❌ Error compilando Cliente WASM"; exit 1; }
 wait $SERVER_PID || { red "❌ Error compilando Servidor Musl"; exit 1; }
-wait $LINUX_CLIENT_PID || { red "❌ Error compilando Cliente Nativo Linux"; exit 1; }
+wait $LINUX_CLIENT_PID || { red "❌ Error compilando Cliente Nativo Linux"; mv crates/client/src/main.rs.bak crates/client/src/main.rs; exit 1; }
 
 # Restaurar main.rs a como estaba (127.0.0.1)
-git checkout crates/client/src/main.rs
+mv crates/client/src/main.rs.bak crates/client/src/main.rs
 
 green "✅ Compilaciones de Rust exitosas."
 

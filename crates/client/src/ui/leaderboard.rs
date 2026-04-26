@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use dark_rift_shared::game::GameState;
 use crate::{ClientSettings, Cli};
-use crate::ui_theme::*;
+use crate::ui::theme::*;
 use crate::InGameEntity;
 
 #[derive(Component)]
