@@ -59,12 +59,13 @@ pub fn apply_stamped_intent(
                 break;
             }
         }
-        GameplayIntent::LaunchFleet {
-            target_tile,
-            troops,
-        } => {
-            let buildings: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
-            fleet::apply_launch_fleet_intent(
+ GameplayIntent::LaunchFleet {
+ target_tile,
+ troops,
+ } => {
+ let mut buildings: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
+ buildings.sort_by_key(|b| b.id);
+ fleet::apply_launch_fleet_intent(
                 commands,
                 game,
                 path_scratch,
