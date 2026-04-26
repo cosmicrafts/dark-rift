@@ -1,6 +1,6 @@
 //! Intent → AttackExecution: merge, mutual cancel, upfront troop reservation (OpenFront parity).
 
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::BinaryHeap;
 
 use bevy::prelude::*;
 
@@ -19,24 +19,32 @@ use crate::warp_fleet::{resolve_fleet_route, FleetRoute, WarpFleet};
 use crate::water_components::WaterComponents;
 
 /// Merge two frontiers: same cell keeps the tile with lower `priority` (better for expansion order).
+///
+/// **Determinism**: We do NOT use a `HashMap` for dedup because `HashMap` iteration
+/// order is randomised by SipHash.  When two tiles at the same `(x,y)` share the
+/// exact same `priority`, the `HashMap` would non-deterministically choose which
+/// `insert_seq` to keep, silently diverging the `BinaryHeap` across clients.
+/// Instead we sort deterministically and `dedup_by_key` — the first entry per key
+/// (lowest priority, then lowest insert_seq, then spatial) survives.
 pub fn merge_frontiers(
     mut a: BinaryHeap<PrioritizedTile>,
     mut b: BinaryHeap<PrioritizedTile>,
 ) -> BinaryHeap<PrioritizedTile> {
-    let mut best: HashMap<(u32, u32), PrioritizedTile> = HashMap::new();
-    for t in a.drain().chain(b.drain()) {
-        let k = (t.x, t.y);
-        best.entry(k)
-            .and_modify(|cur| {
-                if t.priority < cur.priority {
-                    *cur = t;
-                }
-            })
-            .or_insert(t);
-    }
-    let mut v: Vec<PrioritizedTile> = best.into_values().collect();
-    v.sort_by(|x, y| x.cmp(y));
-    BinaryHeap::from(v)
+    let mut all: Vec<PrioritizedTile> = Vec::with_capacity(a.len() + b.len());
+    all.extend(a.drain());
+    all.extend(b.drain());
+
+    // Primary key: spatial coordinate.
+    // Secondary: keep the *best* tile (lowest priority, then lowest insert_seq).
+    all.sort_by(|a, b| {
+        (a.x, a.y)
+            .cmp(&(b.x, b.y))
+            .then_with(|| a.priority.cmp(&b.priority))
+            .then_with(|| a.insert_seq.cmp(&b.insert_seq))
+    });
+    all.dedup_by_key(|t| (t.x, t.y));
+
+    BinaryHeap::from(all)
 }
 
 pub fn build_attack_frontier(
@@ -150,11 +158,8 @@ pub fn spawn_or_merge_attack_for_fleet_arrival(
         return;
     }
 
-    let exec_id = game
-        .tick
-        .wrapping_shl(32)
-        .wrapping_add(fleet_id)
-        .wrapping_add(0xF1EE0000);
+    let exec_id = game.next_attack_id;
+    game.next_attack_id = game.next_attack_id.wrapping_add(1).max(1);
 
     commands.spawn(AttackExecution {
         id: exec_id,
@@ -337,7 +342,6 @@ pub fn apply_stamped_intent(
             }
         }
         GameplayIntent::LaunchFleet {
-            target_owner,
             target_tile,
             troops,
         } => {
@@ -349,7 +353,6 @@ pub fn apply_stamped_intent(
                 water_components,
                 q_fleet,
                 stamped.player_id,
-                *target_owner,
                 *target_tile,
                 *troops,
                 &buildings,
@@ -357,9 +360,15 @@ pub fn apply_stamped_intent(
         }
         GameplayIntent::CancelAttack { attack_id } => {
             let pid = stamped.player_id;
-            for (_, mut exec) in q_exec.iter_mut() {
-                if exec.id == *attack_id && exec.owner_id == pid {
-                    exec.retreating = true;
+            let mut candidates: Vec<(u64, u64, Entity)> = q_exec
+                .iter()
+                .filter(|(_, ex)| ex.id == *attack_id && ex.owner_id == pid)
+                .map(|(e, ex)| (ex.id, e.to_bits(), e))
+                .collect();
+            candidates.sort_unstable_by_key(|(id, bits, _)| (*id, *bits));
+            for (_, _, e) in candidates {
+                if let Ok((_, mut ex)) = q_exec.get_mut(e) {
+                    ex.retreating = true;
                     return;
                 }
             }
@@ -394,9 +403,8 @@ fn apply_launch_fleet_intent(
     water_components: &WaterComponents,
     _q_fleet: &mut Query<(Entity, &mut WarpFleet)>,
     player_id: u16,
-    target_owner: u16,
     target_tile: u32,
-    troops: f64,
+    troops: Option<f64>,
     _buildings: &[Building],
 ) {
     let Some(player) = game.player(player_id) else {
@@ -406,16 +414,18 @@ fn apply_launch_fleet_intent(
     if !player.alive {
         return;
     }
-    if target_owner == player_id {
-        return;
-    }
-
     let map_area = game.map.width.saturating_mul(game.map.height);
     if map_area == 0 || target_tile >= map_area {
         bevy::log::warn!(
             "apply_launch_fleet_intent: out-of-range target_tile={} (player {})",
             target_tile, player_id
         );
+        return;
+    }
+
+    let target_owner = game.map.owner_id(target_tile % game.map.width, target_tile / game.map.width);
+
+    if target_owner == player_id {
         return;
     }
 
@@ -464,7 +474,7 @@ fn apply_launch_fleet_intent(
     };
 
     let pool_cap = player.troops;
-    let launch = troops.max(0.0).min(pool_cap);
+    let launch = troops.unwrap_or(pool_cap).max(0.0).min(pool_cap);
     if launch < config::EXPAND_COST {
         return;
     }
@@ -621,7 +631,8 @@ fn apply_attack_intent(
         return;
     }
 
-    let exec_id = ((game.tick as u64) << 32) | (intent_index as u64);
+    let exec_id = game.next_attack_id;
+    game.next_attack_id = game.next_attack_id.wrapping_add(1).max(1);
     commands.spawn(AttackExecution {
         id: exec_id,
         owner_id: player_id,
@@ -1189,5 +1200,85 @@ mod building_intent_tests {
         let a = run_bot_think_digest(&[2, 3]);
         let b = run_bot_think_digest(&[2, 3]);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn attack_intents_use_monotonic_attack_ids() {
+        let mut world = World::new();
+        let mut game = GameState::new(321, 3, 1);
+        game.phase = GamePhase::Playing;
+        game.players.push(Player::new_human(1, "p1".into(), [1.0, 0.0, 0.0]));
+        game.player_lookup = vec![None, Some(0)];
+        game.set_tile_owner(0, 0, 1);
+        game.set_tile_owner(1, 0, 0);
+        game.set_tile_owner(2, 0, 0);
+        if let Some(p) = game.player_mut(1) {
+            p.troops = 5_000.0;
+            p.max_troops = 10_000.0;
+        }
+        world.insert_resource(game);
+        {
+            let g = world.resource::<GameState>();
+            world.insert_resource(WaterComponents::compute(&g.map));
+        }
+        world.insert_resource(crate::pathfinding::WaterPathfinderScratch::default());
+
+        let mut state = SystemState::<(
+            Commands,
+            ResMut<GameState>,
+            Query<(Entity, &mut AttackExecution)>,
+            Query<(Entity, &mut WarpFleet)>,
+            Query<(Entity, &mut Building)>,
+            ResMut<crate::pathfinding::WaterPathfinderScratch>,
+            Res<WaterComponents>,
+        )>::new(&mut world);
+        {
+            let (
+                mut commands,
+                mut game,
+                mut q_exec,
+                mut q_fleet,
+                mut q_building,
+                mut scratch,
+                water,
+            ) = state.get_mut(&mut world);
+            apply_stamped_intent(
+                &mut commands,
+                &mut game,
+                &mut q_exec,
+                &mut q_fleet,
+                &mut q_building,
+                &StampedIntent {
+                    player_id: 1,
+                    intent: GameplayIntent::Attack(AttackIntent { target_owner: 0, troops: Some(800.0) }),
+                },
+                0,
+                &mut scratch,
+                &water,
+            );
+            apply_stamped_intent(
+                &mut commands,
+                &mut game,
+                &mut q_exec,
+                &mut q_fleet,
+                &mut q_building,
+                &StampedIntent {
+                    player_id: 1,
+                    intent: GameplayIntent::Attack(AttackIntent { target_owner: 0, troops: Some(700.0) }),
+                },
+                1,
+                &mut scratch,
+                &water,
+            );
+        }
+        state.apply(&mut world);
+        world.flush();
+
+        let mut q = world.query::<&AttackExecution>();
+        let mut ids: Vec<u64> = q.iter(&world).map(|a| a.id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids, vec![1, 2]);
+        assert_eq!(world.resource::<GameState>().next_attack_id, 3);
     }
 }

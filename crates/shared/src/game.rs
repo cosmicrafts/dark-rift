@@ -111,6 +111,9 @@ pub struct GameState {
     /// Monotonic id for structure/building entities.
     #[serde(default = "default_next_building_id")]
     pub next_building_id: u64,
+    /// Monotonic id for `AttackExecution` entities (ground + fleet merge roots).
+    #[serde(default = "default_next_attack_id")]
+    pub next_attack_id: u64,
 }
 
 fn default_next_fleet_id() -> u64 {
@@ -118,6 +121,10 @@ fn default_next_fleet_id() -> u64 {
 }
 
 fn default_next_building_id() -> u64 {
+    1
+}
+
+fn default_next_attack_id() -> u64 {
     1
 }
 
@@ -134,6 +141,7 @@ impl GameState {
             events: Vec::new(),
             next_fleet_id: 1,
             next_building_id: 1,
+            next_attack_id: 1,
         }
     }
 

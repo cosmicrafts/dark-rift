@@ -118,6 +118,26 @@ the server only relays **human** intents (`handle_intent_messages`). Bot code
 gets the determinism rules *doubled*: no `HashMap`, no Vec-order reuse across
 ticks, seed the RNG deterministically from `(game.seed, game.tick, bot_id)`.
 
+#### Current simulation determinism invariants (Bots & Combat)
+The current implementation is strictly deterministic across Native and WASM architectures due to these architectural invariants:
+
+1. **Immutable Ordered Snapshots**: Both `system_bot_think` and `system_attack_execution` snapshot simulation inputs (`q_building` -> `Vec<Building>`) and rigidly sort them by `Building.id` before any calculations or state mutations occur (e.g., `defense_post_priority_bonus`). `q_building.iter()` yields an unstable memory-layout order across clients and entity generations, making the sorting step a critical Poka-Yoke.
+2. **Deterministic Bot Scheduling**: The bot schedule is built from `game.players` and then sorted by `bot_id`. Insertion order in `GameState.players` must not affect behavior.
+3. **Isolated Bot Entropy**: Each bot gets its own `PseudoRandom` seeded from `(game.seed, game.tick, bot_id)`. There is no shared global bot RNG stream; one bot taking a different branch cannot shift random draws for later bots.
+4. **Stable Target Sets**: Enemy target candidates are `sort_unstable()` + `dedup()` before selection, so duplicate border contacts and scan order do not affect the target set.
+5. **Two-Phase Application**: Structure and attack decisions are collected into `BotDecision`, sorted by `(bot_id, BotDecisionKind)`, and only then applied through `apply_stamped_intent`.
+6. **Integer Escalation**: OpenFront-style exponential structure costs use integer doubling in `scaled_pow2_cost`, strictly avoiding `powf`/`powi` or other platform-sensitive math.
+7. **f64 Subnormal Mitigation**: Combat boundary expansion curves (`max_tiles_f64`) explicitly cast operands to `f64`. While `f32` is nominally IEEE-754 compliant, intermediate truncation of `f32` subnormals during division between massive troop counts and small boundaries has been observed to deviate by 1 ULP across WASM (`f32.min`/`f32.max`) and x86_64, causing cascade desyncs. `f64` inherently prevents these catastrophic precision cliffs.
+8. **HashMap-Free Frontier Merge**: `merge_frontiers` must **never** use `HashMap` for dedup. When two `BinaryHeap` frontiers are merged and both contain a tile at the same `(x,y)` with identical `priority` values (rare but happens when RNG draws collide), `HashMap` insertion order is randomized by SipHash, so different clients would keep different `insert_seq` values — silently diverging the expansion wavefront. The fix uses `Vec` sort by `(x, y, priority, insert_seq)` + `dedup_by_key((x, y))`, which is fully deterministic. This was the root cause of the "starts light then completely diverges during PvP" desync pattern.
+9. **Negative Troop Clamping in PvP**: Defender `troops` can go negative when multiple attacks drain simultaneously before `system_player_income` restores them. All PvP reads of defender troops must clamp with `.max(0.0)` **before** computing `ratio` or `def_loss`. Without the clamp, negative troops produce negative `def_loss` — meaning the defender **gains** troops when tiles are captured — compounding each tick and diverging exponentially. The specific lines are: `defender_troops = p.troops.max(0.0)` (expansion speed) and `def_loss = target_player.troops.max(0.0) / tile_count` (attrition).
+
+If simulation determinism breaks again, restore those invariants before tuning strategy or logic. The regression tests that protect this are:
+
+```bash
+cargo test -p dark-rift-shared bot_think_is_stable_across_player_insertion_order
+cargo test -p dark-rift-shared bot_think_is_repeatable_same_seed_and_order
+```
+
 ### 6. No `f64::powf` / `f32::powf` / `exp` / `ln` / transcendentals on game state
 `libm` transcendentals are **not** bit-identical across
 `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, and

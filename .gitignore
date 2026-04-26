@@ -9,3 +9,4 @@ web/.loader-preview/
 latest_replay.json
 server.log
 client.log
+builds/

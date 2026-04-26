@@ -25,9 +25,8 @@ pub enum GameplayIntent {
     CancelAttack { attack_id: u64 },
     /// Water transport: raw clicked tile (`y * width + x`); sim snaps to nearest owned shoreline.
     LaunchFleet {
-        target_owner: u16,
         target_tile: u32,
-        troops: f64,
+        troops: Option<f64>,
     },
     RecallFleet { fleet_id: u64 },
     /// OpenFront `build_unit` for structures: `target_tile` is the clicked tile index (`y * width + x`);

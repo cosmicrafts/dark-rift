@@ -86,6 +86,17 @@ impl AttackExecution {
     }
 }
 
+#[inline]
+fn fractional_extra_tiles_milli(max_tiles_f64: f64, roll_milli: u32) -> u32 {
+    let frac = max_tiles_f64.fract().clamp(0.0, 0.999_999_999_999);
+    let threshold_milli = (frac * 1000.0).floor() as u32; // 0..=999
+    if threshold_milli > 0 && roll_milli < threshold_milli {
+        1
+    } else {
+        0
+    }
+}
+
 // System analogous to PlayerExecution.tick() in OpenFront
 pub fn system_player_income(
     game_opt: Option<ResMut<GameState>>,
@@ -204,9 +215,14 @@ pub fn system_attack_execution(
             (adjacent * 0.4).max(1.0).min(50.0) // Bounded organic growth
         } else {
             // PvP expansion speed: ratio based
+            // Defensive clamp: troops CAN go negative when multiple attacks drain
+            // simultaneously before income restores them. Negative defender_troops
+            // would produce a negative ratio and (via clamp) identical power across
+            // platforms, BUT the intermediate float bits can diverge on
+            // ARM-WASM vs x86-WASM for negative/zero edge values.  Clamp first.
             let defender_troops = game
                 .player(execution.target_owner)
-                .map(|p| p.troops)
+                .map(|p| p.troops.max(0.0))
                 .unwrap_or(1.0)
                 .max(1.0);
             let ratio = execution.troops / defender_troops;
@@ -219,13 +235,9 @@ pub fn system_attack_execution(
 
         // Determine actual integer number of tiles to process this tick (Fractional determinism)
         let mut tiles_to_conquer = max_tiles_f64.floor() as u32;
-        let p = max_tiles_f64.fract() as f32;
-        
-        // UNCONDITIONAL RNG ADVANCEMENT to strictly preserve deterministic state sequence
-        let roll = (execution.rng.next_int(0, 1000) as f32) / 1000.0;
-        if p > 0.0 && roll < p {
-            tiles_to_conquer += 1;
-        }
+        // Unconditional RNG advancement preserves deterministic PRNG consumption order.
+        let roll_milli = execution.rng.next_int(0, 1000) as u32; // 0..=999
+        tiles_to_conquer += fractional_extra_tiles_milli(max_tiles_f64, roll_milli);
 
         let mut expanded_this_tick = 0u32;
 
@@ -264,8 +276,11 @@ pub fn system_attack_execution(
                     let mut def_loss = 0.0;
                     if let Some(target_player) = game.player(execution.target_owner) {
                         if target_player.tile_count > 0 {
-                            // Defender loses proportional to their troop density
-                            def_loss = target_player.troops / target_player.tile_count as f64;
+                            // Defender loses proportional to their troop density.
+                            // Clamp to 0: if troops went negative from multi-attack drain,
+                            // a negative def_loss would ADD troops to the defender on
+                            // subtract, compounding per tick and diverging across clients.
+                            def_loss = target_player.troops.max(0.0) / target_player.tile_count as f64;
                         }
                     }
 
@@ -646,5 +661,17 @@ mod player_income_building_tests {
         let p = game.player(1).unwrap();
         let expected = config::GOLD_BASE_INCOME + 3.0 * config::GOLD_INCOME_PER_CITY_LEVEL;
         assert!((p.gold - expected).abs() < 0.001, "gold={}", p.gold);
+    }
+
+    #[test]
+    fn fractional_extra_tile_milli_threshold_is_stable() {
+        // 12.499 -> threshold 499 (roll 498 adds one; 499 does not)
+        assert_eq!(fractional_extra_tiles_milli(12.499, 498), 1);
+        assert_eq!(fractional_extra_tiles_milli(12.499, 499), 0);
+        // Very small fraction below one milli should never add.
+        assert_eq!(fractional_extra_tiles_milli(7.0009, 0), 0);
+        // Near-one fraction clamps to 999 max threshold.
+        assert_eq!(fractional_extra_tiles_milli(3.999_999_999, 998), 1);
+        assert_eq!(fractional_extra_tiles_milli(3.999_999_999, 999), 0);
     }
 }

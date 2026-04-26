@@ -78,7 +78,7 @@ use bevy::sprite_render::MeshMaterial2d;
 const TILE_SIZE: f32 = 8.0;
 /// Native client: plain WebSocket to this `SocketAddr` (see `WebSocketScheme::Plain`).
 #[cfg(not(target_arch = "wasm32"))]
-pub const NATIVE_NETCODE_SOCKET: &str = "127.0.0.1:25565";
+pub const NATIVE_NETCODE_SOCKET: &str = "74.208.246.177:25565";
 
 /// WASM: browser needs **WSS** through your TLS reverse proxy (Nginx).
 #[cfg(target_arch = "wasm32")]
@@ -2170,7 +2170,7 @@ fn try_launch_fleet_intent(
     pid: u16,
     target_owner: u16,
     target_tile: u32,
-    troops: f64,
+    troops: Option<f64>,
     log_ctx: &str,
 ) -> Option<GameplayIntent> {
     let Some(launcher) = game.player(pid) else {
@@ -2201,7 +2201,6 @@ fn try_launch_fleet_intent(
         true,
     ) {
         Ok(_) => Some(GameplayIntent::LaunchFleet {
-            target_owner,
             target_tile,
             troops,
         }),
@@ -2848,6 +2847,11 @@ fn system_force_boat_key(
         bevy::log::warn!("force boat (B): WaterComponents not loaded");
         return;
     };
+    let payload_troops = if (ratio - 1.0).abs() < f64::EPSILON {
+        None
+    } else {
+        Some(send)
+    };
     let Some(intent) = try_launch_fleet_intent(
         game,
         wc,
@@ -2855,7 +2859,7 @@ fn system_force_boat_key(
         pid,
         target_owner,
         target_tile,
-        send,
+        payload_troops,
         "KeyB force boat",
     ) else {
         return;
@@ -3037,6 +3041,12 @@ fn player_click(
         return;
     }
 
+    let payload_troops = if (ratio - 1.0).abs() < f64::EPSILON {
+        None
+    } else {
+        Some(send)
+    };
+
 
     // Decide intent first (OpenFront: LMB canAttack wins; auto-boat only when route resolves).
     // Right-click / force-boat skips ground branch and uses the same resolver as the simulation.
@@ -3052,13 +3062,13 @@ fn player_click(
             pid,
             target_owner,
             target_tile,
-            send,
+            payload_troops,
             "player_click: right-click boat",
         )
     } else if can_ground_attack {
         Some(GameplayIntent::Attack(AttackIntent {
             target_owner,
-            troops: Some(send),
+            troops: payload_troops,
         }))
     } else if has_water_access {
         let Some(wc) = ctx.components.as_deref() else {
@@ -3071,7 +3081,7 @@ fn player_click(
             pid,
             target_owner,
             target_tile,
-            send,
+            payload_troops,
             "player_click: auto boat",
         )
     } else {

@@ -1,7 +1,7 @@
 {
   "name": "Dark Rift",
   "short_name": "Dark Rift",
-  "start_url": "./",
+  "start_url": ".",
   "display": "standalone",
   "orientation": "landscape",
   "theme_color": "#050508",

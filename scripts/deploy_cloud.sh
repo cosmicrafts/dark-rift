@@ -56,10 +56,30 @@ CLIENT_PID=$!
 cargo build --release -p dark-rift-server --target x86_64-unknown-linux-musl &
 SERVER_PID=$!
 
-# Esperar a que terminen ambos
+# Preparar Cliente Nativo Linux (reemplazando IP temporalmente)
+cyan "==> 2.1 [PARALELO] Compilando Cliente Nativo Linux..."
+sed -i "s/127.0.0.1:25565/${VPS_IP}:25565/g" crates/client/src/main.rs
+
+# Lanzar compilar Cliente Nativo en background
+cargo build --release -p dark-rift-client --target x86_64-unknown-linux-gnu &
+LINUX_CLIENT_PID=$!
+
+
+# Esperar a que terminen todos
 wait $CLIENT_PID || { red "❌ Error compilando Cliente WASM"; exit 1; }
 wait $SERVER_PID || { red "❌ Error compilando Servidor Musl"; exit 1; }
+wait $LINUX_CLIENT_PID || { red "❌ Error compilando Cliente Nativo Linux"; exit 1; }
+
+# Restaurar main.rs a como estaba (127.0.0.1)
+git checkout crates/client/src/main.rs
+
 green "✅ Compilaciones de Rust exitosas."
+
+# Mover el binario de Linux a builds/
+mkdir -p builds
+cp target/x86_64-unknown-linux-gnu/release/dark-rift-client builds/dark_rift_linux_v${CLEAN_VERSION}
+green "✅ Cliente Nativo guardado en builds/dark_rift_linux_v${CLEAN_VERSION}"
+
 
 # 2. Empaquetado Web (Wasm-bindgen y Brotli)
 cyan "==> 2. Empaquetando Frontend (wasm-bindgen)..."
