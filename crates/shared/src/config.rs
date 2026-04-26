@@ -3,14 +3,18 @@
 /// Starting troops for a new player.
 pub const STARTING_TROOPS: f64 = 100.0;
 
-/// Starting gold for a new player (structures / upgrades consume gold).
-pub const STARTING_GOLD: f64 = 500.0;
+/// OpenFront parity uses much larger gold magnitudes (125_000, 1_000_000, ...).
+/// Keep those ratios by scaling into dark-rift's lighter economy.
+pub const OPENFRONT_GOLD_SCALE: f64 = 1_000.0;
 
-/// Gold granted per simulation tick (OpenFront-style passive income; deterministic).
-pub const GOLD_BASE_INCOME: f64 = 1.5;
+/// Starting gold for a new player (structures / upgrades consume gold).
+pub const STARTING_GOLD: f64 = 250.0;
+
+/// Gold granted per simulation tick (deterministic).
+pub const GOLD_BASE_INCOME: f64 = 1.25;
 
 /// Extra gold per tick per **ready** City level (sum of `Building.level` for cities not under construction).
-pub const GOLD_INCOME_PER_CITY_LEVEL: f64 = 0.25;
+pub const GOLD_INCOME_PER_CITY_LEVEL: f64 = 0.35;
 
 /// Radius of the initial spawn cluster (in tiles from center).
 pub const SPAWN_RADIUS: u32 = 3;
@@ -50,6 +54,9 @@ pub const DEFENSE_POST_PRIORITY_PER_LEVEL: i64 = 4;
 
 /// SAM coverage radius in tiles (ghost preview; missile combat not implemented yet).
 pub const SAM_RANGE_TILES: i32 = 12;
+
+/// Feature gate for incomplete missile gameplay (Silo + SAM interception loop).
+pub const ENABLE_MISSILE_STRUCTURES: bool = false;
 
 /// Percentage of tiles needed to win.
 pub const WIN_PERCENTAGE: f64 = 75.0;

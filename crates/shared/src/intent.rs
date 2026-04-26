@@ -6,7 +6,7 @@ use bevy::prelude::*;
 
 use crate::building::{
     existing_structure_positions_with_width,
-    resolve_structure_spawn_tile, structure_build_cost_gold, Building,
+    resolve_structure_spawn_tile, structure_build_cost_gold, structure_kind_enabled, Building,
 };
 use crate::config;
 use crate::execution::{AttackExecution, PrioritizedTile};
@@ -190,6 +190,9 @@ fn apply_build_structure_intent(
     if !player.alive {
         return;
     }
+    if !structure_kind_enabled(kind) {
+        return;
+    }
     let w = game.map.width;
     let area = w.saturating_mul(game.map.height);
     if area == 0 || target_tile >= area {
@@ -274,6 +277,9 @@ fn apply_upgrade_structure_intent(
         bevy::log::warn!("apply_upgrade_structure: id {} not found", building_id);
         return;
     };
+    if !structure_kind_enabled(kind) {
+        return;
+    }
     let snapshot = snapshot_buildings(q_building);
     let cost = structure_build_cost_gold(kind, player_id, &snapshot);
     let Some(player_mut) = game.player_mut(player_id) else {
@@ -629,6 +635,40 @@ fn apply_attack_intent(
     });
 }
 
+#[inline]
+fn bot_structure_target_count(
+    kind: BuildingKind,
+    city_equivalent: u32,
+    difficulty: crate::game_config::BotDifficulty,
+) -> u32 {
+    let sam_ratio = match difficulty {
+        crate::game_config::BotDifficulty::BrainDead => 0.15,
+        crate::game_config::BotDifficulty::Vanilla => 0.20,
+        crate::game_config::BotDifficulty::Terminator => 0.30,
+    };
+    match kind {
+        BuildingKind::DefensePost => ((city_equivalent as f64) * 0.25).floor() as u32,
+        BuildingKind::Port => ((city_equivalent as f64) * 0.75).floor() as u32,
+        BuildingKind::Factory => ((city_equivalent as f64) * 0.75).floor() as u32,
+        BuildingKind::SamLauncher => ((city_equivalent as f64) * sam_ratio).floor() as u32,
+        BuildingKind::MissileSilo => ((city_equivalent as f64) * 0.2).floor() as u32,
+        BuildingKind::City => city_equivalent.saturating_add(1),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+enum BotDecisionKind {
+    Build = 0,
+    Attack = 1,
+}
+
+#[derive(Clone, Debug)]
+struct BotDecision {
+    bot_id: u16,
+    kind: BotDecisionKind,
+    intent: GameplayIntent,
+}
+
 pub fn system_bot_think(
     mut commands: Commands,
     mut game: ResMut<GameState>,
@@ -644,53 +684,129 @@ pub fn system_bot_think(
     }
 
     let config = config_opt.map(|c| c.clone()).unwrap_or_default();
-    let expand_cost = config.expand_cost;
-
-    let (attack_interval_base, trigger_ratio, reserve_ratio) = match config.bot_difficulty {
-        crate::game_config::BotDifficulty::BrainDead => (500, 0.9, 0.8),
-        crate::game_config::BotDifficulty::Vanilla => (250, 0.6, 0.3),
-        crate::game_config::BotDifficulty::Terminator => (125, 0.4, 0.1),
-    };
-
     let tick = game.tick;
     let seed = game.seed;
+    let (attack_interval_base, trigger_ratio, reserve_ratio, expand_ratio, random_attack_div) =
+        match config.bot_difficulty {
+            crate::game_config::BotDifficulty::BrainDead => (500, 0.9, 0.8, 0.12, 8),
+            crate::game_config::BotDifficulty::Vanilla => (250, 0.6, 0.3, 0.15, 5),
+            crate::game_config::BotDifficulty::Terminator => (125, 0.4, 0.1, 0.18, 3),
+        };
 
-    // Amortized collection of active bots
-    let mut active_bots = Vec::new();
-
-    for player in game.players.iter() {
-        if player.is_human() || !player.alive {
+    let mut schedule: Vec<(u16, u64, u64)> = Vec::new();
+    for p in game.players.iter() {
+        if p.is_human() || !p.alive {
             continue;
         }
-        
-        let bot_id = player.id;
-        let mut bot_setup_rng = PseudoRandom::new(seed.wrapping_add(bot_id as u64).wrapping_add(1337));
-        let my_interval = bot_setup_rng.next_int(attack_interval_base as i32, (attack_interval_base as i32 * 2).max(1)) as u64;
-        let my_offset = bot_setup_rng.next_int(0, my_interval as i32) as u64;
-
-        if tick % my_interval == my_offset {
-            active_bots.push(bot_id);
-        }
+        let bot_id = p.id;
+        let mut bot_rng = PseudoRandom::new(seed.wrapping_add(bot_id as u64).wrapping_add(1337));
+        let interval = bot_rng
+            .next_int(attack_interval_base as i32, (attack_interval_base as i32 * 2).max(1))
+            .max(1) as u64;
+        let offset = bot_rng.next_int(0, interval as i32) as u64;
+        schedule.push((bot_id, interval, offset));
     }
-
-    if active_bots.is_empty() {
+    schedule.sort_unstable_by_key(|(bot_id, _, _)| *bot_id);
+    if schedule.is_empty() {
         return;
     }
 
-    let mut rng = PseudoRandom::new(seed.wrapping_add(tick));
+    let mut buildings_snapshot: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
+    buildings_snapshot.sort_unstable_by_key(|b| b.id);
+    let structure_positions =
+        existing_structure_positions_with_width(buildings_snapshot.iter(), game.map.width, None);
+    let mut decisions: Vec<BotDecision> = Vec::new();
 
-    for bot_id in active_bots {
+    for (bot_id, interval, offset) in schedule {
+        let phase = tick % interval;
+        let one_third = (offset + interval / 3) % interval;
+        let two_thirds = (offset + (interval * 2) / 3) % interval;
+        let do_attack = phase == offset;
+        let do_structures = do_attack || phase == one_third || phase == two_thirds;
+        let mut bot_rng = PseudoRandom::new(
+            seed
+                .wrapping_add(tick.rotate_left(11))
+                .wrapping_add((bot_id as u64).wrapping_mul(0x9E37_79B9)),
+        );
+
+        if do_structures {
+            let Some(player) = game.player(bot_id) else {
+                continue;
+            };
+            let city_count = buildings_snapshot
+                .iter()
+                .filter(|b| b.owner_id == bot_id && b.kind == BuildingKind::City && !b.under_construction)
+                .count() as u32;
+            let city_equivalent = city_count.max((player.tile_count / 2000).max(1));
+            let build_order = [
+                BuildingKind::DefensePost,
+                BuildingKind::Port,
+                BuildingKind::Factory,
+                BuildingKind::SamLauncher,
+                BuildingKind::MissileSilo,
+                BuildingKind::City,
+            ];
+            for kind in build_order {
+                if !structure_kind_enabled(kind) {
+                    continue;
+                }
+                let owned = buildings_snapshot
+                    .iter()
+                    .filter(|b| b.owner_id == bot_id && b.kind == kind && !b.under_construction)
+                    .count() as u32;
+                let target_count =
+                    bot_structure_target_count(kind, city_equivalent, config.bot_difficulty);
+                if kind == BuildingKind::MissileSilo && owned >= 3 {
+                    continue;
+                }
+                if owned >= target_count {
+                    continue;
+                }
+                let cost = structure_build_cost_gold(kind, bot_id, &buildings_snapshot);
+                let Some(bot_now) = game.player(bot_id) else { continue; };
+                if bot_now.gold < cost {
+                    continue;
+                }
+
+                let mut tile_choice: Option<u32> = None;
+                let max_scan = (game.map.width.saturating_mul(game.map.height)).min(2048);
+                for i in 0..max_scan {
+                    let idx = ((i as u64 * (game.map.width as u64) * (game.map.height as u64))
+                        / max_scan.max(1) as u64) as u32;
+                    let x = idx % game.map.width;
+                    let y = idx / game.map.width;
+                    if game.map.owner_id(x, y) != bot_id {
+                        continue;
+                    }
+                    if resolve_structure_spawn_tile(&game.map, bot_id, kind, idx, &structure_positions).is_some() {
+                        tile_choice = Some(idx);
+                        break;
+                    }
+                }
+                let Some(target_tile) = tile_choice else {
+                    continue;
+                };
+                decisions.push(BotDecision {
+                    bot_id,
+                    kind: BotDecisionKind::Build,
+                    intent: GameplayIntent::BuildStructure { kind, target_tile },
+                });
+                break;
+            }
+        }
+
+        if !do_attack {
+            continue;
+        }
         let Some(player) = game.player(bot_id) else {
             continue;
         };
-
         let border_tiles = player.border_coords(game.map.width);
-        if border_tiles.is_empty() { continue; }
-
+        if border_tiles.is_empty() {
+            continue;
+        }
         let mut has_neutral = false;
         let mut player_targets = Vec::new();
-
-        // Terra Nullius Pacifism: Scan entire perimeter for ANY empty land
         for &(bx, by) in &border_tiles {
             game.map.for_each_neighbor(bx, by, |nx, ny| {
                 let owner = game.map.owner_id(nx, ny);
@@ -703,44 +819,44 @@ pub fn system_bot_think(
                 }
             });
         }
-
-        // OpenFront AI Algorithm Port:
-        // 1. If Neutral, we expand organically. No trigger limit, tiny reserve.
-        // 2. If Player, we stockpile (dumb/slow AI). Strict trigger limit, larger reserve.
+        player_targets.sort_unstable();
+        player_targets.dedup();
         let (target_owner, is_neutral) = if has_neutral {
             (0, true)
+        } else if player_targets.is_empty() {
+            continue;
         } else {
-            if player_targets.is_empty() {
-                continue;
-            }
-            (player_targets[rng.next_int(0, player_targets.len() as i32) as usize], false)
+            let t = if bot_rng.next_int(0, random_attack_div) == 0 {
+                player_targets[bot_rng.next_int(0, player_targets.len() as i32) as usize]
+            } else {
+                player_targets[0]
+            };
+            (t, false)
         };
-
-        if !is_neutral {
-            // Player Attack: Must save up troops first to burst
-            let trigger_limit = player.max_troops * trigger_ratio;
-            if player.troops < trigger_limit {
-                continue;
-            }
-        }
-
-        // Neutral attacks use expand_ratio (e.g. 0.15) so they trickle constantly. Player attacks use reserve_ratio.
-        let active_reserve_ratio = if is_neutral { 0.15 } else { reserve_ratio };
-        let reserve = player.max_troops * active_reserve_ratio;
-        let p_send = (player.troops - reserve).max(0.0);
-        
-        if p_send < expand_cost as f64 {
+        if !is_neutral && player.troops < player.max_troops * trigger_ratio {
             continue;
         }
-
-        let stamped = StampedIntent {
-            player_id: bot_id,
+        let reserve = player.max_troops * if is_neutral { expand_ratio } else { reserve_ratio };
+        let p_send = (player.troops - reserve).max(0.0);
+        if p_send < config::EXPAND_COST {
+            continue;
+        }
+        decisions.push(BotDecision {
+            bot_id,
+            kind: BotDecisionKind::Attack,
             intent: GameplayIntent::Attack(AttackIntent {
                 target_owner,
                 troops: Some(p_send),
             }),
-        };
+        });
+    }
 
+    decisions.sort_by_key(|d| (d.bot_id, d.kind));
+    for (intent_index, d) in decisions.into_iter().enumerate() {
+        let stamped = StampedIntent {
+            player_id: d.bot_id,
+            intent: d.intent,
+        };
         apply_stamped_intent(
             &mut commands,
             &mut game,
@@ -748,7 +864,7 @@ pub fn system_bot_think(
             &mut q_fleet,
             &mut q_building,
             &stamped,
-            bot_id as u32,
+            intent_index as u32,
             &mut *path_scratch,
             &water_components,
         );
@@ -758,11 +874,13 @@ pub fn system_bot_think(
 #[cfg(test)]
 mod building_intent_tests {
     use super::*;
+    use bevy::app::App;
     use bevy::ecs::system::SystemState;
     use crate::building::Building;
     use crate::game::{BuildingKind, GamePhase, GameState};
     use crate::map::{GameMap, MapTile};
     use crate::player::Player;
+    use crate::water_components::WaterComponents;
 
     fn tiny_owned_game_state() -> GameState {
         let mut m = GameMap::new(5, 1);
@@ -923,5 +1041,153 @@ mod building_intent_tests {
             .unwrap();
         assert_eq!(b.level, 1);
         assert!(b.under_construction);
+    }
+
+    #[test]
+    fn bot_structure_ratio_targets_follow_openfront_like_values() {
+        let city_equivalent = 10;
+        let sam_vanilla = bot_structure_target_count(
+            BuildingKind::SamLauncher,
+            city_equivalent,
+            crate::game_config::BotDifficulty::Vanilla,
+        );
+        let sam_terminator = bot_structure_target_count(
+            BuildingKind::SamLauncher,
+            city_equivalent,
+            crate::game_config::BotDifficulty::Terminator,
+        );
+        let ports = bot_structure_target_count(
+            BuildingKind::Port,
+            city_equivalent,
+            crate::game_config::BotDifficulty::Terminator,
+        );
+        let silos = bot_structure_target_count(
+            BuildingKind::MissileSilo,
+            city_equivalent,
+            crate::game_config::BotDifficulty::Terminator,
+        );
+        assert_eq!(sam_vanilla, 2);
+        assert_eq!(sam_terminator, 3);
+        assert_eq!(ports, 7);
+        assert_eq!(silos, 2);
+    }
+
+    #[test]
+    fn build_intent_rejects_disabled_missile_structures() {
+        let mut world = World::new();
+        world.insert_resource(tiny_owned_game_state());
+        let mut state = SystemState::<(
+            Commands,
+            ResMut<GameState>,
+            Query<(Entity, &mut Building)>,
+        )>::new(&mut world);
+        {
+            let (mut commands, mut game, mut q_building) = state.get_mut(&mut world);
+            apply_build_structure_intent(
+                &mut commands,
+                &mut game,
+                &mut q_building,
+                1,
+                BuildingKind::MissileSilo,
+                2,
+            );
+        }
+        state.apply(&mut world);
+        world.flush();
+        let has_silo = world
+            .query::<&Building>()
+            .iter(&world)
+            .any(|b| b.kind == BuildingKind::MissileSilo);
+        assert!(!has_silo);
+    }
+
+    fn bot_kind_code(kind: BuildingKind) -> u8 {
+        match kind {
+            BuildingKind::City => 0,
+            BuildingKind::Factory => 1,
+            BuildingKind::Port => 2,
+            BuildingKind::DefensePost => 3,
+            BuildingKind::SamLauncher => 4,
+            BuildingKind::MissileSilo => 5,
+        }
+    }
+
+    fn bot_game_with_order(order: &[u16]) -> GameState {
+        let mut game = GameState::new(777, 12, 1);
+        game.phase = GamePhase::Playing;
+        for &pid in order {
+            game.players
+                .push(Player::new_bot(pid, format!("b{pid}"), [0.2, 0.3, 0.4]));
+            let idx = game.players.len() - 1;
+            if game.player_lookup.len() <= pid as usize {
+                game.player_lookup.resize(pid as usize + 1, None);
+            }
+            game.player_lookup[pid as usize] = Some(idx);
+        }
+        for x in 0..4 {
+            game.set_tile_owner(x, 0, 2);
+        }
+        for x in 8..12 {
+            game.set_tile_owner(x, 0, 3);
+        }
+        for p in game.players.iter_mut() {
+            p.alive = true;
+            p.max_troops = 10_000.0;
+            p.troops = 8_000.0;
+            p.gold = 10_000.0;
+        }
+        game
+    }
+
+    fn run_bot_think_digest(order: &[u16]) -> (Vec<u16>, Vec<(u16, u8, u32)>, Vec<(u16, u16, i64)>) {
+        let mut app = App::new();
+        app.insert_resource(bot_game_with_order(order));
+        {
+            let g = app.world().resource::<GameState>();
+            app.insert_resource(WaterComponents::compute(&g.map));
+        }
+        app.insert_resource(crate::pathfinding::WaterPathfinderScratch::default());
+        let mut cfg = crate::game_config::GameConfig::default();
+        cfg.bot_difficulty = crate::game_config::BotDifficulty::Terminator;
+        app.insert_resource(cfg);
+        app.add_systems(bevy::prelude::Update, system_bot_think);
+
+        for t in 0..320u64 {
+            app.world_mut().resource_mut::<GameState>().tick = t;
+            app.update();
+        }
+
+        let game = app.world().resource::<GameState>();
+        let map_state = game.map.state.clone();
+        let _ = game;
+
+        let mut q_buildings = app.world_mut().query::<&Building>();
+        let mut buildings: Vec<(u16, u8, u32)> = q_buildings
+            .iter(app.world())
+            .map(|b| (b.owner_id, bot_kind_code(b.kind), b.tile_idx))
+            .collect();
+        buildings.sort_unstable();
+
+        let mut q_attacks = app.world_mut().query::<&AttackExecution>();
+        let mut attacks: Vec<(u16, u16, i64)> = q_attacks
+            .iter(app.world())
+            .map(|a| (a.owner_id, a.target_owner, (a.troops * 1000.0) as i64))
+            .collect();
+        attacks.sort_unstable();
+        (map_state, buildings, attacks)
+    }
+
+    #[test]
+    fn bot_think_is_stable_across_player_insertion_order() {
+        let a = run_bot_think_digest(&[2, 3]);
+        let b = run_bot_think_digest(&[3, 2]);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn bot_think_is_repeatable_same_seed_and_order() {
+        let a = run_bot_think_digest(&[2, 3]);
+        let b = run_bot_think_digest(&[2, 3]);
+        assert_eq!(a, b);
     }
 }

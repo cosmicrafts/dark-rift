@@ -59,7 +59,7 @@ impl BuildingKind {
         match self {
             BuildingKind::City | BuildingKind::Factory | BuildingKind::Port => 20,
             BuildingKind::DefensePost => 50,
-            BuildingKind::SamLauncher => 150,
+            BuildingKind::SamLauncher => 300,
             BuildingKind::MissileSilo => 100,
         }
     }

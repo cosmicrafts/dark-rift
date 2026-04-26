@@ -292,32 +292,49 @@ fn count_port_factory(buildings: &[Building], owner_id: u16) -> u32 {
         .count() as u32
 }
 
+#[inline]
+fn scaled_pow2_cost(count: u32, base: u64, cap: u64, scale: f64) -> f64 {
+    let steps = count.min(20);
+    let mut val = base;
+    for _ in 0..steps {
+        val = val.saturating_mul(2);
+        if val >= cap {
+            val = cap;
+            break;
+        }
+    }
+    (val.min(cap)) as f64 / scale
+}
+
 /// Gold price for a new structure or one upgrade level (OpenFront-style scaling). Tunable.
 pub fn structure_build_cost_gold(kind: BuildingKind, owner_id: u16, buildings: &[Building]) -> f64 {
+    let s = config::OPENFRONT_GOLD_SCALE.max(1.0);
     match kind {
         BuildingKind::City => {
             let n = count_kind(buildings, owner_id, BuildingKind::City);
-            (2.0_f64.powi(n.min(12) as i32) * 40.0).min(8_000.0).max(120.0)
+            scaled_pow2_cost(n, 125_000, 1_000_000, s)
         }
         BuildingKind::Factory | BuildingKind::Port => {
             let n = count_port_factory(buildings, owner_id);
-            (2.0_f64.powi(n.min(12) as i32) * 40.0).min(8_000.0).max(120.0)
+            scaled_pow2_cost(n, 125_000, 1_000_000, s)
         }
         BuildingKind::DefensePost => {
             let n = count_kind(buildings, owner_id, BuildingKind::DefensePost);
-            ((n as f64 + 1.0) * 180.0).min(2_500.0).max(80.0)
+            ((n as f64 + 1.0) * (50_000.0 / s)).min(250_000.0 / s)
         }
-        // PHASE 3 INTEGRATION (SAM / missile combat):
-        // WHY: OpenFront couples SAM with nuke interception and silo-based launches; dark-rift has no
-        //      missile entities or intercept rolls yet, so SAM only affects ghost range + build cost.
-        // PLAN: Add `Missile`/`Nuke` execution in `execution.rs`, `SAMLauncher` intercept radius from
-        //      `config::SAM_RANGE_TILES`, wire `StructureReady` for silo → enable MIRV intents, then
-        //      delete this block once SAM has real gameplay hooks (cost may move to config tables).
         BuildingKind::SamLauncher => {
             let n = count_kind(buildings, owner_id, BuildingKind::SamLauncher);
-            ((n as f64 + 1.0) * 400.0).min(12_000.0).max(500.0)
+            ((n as f64 + 1.0) * (1_500_000.0 / s)).min(3_000_000.0 / s)
         }
-        BuildingKind::MissileSilo => 3_000.0,
+        BuildingKind::MissileSilo => 1_000_000.0 / s,
+    }
+}
+
+#[inline]
+pub fn structure_kind_enabled(kind: BuildingKind) -> bool {
+    match kind {
+        BuildingKind::SamLauncher | BuildingKind::MissileSilo => config::ENABLE_MISSILE_STRUCTURES,
+        _ => true,
     }
 }
 
@@ -461,6 +478,9 @@ pub fn player_can_upgrade_kind(
     kind: BuildingKind,
     player_gold: f64,
 ) -> bool {
+    if !structure_kind_enabled(kind) {
+        return false;
+    }
     if !kind.upgradable() {
         return false;
     }
@@ -491,12 +511,13 @@ pub fn compute_buildables_for_player(
         can_upgrade: false,
     }; 6];
     for (i, &kind) in BuildingKind::ALL.iter().enumerate() {
+        let enabled = structure_kind_enabled(kind);
         let cost = structure_build_cost_gold(kind, owner_id, buildings);
         let level_total = count_kind_levels(buildings, owner_id, kind);
         let count = count_kind(buildings, owner_id, kind);
         let placement_feasible =
             player_has_valid_placement_sampled(map, owner_id, kind, buildings, PLACEMENT_HUD_MAX_SAMPLES);
-        let can_build = player_gold >= cost && cost.is_finite() && placement_feasible;
+        let can_build = enabled && player_gold >= cost && cost.is_finite() && placement_feasible;
         let can_upgrade = player_can_upgrade_kind(buildings, owner_id, kind, player_gold);
         out[i] = BuildableEntry {
             kind,
@@ -524,7 +545,8 @@ pub fn patch_buildable_entries_gold_and_counts(
         e.level_total = count_kind_levels(buildings, owner_id, kind);
         e.count = count_kind(buildings, owner_id, kind);
         let afford = player_gold >= e.cost && e.cost.is_finite();
-        e.can_build = afford && e.placement_feasible;
+        let enabled = structure_kind_enabled(kind);
+        e.can_build = enabled && afford && e.placement_feasible;
         e.can_upgrade = player_can_upgrade_kind(buildings, owner_id, kind, player_gold);
     }
 }
@@ -817,5 +839,66 @@ mod tests {
         assert_eq!(bonus, 2 * crate::config::DEFENSE_POST_PRIORITY_PER_LEVEL);
         let bonus_far = defense_post_priority_bonus(&[b], 2, 0, 0, w);
         assert_eq!(bonus_far, 0);
+    }
+
+    #[test]
+    fn openfront_cost_scaling_city_and_port_factory_shared_counter() {
+        let s = crate::config::OPENFRONT_GOLD_SCALE;
+        let owner = 1u16;
+        let city0 = structure_build_cost_gold(BuildingKind::City, owner, &[]);
+        assert_eq!(city0, 125_000.0 / s);
+
+        let one_city = [Building {
+            id: 1,
+            owner_id: owner,
+            tile_idx: 0,
+            kind: BuildingKind::City,
+            level: 1,
+            under_construction: false,
+            ticks_until_complete: 0,
+        }];
+        let city1 = structure_build_cost_gold(BuildingKind::City, owner, &one_city);
+        assert_eq!(city1, 250_000.0 / s);
+
+        let pf = [
+            Building {
+                id: 2,
+                owner_id: owner,
+                tile_idx: 1,
+                kind: BuildingKind::Port,
+                level: 1,
+                under_construction: false,
+                ticks_until_complete: 0,
+            },
+            Building {
+                id: 3,
+                owner_id: owner,
+                tile_idx: 2,
+                kind: BuildingKind::Factory,
+                level: 1,
+                under_construction: false,
+                ticks_until_complete: 0,
+            },
+        ];
+        let next_pf = structure_build_cost_gold(BuildingKind::Factory, owner, &pf);
+        assert_eq!(next_pf, 500_000.0 / s);
+    }
+
+    #[test]
+    fn missile_structures_disabled_in_buildables_when_feature_off() {
+        let (map, owner) = tiny_owned_map();
+        let rows = compute_buildables_for_player(&map, owner, 1_000_000.0, &[]);
+        let sam = rows
+            .iter()
+            .find(|e| e.kind == BuildingKind::SamLauncher)
+            .unwrap();
+        let silo = rows
+            .iter()
+            .find(|e| e.kind == BuildingKind::MissileSilo)
+            .unwrap();
+        assert!(!sam.can_build);
+        assert!(!silo.can_build);
+        assert!(!sam.can_upgrade);
+        assert!(!silo.can_upgrade);
     }
 }

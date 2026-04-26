@@ -244,5 +244,11 @@
       throw e;
     }
   </script>
+  <script>
+    // Registrar el Service Worker dummy para habilitar instalación PWA.
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("./sw.js").catch(() => {});
+    }
+  </script>
 </body>
 </html>

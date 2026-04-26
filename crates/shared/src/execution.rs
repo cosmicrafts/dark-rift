@@ -167,6 +167,7 @@ pub fn system_attack_execution(
 
     buildings_scratch.clear();
     buildings_scratch.extend(q_building.iter().copied());
+    buildings_scratch.sort_by_key(|b| b.id); // Poka-Yoke: MUST be strictly sorted for determinism
     let buildings = buildings_scratch.as_slice();
     let map_w = game.map.width;
 
@@ -197,27 +198,28 @@ pub fn system_attack_execution(
             continue;
         }
 
-        let max_tiles_f32 = if execution.target_owner == 0 {
-            // Neutral expansion speed: grows purely with attack troops
-            let base_speed = execution.troops as f32 / 50.0;
-            base_speed.max(1.0).min(3.0) // At least 1, max 50
+        let max_tiles_f64 = if execution.target_owner == 0 {
+            // Neutral expansion speed: OpenFront parity (proportional to border size)
+            let adjacent = execution.to_conquer.len() as f64;
+            (adjacent * 0.4).max(1.0).min(50.0) // Bounded organic growth
         } else {
             // PvP expansion speed: ratio based
             let defender_troops = game
                 .player(execution.target_owner)
                 .map(|p| p.troops)
                 .unwrap_or(1.0)
-                .max(1.0) as f32;
-            let ratio = (execution.troops as f32) / defender_troops;
-            let adjacent = execution.to_conquer.len() as f32;
+                .max(1.0);
+            let ratio = execution.troops / defender_troops;
+            let adjacent = execution.to_conquer.len() as f64;
 
-            let power = (ratio * 2.0).clamp(0.01, 5.0); // Bounded relative power, lower bounds allow very slow advances
-            (power * adjacent * 0.5).max(0.1).min(100.0) // At least 0.1 (10% chance per tick), max 100 tiles/tick
+            // OpenFront parity speed curve
+            let power = (ratio * 0.5).clamp(0.05, 0.4); 
+            (power * adjacent).max(0.1).min(100.0) // At least 0.1 (10% chance per tick), max 100 tiles/tick
         };
 
         // Determine actual integer number of tiles to process this tick (Fractional determinism)
-        let mut tiles_to_conquer = max_tiles_f32.floor() as u32;
-        let p = max_tiles_f32.fract();
+        let mut tiles_to_conquer = max_tiles_f64.floor() as u32;
+        let p = max_tiles_f64.fract() as f32;
         
         // UNCONDITIONAL RNG ADVANCEMENT to strictly preserve deterministic state sequence
         let roll = (execution.rng.next_int(0, 1000) as f32) / 1000.0;
@@ -254,12 +256,49 @@ pub fn system_attack_execution(
                     continue; // Skip, edge was severed
                 }
 
-                // Troops were reserved on intent; only drain execution pool per tile (OpenFront).
-                execution.troops -= crate::config::EXPAND_COST;
+                if execution.target_owner == 0 {
+                    // Neutral: attacker pays constant base cost
+                    execution.troops -= crate::config::EXPAND_COST;
+                } else {
+                    // PvP: Combat resolution (OpenFront Parity)
+                    let mut def_loss = 0.0;
+                    if let Some(target_player) = game.player(execution.target_owner) {
+                        if target_player.tile_count > 0 {
+                            // Defender loses proportional to their troop density
+                            def_loss = target_player.troops / target_player.tile_count as f64;
+                        }
+                    }
+
+                    // Attacker pays base attack cost, scaled by terrain
+                    let terrain_multiplier = match terrain_type {
+                        TerrainType::Land => 1.0,
+                        TerrainType::Highland => 1.25,
+                        TerrainType::Mountain => 1.5,
+                        _ => 1.0,
+                    };
+
+                    // Defense posts increase attacker losses slightly
+                    let dp_bonus = crate::building::defense_post_priority_bonus(
+                        buildings,
+                        execution.target_owner,
+                        target_tile.x,
+                        target_tile.y,
+                        map_w,
+                    );
+                    let dp_multiplier = 1.0 + (dp_bonus as f64 / 10.0); // Approximation of defense buff
+
+                    let atk_loss = crate::config::ATTACK_COST * terrain_multiplier * dp_multiplier;
+
+                    execution.troops -= atk_loss;
+
+                    // Deduct from defender
+                    if let Some(target_player) = game.player_mut(execution.target_owner) {
+                        target_player.troops = (target_player.troops - def_loss).max(0.0);
+                    }
+                }
+                
                 execution.troops = execution.troops.max(0.0);
                 expanded_this_tick += 1;
-
-                // Troops were reserved on intent; only drain execution pool per tile (OpenFront).
 
                 // Enqueue new neutral/enemy neighbors that touch our newly acquired tile
                 game.map.for_each_neighbor(target_tile.x, target_tile.y, |nx, ny| {
