@@ -13,12 +13,84 @@ pub enum GamePhase {
     GameOver,
 }
 
+/// OpenFront structure types (mirrors `Structures` in OpenFront `Game.ts`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum BuildingKind {
+    City,
+    Factory,
+    Port,
+    DefensePost,
+    SamLauncher,
+    MissileSilo,
+}
+
+impl BuildingKind {
+    pub const ALL: [BuildingKind; 6] = [
+        BuildingKind::City,
+        BuildingKind::Factory,
+        BuildingKind::Port,
+        BuildingKind::DefensePost,
+        BuildingKind::SamLauncher,
+        BuildingKind::MissileSilo,
+    ];
+
+    #[inline]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BuildingKind::City => "City",
+            BuildingKind::Factory => "Factory",
+            BuildingKind::Port => "Port",
+            BuildingKind::DefensePost => "DefensePost",
+            BuildingKind::SamLauncher => "SAM",
+            BuildingKind::MissileSilo => "Silo",
+        }
+    }
+
+    /// OpenFront `DefaultConfig.unitInfo(...).upgradable`.
+    pub fn upgradable(self) -> bool {
+        match self {
+            BuildingKind::DefensePost => false,
+            _ => true,
+        }
+    }
+
+    /// Construction duration in simulation ticks (one per `SimulationSchedule` chain).
+    pub fn construction_duration_ticks(self) -> u32 {
+        match self {
+            BuildingKind::City | BuildingKind::Factory | BuildingKind::Port => 20,
+            BuildingKind::DefensePost => 50,
+            BuildingKind::SamLauncher => 150,
+            BuildingKind::MissileSilo => 100,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum GameEvent {
     TileExpanded { x: u32, y: u32, owner: u16 },
     TileCaptured { x: u32, y: u32, new_owner: u16 },
     PlayerEliminated { player_id: u16 },
     GameOver { winner_id: u16 },
+    /// A new structure entity was spawned (construction may still be running).
+    StructureSpawned {
+        id: u64,
+        owner_id: u16,
+        tile_idx: u32,
+        kind: BuildingKind,
+        level: u8,
+    },
+    /// Construction finished; structure is active for gameplay effects (MVP: event only).
+    StructureReady {
+        id: u64,
+        tile_idx: u32,
+        kind: BuildingKind,
+    },
+    StructureUpgraded {
+        id: u64,
+        tile_idx: u32,
+        kind: BuildingKind,
+        level: u8,
+    },
 }
 
 
@@ -36,10 +108,16 @@ pub struct GameState {
     /// Monotonic id for `WarpFleet` (deterministic ordering across clients).
     #[serde(default = "default_next_fleet_id")]
     pub next_fleet_id: u64,
-
+    /// Monotonic id for structure/building entities.
+    #[serde(default = "default_next_building_id")]
+    pub next_building_id: u64,
 }
 
 fn default_next_fleet_id() -> u64 {
+    1
+}
+
+fn default_next_building_id() -> u64 {
     1
 }
 
@@ -55,6 +133,7 @@ impl GameState {
             winner: None,
             events: Vec::new(),
             next_fleet_id: 1,
+            next_building_id: 1,
         }
     }
 

@@ -34,7 +34,13 @@ use clap::Parser;
 use instant::Instant;
 
 use dark_rift_shared::config;
-use dark_rift_shared::game::{GameState, GameEvent};
+use dark_rift_shared::building::{
+    compute_buildables_for_player, existing_structure_positions_with_width, find_upgrade_target_id,
+    patch_buildable_entries_gold_and_counts,
+    resolve_structure_spawn_tile, structure_build_cost_gold, system_building_construction,
+    BuildableEntry, Building,
+};
+use dark_rift_shared::game::{BuildingKind, GameEvent, GameState};
 use dark_rift_shared::player::Player;
 use dark_rift_shared::execution::{
     system_attack_execution,
@@ -168,8 +174,18 @@ struct TurnQueue(std::collections::VecDeque<Turn>);
 #[derive(Component)]
 struct HomeButton;
 
+/// Build grid + HOME dock: pointer hits here must not reach the map (see [`player_click`]).
+#[derive(Component)]
+struct ActionDockPointerSink;
+
 #[derive(Component)]
 struct ExitButton;
+
+#[derive(Component)]
+struct SettingsButton;
+
+#[derive(Component)]
+struct GameTimerText;
 
 #[derive(Component)]
 struct FpsText;
@@ -179,6 +195,8 @@ struct OverlayDiagnostics {
     status_line: String,
     fps_value: String,
     ping_value: String,
+    /// Build mode hint (structures); shown in the FPS bar line.
+    pub build_hint: String,
 }
 
 impl Default for OverlayDiagnostics {
@@ -187,6 +205,7 @@ impl Default for OverlayDiagnostics {
             status_line: "Connecting to server...".to_string(),
             fps_value: "…".to_string(),
             ping_value: "…".to_string(),
+            build_hint: String::new(),
         }
     }
 }
@@ -239,6 +258,54 @@ struct FleetVisualMeshes {
     wake_dot: Handle<Mesh>,
     target_ring: Handle<Mesh>,
 }
+
+/// Placement ring + optional SAM / DefensePost range preview meshes (world units use [`TILE_SIZE`]).
+#[derive(Resource)]
+struct StructureMarkerMeshes {
+    place_ring: Handle<Mesh>,
+    sam_range: Handle<Mesh>,
+    defense_range: Handle<Mesh>,
+}
+
+#[derive(Resource, Default)]
+struct BuildableHudState {
+    entries: Vec<BuildableEntry>,
+}
+
+#[derive(Component)]
+struct BuildPillRow;
+
+#[derive(Component)]
+struct BuildPillButton(pub BuildingKind);
+
+#[derive(Component, Clone, Copy)]
+struct BuildPillLabel {
+    /// 1 = level total, 2 = gold cost, 3 = hotkey digit (icon is separate `ImageNode`).
+    slot: u8,
+    kind: BuildingKind,
+}
+
+#[derive(Component)]
+struct GhostRangeRing;
+
+#[derive(Resource, Default)]
+struct StructureGhostParts {
+    marker: Option<Entity>,
+    range: Option<Entity>,
+}
+
+#[derive(Component)]
+struct BuildingVisualDone;
+
+#[derive(Component)]
+struct BuildingMapVisualRoot;
+
+#[derive(Component)]
+struct StructureGhostRoot;
+
+/// Selected structure from HUD pill / hotkey `1`–`6`; `Esc` clears. LMB on owned tile places.
+#[derive(Resource, Default)]
+struct BuildStructureMode(pub Option<BuildingKind>);
 
 /// Follows `WarpFleet.current_tile` for the local player.
 #[derive(Component)]
@@ -293,12 +360,23 @@ struct CombatVfx {
 }
 
 /// Multiline panel: incoming (↓) / outgoing (↑) like `AttacksDisplay.ts`.
-#[derive(Component)]
-struct AttackSummaryText;
+
 
 /// "⚔ NN% (MMM trp)" readout next to the slider rail.
 #[derive(Component)]
 struct AttackRatioReadout;
+
+#[derive(Component)]
+struct BottomHudCap;
+
+#[derive(Component)]
+struct BottomHudTroops;
+
+#[derive(Component)]
+struct BottomHudGold;
+
+#[derive(Component)]
+struct EventFeedContainer;
 
 #[derive(Component)]
 struct AttackRatioTrack;
@@ -434,7 +512,8 @@ fn main() {
             .init_resource::<OutgoingAttackRowMap>()
             .init_resource::<OutgoingFleetRowMap>()
             .init_resource::<WaterPathfinderScratch>()
-            .init_resource::<WaterComponents>();
+            .init_resource::<WaterComponents>()
+            .init_resource::<CombatDockUiScale>();
 
         // `StartGameParams` includes `ClientSettings` (HUD scale / attack ratio); headless still runs `start_game_core`.
         app.insert_resource(ClientSettings {
@@ -497,8 +576,12 @@ fn main() {
             .init_resource::<NetTiming>()
         .init_resource::<OverlayDiagnostics>()
         .init_resource::<UiShellState>()
+        .init_resource::<CombatDockUiScale>()
         .init_resource::<WaterPathfinderScratch>()
-        .init_resource::<WaterComponents>();
+        .init_resource::<WaterComponents>()
+        .init_resource::<BuildStructureMode>()
+        .init_resource::<StructureGhostParts>()
+        .init_resource::<BuildableHudState>();
 
         // Insert ClientSettings BEFORE app.run() so it exists when OnEnter(LobbyBrowser) fires.
         // Font handle is Handle::default() here; init_client_font patches it in Startup.
@@ -527,6 +610,7 @@ fn main() {
                 init_client_font,
                 init_attack_ratio_from_ui_settings,
                 setup_hud_shell,
+                setup_structure_marker_meshes,
                 setup_offline,
             )
                 .chain(),
@@ -551,6 +635,7 @@ fn main() {
                     setup_network,
                     setup_attack_ring_mesh,
                     setup_fleet_visual_meshes,
+                    setup_structure_marker_meshes,
                     init_client_font,
                     init_attack_ratio_from_ui_settings,
                     setup_hud_shell,
@@ -611,6 +696,11 @@ fn main() {
 
         app.add_systems(Update, (
             hover_system,
+            system_refresh_buildable_hud,
+            system_apply_buildable_hud.after(system_refresh_buildable_hud),
+            system_buildpill_interactions,
+            system_build_structure_hotkeys,
+            system_sync_structure_ghost,
             system_attack_ratio_keyboard,
             system_attack_ratio_slider_drag,
             player_click,
@@ -620,15 +710,18 @@ fn main() {
             update_hud,
             system_apply_responsive_hud_layout,
             system_sync_bottom_combat_hud,
+            system_update_event_feed,
+            system_update_scroll_position,
             system_sync_outgoing_attack_rows,
             system_handle_cancel_click,
             system_handle_recall_fleet_click,
         ).run_if(in_state(AppState::InGame)));
 
         app.add_systems(Update,
-            ui_leaderboard::system_update_leaderboard
-                .run_if(in_state(AppState::InGame))
-                .run_if(bevy::time::common_conditions::on_timer(std::time::Duration::from_secs(1)))
+            (
+                ui_leaderboard::system_update_leaderboard.run_if(bevy::time::common_conditions::on_timer(std::time::Duration::from_secs(1))),
+                ui_leaderboard::system_handle_leaderboard_toggle,
+            ).run_if(in_state(AppState::InGame))
         );
 
         // ── GPU shader map rendering ──
@@ -651,6 +744,9 @@ fn main() {
             (
                 system_spawn_fleet_visuals,
                 system_sync_fleet_visuals,
+                system_attach_building_visuals,
+                system_sync_building_visual_lod,
+                system_sync_building_map_labels,
             )
                 .run_if(in_state(AppState::InGame)),
         );
@@ -672,6 +768,7 @@ fn main() {
         system_bot_think,
         system_warp_fleet_execution,
         system_attack_execution,
+        system_building_construction,
         system_game_tick,
         system_headless_bot_engine.run_if(|cli: Res<Cli>| cli.bot),
         decrement_pending,
@@ -713,6 +810,7 @@ fn pop_turn(
     mut queue: ResMut<TurnQueue>,
     mut q_exec: Query<(Entity, &mut AttackExecution)>,
     mut q_fleet: Query<(Entity, &mut WarpFleet)>,
+    mut q_building: Query<(Entity, &mut Building)>,
     mut path_scratch: ResMut<WaterPathfinderScratch>,
     water_components: Res<WaterComponents>,
 ) {
@@ -723,6 +821,7 @@ fn pop_turn(
                 &mut *game,
                 &mut q_exec,
                 &mut q_fleet,
+                &mut q_building,
                 stamped,
                 i as u32,
                 &mut *path_scratch,
@@ -864,25 +963,22 @@ fn camera_movement_and_zoom(
         }
         
         // Mouse/Touch Drag Pan
-        let mut drag_delta = Vec2::ZERO;
-        
         if drag_state.is_dragging && !is_pinching {
             let mut raw_drag = Vec2::ZERO;
-            
-            if touches.iter().count() > 0 {
+            let drag_delta = if touches.iter().count() > 0 {
                 // Prefer touch on mobile (avoids DPI-scaled emulated MouseMotion spikes)
                 raw_drag = touch_delta;
-                drag_delta = raw_drag * 0.5; // Dampen mobile sensitivity significantly
                 let _ = motion_evr.read().count(); // Drain mouse events
+                raw_drag * 0.5 // Dampen mobile sensitivity significantly
             } else {
                 for ev in motion_evr.read() {
                     raw_drag += ev.delta;
                 }
-                drag_delta = raw_drag * 0.85; // Slightly dampen desktop mouse
-            }
-            
+                raw_drag * 0.85 // Slightly dampen desktop mouse
+            };
+
             drag_state.accumulated_drag += raw_drag.length();
-            
+
             if drag_delta != Vec2::ZERO {
                 // Screen coordinates: +X is right, +Y is down
                 // World coordinates: +X is right, +Y is up
@@ -1013,6 +1109,7 @@ fn setup_live(
     mut commands: Commands,
     _cli: Res<Cli>,
     settings: Res<ClientSettings>,
+    asset_server: Res<AssetServer>,
     mut overlay: ResMut<OverlayDiagnostics>,
     shell: Res<HudShellRegions>,
 ) {
@@ -1037,9 +1134,9 @@ fn setup_live(
         .spawn((
             ChildOf(shell.top_bar),
             Node {
-                align_self: AlignSelf::FlexStart,
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
+                margin: UiRect::left(Val::Auto),
                 column_gap: Val::Px(12.0),
                 ..default()
             },
@@ -1066,12 +1163,33 @@ fn setup_live(
                 ));
             });
 
-            // EXIT Button
+            // Game Timer Pill
+            right_group.spawn((
+                Node {
+                    padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
+                    border_radius: BorderRadius::all(Val::Px(8.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.8)),
+            )).with_children(|pill| {
+                pill.spawn((
+                    GameTimerText,
+                    Text::new("00:00"),
+                    TextFont {
+                        font: settings.font.clone(),
+                        font_size: 16.0,
+                        ..default()
+                    },
+                    TextColor(Color::srgba(0.9, 0.9, 0.9, 1.0)),
+                ));
+            });
+
+            // SETTINGS Button
             right_group.spawn((
                 Button,
-                ExitButton,
+                SettingsButton,
                 Node {
-                    width: Val::Px(120.0),
+                    width: Val::Px(48.0),
                     height: Val::Px(48.0),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
@@ -1079,50 +1197,47 @@ fn setup_live(
                     border_radius: BorderRadius::all(Val::Px(12.0)),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.8, 0.2, 0.2, 1.0)),
-                BorderColor::all(Color::srgba(1.0, 0.3, 0.3, 1.0)),
+                BackgroundColor(panel_bg()),
+                BorderColor::all(crate::ui_theme::panel_border()),
             ))
             .with_children(|b| {
                 b.spawn((
-                    Text::new("EXIT"),
-                    TextFont {
-                        font: settings.font.clone(),
-                        font_size: 20.0,
+                    ImageNode::new(asset_server.load("icons/home.png")),
+                    Node {
+                        width: Val::Px(24.0),
+                        height: Val::Px(24.0),
                         ..default()
                     },
-                    TextColor(Color::WHITE),
+                ));
+            });
+
+            // EXIT Button
+            right_group.spawn((
+                Button,
+                ExitButton,
+                Node {
+                    width: Val::Px(48.0),
+                    height: Val::Px(48.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border: UiRect::all(Val::Px(2.0)),
+                    border_radius: BorderRadius::all(Val::Px(12.0)),
+                    ..default()
+                },
+                BackgroundColor(crate::ui_theme::accent_danger()),
+                BorderColor::all(crate::ui_theme::panel_border()),
+            ))
+            .with_children(|b| {
+                b.spawn((
+                    ImageNode::new(asset_server.load("icons/exit.png")),
+                    Node {
+                        width: Val::Px(24.0),
+                        height: Val::Px(24.0),
+                        ..default()
+                    },
                 ));
             });
         });
-
-    // Home Button (gameplay dock)
-    commands.spawn((
-        ChildOf(shell.action_dock),
-        Node {
-            width: Val::Px(120.0),
-            height: Val::Px(48.0),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            border: UiRect::all(Val::Px(2.0)),
-            border_radius: BorderRadius::all(Val::Px(12.0)),
-            ..default()
-        },
-        Button,
-        HomeButton,
-        BackgroundColor(accent_home()),
-        BorderColor::all(Color::srgba(0.8, 0.8, 1.0, 1.0)),
-    ))
-    .with_children(|b| {
-        b.spawn((
-            Text::new("HOME"),
-            TextFont {
-                font: settings.font.clone(),
-                font_size: 20.0,
-                ..default()
-            },
-            TextColor(Color::WHITE),
-        ));
-    });
 }
 
 fn setup_network(mut commands: Commands, cli: Res<Cli>) {
@@ -1262,15 +1377,12 @@ fn system_update_perf_overlay(
     if refresh_net {
         throttle.last_net_refresh = Some(now);
         overlay.ping_value = if cli.replay.is_some() {
-            "offline".to_string()
+            "Offline".to_string()
         } else if net.handshake_ms.is_none() && net.connect_started.is_some() {
-            "connecting…".to_string()
-        } else if let Some(hs) = net.handshake_ms {
-            if net.turn_spacing_ema_ms > 1.0 {
-                format!("{hs:.0} ms hs · ~{:.0} ms/turn", net.turn_spacing_ema_ms)
-            } else {
-                format!("{hs:.0} ms hs")
-            }
+            "Connecting…".to_string()
+        } else if net.handshake_ms.is_some() {
+            let ping = net.turn_spacing_ema_ms.max(1.0);
+            format!("{ping:.0} ms")
         } else {
             "…".to_string()
         };
@@ -1281,14 +1393,207 @@ fn system_update_perf_overlay(
     }
 }
 
-/// Bottom-center stack: attack summary (OpenFront `AttacksDisplay`) + ratio slider row (`ControlPanel` row 2).
-fn spawn_bottom_combat_hud(commands: &mut Commands, shell: &HudShellRegions, observer: bool, hud_scale: f32) {
+/// StarCraft-style 3×2 build palette + HOME, anchored on [`HudShellRegions::action_dock`].
+fn spawn_action_dock(
+    commands: &mut Commands,
+    shell: &HudShellRegions,
+    observer: bool,
+    hud_scale: f32,
+    asset_server: &AssetServer,
+    font: Handle<Font>,
+) {
     let s = clamp_ui_scale(hud_scale);
     let vis = if observer {
         Visibility::Hidden
     } else {
         Visibility::Visible
     };
+    let (cell, gap, pad) = action_dock_grid_layout_sizes(s);
+    let frame = 2.0 * s;
+    let outer_w = action_dock_grid_outer_width_px(s);
+    let icon = ((cell - 12.0 * s).max(20.0)).min(cell - 2.0);
+
+    commands
+        .spawn((
+            ChildOf(shell.action_dock),
+            ActionDockPointerSink,
+            InGameEntity,
+            RelativeCursorPosition::default(),
+            vis,
+            Node {
+                flex_direction: FlexDirection::Row,
+                justify_content: JustifyContent::FlexEnd,
+                align_items: AlignItems::FlexEnd,
+                column_gap: Val::Px(SPACE_2),
+                ..default()
+            },
+        ))
+        .with_children(|dock| {
+            dock.spawn((
+                BuildPillRow,
+                Node {
+                    width: Val::Px(outer_w),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(gap),
+                    padding: UiRect::all(Val::Px(pad)),
+                    border: UiRect::all(Val::Px(frame)),
+                    border_radius: BorderRadius::all(Val::Px(6.0 * s)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.04, 0.05, 0.08, 0.92)),
+                BorderColor::all(panel_border()),
+            ))
+            .with_children(|grid| {
+                for row_i in 0..2 {
+                    grid.spawn((
+                        Node {
+                            width: Val::Percent(100.0),
+                            flex_direction: FlexDirection::Row,
+                            justify_content: JustifyContent::Center,
+                            column_gap: Val::Px(gap),
+                            ..default()
+                        },
+                    ))
+                    .with_children(|row| {
+                        for c in 0..3 {
+                            let idx = row_i * 3 + c;
+                            let kind = BuildingKind::ALL[idx];
+                            let hk = (idx + 1).to_string();
+                            row.spawn((
+                                Button,
+                                BuildPillButton(kind),
+                                Node {
+                                    width: Val::Px(cell),
+                                    height: Val::Px(cell),
+                                    flex_direction: FlexDirection::Column,
+                                    padding: UiRect::all(Val::Px(3.0 * s)),
+                                    justify_content: JustifyContent::FlexStart,
+                                    row_gap: Val::Px(1.0 * s),
+                                    border_radius: BorderRadius::all(Val::Px(4.0 * s)),
+                                    border: UiRect::all(Val::Px(1.0 * s)),
+                                    ..default()
+                                },
+                                BackgroundColor(panel_bg()),
+                                BorderColor::all(panel_border()),
+                            ))
+                            .with_children(|cell_ui| {
+                                cell_ui.spawn((
+                                    Node {
+                                        width: Val::Percent(100.0),
+                                        flex_direction: FlexDirection::Row,
+                                        justify_content: JustifyContent::FlexEnd,
+                                        min_height: Val::Px(11.0 * s),
+                                        ..default()
+                                    },
+                                ))
+                                .with_children(|hk_row| {
+                                    hk_row.spawn((
+                                        Text::new(hk),
+                                        BuildPillLabel { slot: 3, kind },
+                                        TextFont {
+                                            font: font.clone(),
+                                            font_size: 10.0 * s,
+                                            ..default()
+                                        },
+                                        TextColor(Color::srgb(0.55, 0.62, 0.72)),
+                                    ));
+                                });
+                                cell_ui.spawn((
+                                    ImageNode::new(asset_server.load(building_kind_icon_path(kind))),
+                                    Node {
+                                        width: Val::Px(icon),
+                                        height: Val::Px(icon),
+                                        align_self: AlignSelf::Center,
+                                        ..default()
+                                    },
+                                ));
+                                cell_ui.spawn((
+                                    Text::new("0"),
+                                    BuildPillLabel { slot: 1, kind },
+                                    TextFont {
+                                        font: font.clone(),
+                                        font_size: 10.0 * s,
+                                        ..default()
+                                    },
+                                    TextColor(Color::srgb(0.85, 0.9, 1.0)),
+                                ));
+                                cell_ui.spawn((
+                                    Text::new("0"),
+                                    BuildPillLabel { slot: 2, kind },
+                                    TextFont {
+                                        font: font.clone(),
+                                        font_size: 9.5 * s,
+                                        ..default()
+                                    },
+                                    TextColor(Color::srgb(0.75, 0.78, 0.82)),
+                                ));
+                            });
+                        }
+                    });
+                }
+            });
+
+            dock.spawn((
+                Node {
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border: UiRect::all(Val::Px(2.0)),
+                    border_radius: BorderRadius::all(Val::Px(12.0)),
+                    ..default()
+                },
+                Button,
+                HomeButton,
+                BackgroundColor(accent_home()),
+                BorderColor::all(panel_border()),
+            ))
+            .with_children(|b| {
+                b.spawn((
+                    ImageNode::new(asset_server.load("icons/home.png")),
+                    Node {
+                        width: Val::Px(24.0),
+                        height: Val::Px(24.0),
+                        ..default()
+                    },
+                ));
+            });
+        });
+}
+
+/// Bottom-center stack: attack summary (OpenFront `AttacksDisplay`) + ratio slider row (`ControlPanel` row 2).
+fn spawn_bottom_combat_hud(
+    commands: &mut Commands,
+    shell: &HudShellRegions,
+    observer: bool,
+    hud_scale: f32,
+    asset_server: &AssetServer,
+    font: Handle<Font>,
+) {
+    let s = clamp_ui_scale(hud_scale);
+    let vis = if observer {
+        Visibility::Hidden
+    } else {
+        Visibility::Visible
+    };
+    spawn_action_dock(commands, shell, observer, hud_scale, asset_server, font);
+    commands
+        .spawn((
+            ChildOf(shell.bottom_sheet),
+            EventFeedContainer,
+            InGameEntity,
+            vis,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(16.0 * s),
+                bottom: Val::Px(16.0 * s),
+                width: Val::Px(300.0 * s),
+                height: Val::Px(200.0 * s),
+                flex_direction: FlexDirection::Column,
+                justify_content: JustifyContent::FlexEnd,
+                row_gap: Val::Px(4.0 * s),
+                ..default()
+            },
+        ));
+
     commands
         .spawn((
             ChildOf(shell.bottom_sheet),
@@ -1307,115 +1612,204 @@ fn spawn_bottom_combat_hud(commands: &mut Commands, shell: &HudShellRegions, obs
         ))
         .with_children(|root| {
             root.spawn((
-                Node {
-                    width: Val::Percent(96.0),
-                    min_width: Val::Px(280.0 * s),
-                    max_width: Val::Px(800.0 * s),
-                    padding: UiRect::all(Val::Px(16.0 * s)),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(8.0 * s),
-                    border: UiRect::all(Val::Px(2.0 * s)),
-                    border_radius: BorderRadius::all(Val::Px(12.0 * s)),
-                    ..default()
-                },
-                BackgroundColor(Color::srgba(0.05, 0.08, 0.1, 0.9)),
-                BorderColor::all(panel_border()),
-                AttackSummaryText,
-                Text::new(""),
-                TextFont {
-                    font_size: 16.0 * s,
-                    ..default()
-                },
-                TextColor(Color::srgba(0.9, 0.9, 0.9, 1.0)),
-            ));
-
-            root.spawn((
                 OutgoingRowsContainer,
                 Node {
                     width: Val::Percent(96.0),
                     min_width: Val::Px(280.0 * s),
                     max_width: Val::Px(800.0 * s),
-                    flex_direction: FlexDirection::Column,
+                    flex_direction: FlexDirection::Row,
+                    flex_wrap: FlexWrap::Wrap,
+                    align_content: AlignContent::FlexStart,
                     row_gap: Val::Px(8.0 * s),
+                    column_gap: Val::Px(8.0 * s),
                     max_height: Val::Px(280.0 * s),
                     overflow: Overflow::scroll_y(),
                     ..default()
                 },
+                bevy::ui::ScrollPosition::default(),
             ));
 
             root.spawn((
                 Node {
                     width: Val::Percent(96.0),
                     max_width: Val::Px(800.0 * s),
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(16.0 * s),
-                    flex_wrap: FlexWrap::Wrap,
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Stretch,
+                    row_gap: Val::Px(8.0 * s),
                     padding: UiRect::all(Val::Px(12.0 * s)),
                     border_radius: BorderRadius::all(Val::Px(12.0 * s)),
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.1, 0.1, 0.15, 0.85)),
             ))
-            .with_children(|row| {
-                row.spawn((
-                    AttackRatioReadout,
-                    Text::new(""),
-                    TextFont {
-                        font_size: 18.0 * s,
-                        ..default()
-                    },
-                    TextColor(Color::WHITE),
+            .with_children(|panel| {
+                // Top row: Economy (Cap | Gold | Troops)
+                panel.spawn((
                     Node {
-                        width: Val::Px(180.0 * s),
+                        width: Val::Percent(100.0),
+                        flex_direction: FlexDirection::Row,
+                        justify_content: JustifyContent::SpaceBetween,
+                        column_gap: Val::Px(8.0 * s),
                         ..default()
                     },
-                ));
+                )).with_children(|eco_row| {
+                    // Capacity Pill
+                    eco_row.spawn((
+                        Node {
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            padding: UiRect::axes(Val::Px(12.0 * s), Val::Px(6.0 * s)),
+                            border_radius: BorderRadius::all(Val::Px(8.0 * s)),
+                            column_gap: Val::Px(6.0 * s),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.04)), // OpenFront bg-white/4
+                    )).with_children(|pill| {
+                        pill.spawn((
+                            ImageNode::new(asset_server.load("icons/capacity.png")),
+                            Node { width: Val::Px(16.0 * s), height: Val::Px(16.0 * s), ..default() }
+                        ));
+                        pill.spawn((
+                            BottomHudCap,
+                            Text::new("0"),
+                            TextFont { font_size: 16.0 * s, ..default() },
+                            TextColor(Color::WHITE),
+                        ));
+                        pill.spawn((
+                            Text::new("Cap"),
+                            TextFont { font_size: 14.0 * s, ..default() },
+                            TextColor(Color::srgb(0.8, 0.8, 0.8)),
+                        ));
+                    });
 
-                row.spawn((
-                    Button,
-                    AttackRatioTrack,
-                    RelativeCursorPosition::default(),
+                    // Gold Pill
+                    eco_row.spawn((
+                        Node {
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            padding: UiRect::axes(Val::Px(12.0 * s), Val::Px(6.0 * s)),
+                            border_radius: BorderRadius::all(Val::Px(8.0 * s)),
+                            column_gap: Val::Px(6.0 * s),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.04)),
+                    )).with_children(|pill| {
+                        pill.spawn((
+                            ImageNode::new(asset_server.load("icons/gold.png")),
+                            Node { width: Val::Px(16.0 * s), height: Val::Px(16.0 * s), ..default() }
+                        ));
+                        pill.spawn((
+                            BottomHudGold,
+                            Text::new("0"),
+                            TextFont { font_size: 16.0 * s, ..default() },
+                            TextColor(Color::WHITE),
+                        ));
+                        pill.spawn((
+                            Text::new("Gold"),
+                            TextFont { font_size: 14.0 * s, ..default() },
+                            TextColor(Color::srgb(0.8, 0.8, 0.8)),
+                        ));
+                    });
+
+                    // Troops Pill
+                    eco_row.spawn((
+                        Node {
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            padding: UiRect::axes(Val::Px(12.0 * s), Val::Px(6.0 * s)),
+                            border_radius: BorderRadius::all(Val::Px(8.0 * s)),
+                            column_gap: Val::Px(6.0 * s),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.04)), // OpenFront bg-white/4
+                    )).with_children(|pill| {
+                        pill.spawn((
+                            ImageNode::new(asset_server.load("icons/troops.png")),
+                            Node { width: Val::Px(16.0 * s), height: Val::Px(16.0 * s), ..default() }
+                        ));
+                        pill.spawn((
+                            BottomHudTroops,
+                            Text::new("0"),
+                            TextFont { font_size: 16.0 * s, ..default() },
+                            TextColor(Color::WHITE),
+                        ));
+                        pill.spawn((
+                            Text::new("Troops"),
+                            TextFont { font_size: 14.0 * s, ..default() },
+                            TextColor(Color::srgb(0.8, 0.8, 0.8)),
+                        ));
+                    });
+                });
+
+                // Bottom row: Attack Slider
+                panel.spawn((
                     Node {
-                        flex_grow: 1.0,
-                        height: Val::Px(32.0 * s),
+                        width: Val::Percent(100.0),
+                        flex_direction: FlexDirection::Row,
                         align_items: AlignItems::Center,
-                        justify_content: JustifyContent::Stretch,
+                        column_gap: Val::Px(16.0 * s),
                         ..default()
                     },
-                ))
-                .with_children(|track| {
-                    track
-                        .spawn((
-                            AttackRatioBarShell,
-                            Node {
-                                width: Val::Percent(100.0),
-                                height: Val::Px(16.0 * s),
-                                flex_direction: FlexDirection::Row,
-                                overflow: Overflow::clip(),
-                                border_radius: BorderRadius::all(Val::Px(8.0 * s)),
-                                ..default()
-                            },
-                        ))
-                        .with_children(|bar| {
-                            bar.spawn((
-                                AttackRatioFill,
+                )).with_children(|slider_row| {
+                    slider_row.spawn((
+                        AttackRatioReadout,
+                        Text::new(""),
+                        TextFont {
+                            font_size: 18.0 * s,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                        Node {
+                            width: Val::Px(180.0 * s),
+                            ..default()
+                        },
+                    ));
+
+                    slider_row.spawn((
+                        Button,
+                        AttackRatioTrack,
+                        RelativeCursorPosition::default(),
+                        Node {
+                            flex_grow: 1.0,
+                            height: Val::Px(32.0 * s),
+                            align_items: AlignItems::Center,
+                            justify_content: JustifyContent::Stretch,
+                            ..default()
+                        },
+                    ))
+                    .with_children(|track| {
+                        track
+                            .spawn((
+                                AttackRatioBarShell,
                                 Node {
-                                    width: Val::Percent(20.0),
-                                    height: Val::Percent(100.0),
+                                    width: Val::Percent(100.0),
+                                    height: Val::Px(16.0 * s),
+                                    flex_direction: FlexDirection::Row,
+                                    overflow: Overflow::clip(),
+                                    border_radius: BorderRadius::all(Val::Px(8.0 * s)),
                                     ..default()
                                 },
-                                BackgroundColor(Color::srgba(0.2, 0.8, 0.2, 1.0)),
-                            ));
-                            bar.spawn((
-                                Node {
-                                    flex_grow: 1.0,
-                                    height: Val::Percent(100.0),
-                                    ..default()
-                                },
-                                BackgroundColor(Color::srgb(0.2, 0.2, 0.25)),
-                            ));
-                        });
+                            ))
+                            .with_children(|bar| {
+                                bar.spawn((
+                                    AttackRatioFill,
+                                    Node {
+                                        width: Val::Percent(20.0),
+                                        height: Val::Percent(100.0),
+                                        ..default()
+                                    },
+                                    BackgroundColor(Color::srgba(0.2, 0.8, 0.2, 1.0)),
+                                ));
+                                bar.spawn((
+                                    Node {
+                                        flex_grow: 1.0,
+                                        height: Val::Percent(100.0),
+                                        ..default()
+                                    },
+                                    BackgroundColor(Color::srgb(0.2, 0.2, 0.25)),
+                                ));
+                            });
+                    });
                 });
             });
         });
@@ -1455,6 +1849,7 @@ pub struct StartGameParams<'w> {
     overlay: Option<ResMut<'w, OverlayDiagnostics>>,
     shell: Option<Res<'w, HudShellRegions>>,
     settings: Res<'w, ClientSettings>,
+    asset_server: Res<'w, AssetServer>,
     meshes: Option<ResMut<'w, Assets<Mesh>>>,
     materials: Option<ResMut<'w, Assets<border_material::BorderMaterial>>>,
     images: Option<ResMut<'w, Assets<Image>>>,
@@ -1627,8 +2022,16 @@ fn start_game_core(
             params.ready.0 = true;
             params.next_state.set(AppState::InGame);
 
+            commands.insert_resource(CombatDockUiScale(hud_s));
             if let Some(s) = &params.shell {
-                spawn_bottom_combat_hud(commands, s, msg.my_player_id.is_none(), hud_s);
+                spawn_bottom_combat_hud(
+                    commands,
+                    s,
+                    msg.my_player_id.is_none(),
+                    hud_s,
+                    params.asset_server.as_ref(),
+                    params.settings.font.clone(),
+                );
             }
 
             if let Some(over) = params.overlay.as_mut() {
@@ -1724,6 +2127,32 @@ fn setup_fleet_visual_meshes(
     });
 }
 
+fn setup_structure_marker_meshes(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
+    let place_ring = Annulus::new(0.12, 1.35)
+        .mesh()
+        .resolution(20)
+        .build();
+    let sam_r = config::SAM_RANGE_TILES as f32 * TILE_SIZE;
+    let sam_range = Annulus::new((sam_r - 0.28).max(0.12), sam_r + 0.28)
+        .mesh()
+        .resolution(36)
+        .build();
+    let def_r = config::DEFENSE_POST_RANGE as f32 * TILE_SIZE;
+    let defense_range = Annulus::new((def_r - 0.22).max(0.12), def_r + 0.22)
+        .mesh()
+        .resolution(30)
+        .build();
+    commands.insert_resource(StructureMarkerMeshes {
+        place_ring: meshes.add(place_ring),
+        sam_range: meshes.add(sam_range),
+        defense_range: meshes.add(defense_range),
+    });
+}
+
+/// Text row looks up the parent [`Building`] via this entity id.
+#[derive(Component)]
+struct BuildingLabelTarget(pub Entity);
+
 #[inline]
 fn tile_idx_to_world(idx: u32, map_w: u32, map_h: u32) -> Vec3 {
     let x = idx % map_w;
@@ -1769,6 +2198,7 @@ fn try_launch_fleet_intent(
         target_tile,
         border,
         target_border,
+        true,
     ) {
         Ok(_) => Some(GameplayIntent::LaunchFleet {
             target_owner,
@@ -1894,7 +2324,465 @@ fn hover_system(
     }
 }
 
-/// On click: send intent to server via MessageSender.
+fn system_build_structure_hotkeys(
+    kb: Res<ButtonInput<KeyCode>>,
+    mut mode: ResMut<BuildStructureMode>,
+    mut overlay: ResMut<OverlayDiagnostics>,
+) {
+    if kb.just_pressed(KeyCode::Escape) {
+        mode.0 = None;
+    }
+    let keys = [
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+        KeyCode::Digit5,
+        KeyCode::Digit6,
+    ];
+    for (i, key) in keys.iter().enumerate() {
+        if kb.just_pressed(*key) {
+            mode.0 = Some(BuildingKind::ALL[i]);
+            break;
+        }
+    }
+    overlay.build_hint = match mode.0 {
+        None => String::new(),
+        Some(k) => format!(
+            "{} · 1–6 · Esc · click own tile (pays gold)",
+            k.as_str()
+        ),
+    };
+}
+
+fn system_refresh_buildable_hud(
+    game_opt: Option<Res<GameState>>,
+    my_id: Res<MyPlayerId>,
+    q_building: Query<&Building>,
+    mut removed: RemovedComponents<Building>,
+    added: Query<(), Added<Building>>,
+    mut state: ResMut<BuildableHudState>,
+    mut last_gold: Local<Option<f64>>,
+) {
+    let Some(game) = game_opt.as_deref() else {
+        return;
+    };
+    let pid = my_id.0;
+    if pid == 0 {
+        return;
+    }
+    let Some(p) = game.player(pid) else {
+        return;
+    };
+    let buildings_changed = removed.read().count() > 0 || added.iter().next().is_some();
+    let gold_changed = last_gold.map(|g| (p.gold - g).abs() > 0.5).unwrap_or(true);
+    let buildings: Vec<Building> = q_building.iter().copied().collect();
+
+    if buildings_changed || state.entries.len() != BuildingKind::ALL.len() {
+        state.entries = compute_buildables_for_player(&game.map, pid, p.gold, &buildings)
+            .into_iter()
+            .collect();
+        *last_gold = Some(p.gold);
+        return;
+    }
+
+    if gold_changed && state.entries.len() == BuildingKind::ALL.len() {
+        patch_buildable_entries_gold_and_counts(&mut state.entries, pid, p.gold, &buildings);
+        *last_gold = Some(p.gold);
+    }
+}
+
+fn system_apply_buildable_hud(
+    state: Res<BuildableHudState>,
+    mode: Res<BuildStructureMode>,
+    mut q_btn: Query<
+        (
+            &BuildPillButton,
+            &Interaction,
+            &mut BackgroundColor,
+            &mut BorderColor,
+        ),
+        With<Button>,
+    >,
+    mut q_label: Query<(&BuildPillLabel, &mut Text)>,
+) {
+    if state.entries.len() != BuildingKind::ALL.len() {
+        return;
+    }
+    for (label, mut text) in q_label.iter_mut() {
+        let Some(entry) = state.entries.iter().find(|e| e.kind == label.kind) else {
+            continue;
+        };
+        let hk = BuildingKind::ALL
+            .iter()
+            .position(|&k| k == entry.kind)
+            .map(|i| (i + 1).to_string())
+            .unwrap_or_else(|| "?".into());
+        let s = match label.slot {
+            1 => format!("{}", entry.level_total),
+            2 => format!("{:.0}", entry.cost),
+            3 => hk,
+            _ => continue,
+        };
+        if **text != s {
+            **text = s;
+        }
+    }
+    for (btn, interaction, mut bg, mut border) in q_btn.iter_mut() {
+        let Some(entry) = state.entries.iter().find(|e| e.kind == btn.0) else {
+            continue;
+        };
+        let disabled = !entry.can_build && !entry.can_upgrade;
+        let sel = mode.0 == Some(btn.0);
+        if disabled {
+            *bg = Color::srgba(0.1, 0.11, 0.13, 0.38).into();
+            *border = BorderColor::all(Color::srgba(0.3, 0.32, 0.36, 0.35));
+        } else if sel {
+            *bg = accent_primary().with_alpha(0.42).into();
+            *border = BorderColor::all(accent_primary());
+        } else if *interaction == Interaction::Hovered {
+            *bg = panel_bg().with_alpha(0.92).into();
+            *border = BorderColor::all(panel_border());
+        } else {
+            *bg = panel_bg().into();
+            *border = BorderColor::all(panel_border());
+        }
+    }
+}
+
+fn system_buildpill_interactions(
+    q: Query<(&Interaction, &BuildPillButton), (Changed<Interaction>, With<Button>)>,
+    mut mode: ResMut<BuildStructureMode>,
+    mut overlay: ResMut<OverlayDiagnostics>,
+) {
+    for (ix, btn) in &q {
+        if *ix == Interaction::Pressed {
+            mode.0 = Some(btn.0);
+            overlay.build_hint = format!("Place {} — click own tile (gold) · Esc", btn.0.as_str());
+        }
+    }
+}
+
+#[inline]
+fn building_kind_short(kind: BuildingKind) -> &'static str {
+    match kind {
+        BuildingKind::City => "C",
+        BuildingKind::Factory => "F",
+        BuildingKind::Port => "P",
+        BuildingKind::DefensePost => "D",
+        BuildingKind::SamLauncher => "S",
+        BuildingKind::MissileSilo => "M",
+    }
+}
+
+fn building_kind_icon_path(kind: BuildingKind) -> &'static str {
+    match kind {
+        BuildingKind::City => "icons/building_city.png",
+        BuildingKind::Factory => "icons/building_factory.png",
+        BuildingKind::Port => "icons/building_port.png",
+        BuildingKind::DefensePost => "icons/building_defense.png",
+        BuildingKind::SamLauncher => "icons/building_sam.png",
+        BuildingKind::MissileSilo => "icons/building_silo.png",
+    }
+}
+
+fn system_sync_structure_ghost(
+    mut commands: Commands,
+    game_opt: Option<Res<GameState>>,
+    my_id: Res<MyPlayerId>,
+    mode: Res<BuildStructureMode>,
+    hovered: Res<HoveredTile>,
+    meshes: Option<Res<StructureMarkerMeshes>>,
+    mut ghost_parts: ResMut<StructureGhostParts>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    q_building: Query<(Entity, &Building)>,
+) {
+    let despawn_all = |commands: &mut Commands, parts: &mut StructureGhostParts| {
+        if let Some(e) = parts.marker.take() {
+            commands.entity(e).despawn();
+        }
+        if let Some(e) = parts.range.take() {
+            commands.entity(e).despawn();
+        }
+    };
+
+    let Some(game) = game_opt.as_deref() else {
+        despawn_all(&mut commands, &mut ghost_parts);
+        return;
+    };
+    let Some(ms) = meshes.as_ref() else {
+        despawn_all(&mut commands, &mut ghost_parts);
+        return;
+    };
+    let Some(kind) = mode.0 else {
+        despawn_all(&mut commands, &mut ghost_parts);
+        return;
+    };
+    let Some((x, y)) = hovered.0 else {
+        despawn_all(&mut commands, &mut ghost_parts);
+        return;
+    };
+
+    let pid = my_id.0;
+    if pid == 0 {
+        despawn_all(&mut commands, &mut ghost_parts);
+        return;
+    }
+    let Some(player) = game.player(pid) else {
+        despawn_all(&mut commands, &mut ghost_parts);
+        return;
+    };
+
+    let w = game.map.width;
+    let mh = game.map.height;
+    let click_idx = y * w + x;
+    if game.map.owner_id(x, y) != pid {
+        despawn_all(&mut commands, &mut ghost_parts);
+        return;
+    }
+
+    let snapshot: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
+    let positions = existing_structure_positions_with_width(snapshot.iter(), w, None);
+    let cost = structure_build_cost_gold(kind, pid, &snapshot);
+    let afford = player.gold >= cost && cost.is_finite();
+
+    enum GhostKind {
+        Upgrade,
+        Place,
+        Invalid,
+    }
+
+    let (tile_idx, ghost_kind, ok_afford) =
+        if let Some(bid) = find_upgrade_target_id(&game.map, pid, kind, click_idx, &snapshot) {
+            let mut ti = None;
+            for b in &snapshot {
+                if b.id == bid {
+                    ti = Some(b.tile_idx);
+                    break;
+                }
+            }
+            let Some(ti) = ti else {
+                despawn_all(&mut commands, &mut ghost_parts);
+                return;
+            };
+            (ti, GhostKind::Upgrade, afford)
+        } else if let Some(spawn) =
+            resolve_structure_spawn_tile(&game.map, pid, kind, click_idx, &positions)
+        {
+            (spawn, GhostKind::Place, afford)
+        } else {
+            (click_idx, GhostKind::Invalid, false)
+        };
+
+    let pos = tile_idx_to_world(tile_idx, w, mh);
+    let color = match ghost_kind {
+        GhostKind::Invalid => Color::srgba(0.95, 0.25, 0.2, 0.4),
+        GhostKind::Upgrade if ok_afford => Color::srgba(0.2, 0.88, 0.95, 0.45),
+        GhostKind::Upgrade => Color::srgba(0.95, 0.35, 0.2, 0.38),
+        GhostKind::Place if ok_afford => Color::srgba(0.25, 0.95, 0.35, 0.42),
+        GhostKind::Place => Color::srgba(0.95, 0.35, 0.2, 0.38),
+    };
+    let mat = materials.add(ColorMaterial::from_color(color));
+
+    let wants_range = matches!(
+        kind,
+        BuildingKind::SamLauncher | BuildingKind::DefensePost
+    );
+    let range_mesh = if kind == BuildingKind::SamLauncher {
+        Some(ms.sam_range.clone())
+    } else if kind == BuildingKind::DefensePost {
+        Some(ms.defense_range.clone())
+    } else {
+        None
+    };
+    let range_color = materials.add(ColorMaterial::from_color(Color::srgba(
+        0.9, 0.9, 0.35, 0.22,
+    )));
+
+    if let Some(e) = ghost_parts.marker {
+        if commands.get_entity(e).is_ok() {
+            commands.entity(e).insert(MeshMaterial2d(mat.clone()));
+            commands
+                .entity(e)
+                .insert(Transform::from_xyz(pos.x, pos.y, 275.0));
+        } else {
+            ghost_parts.marker = None;
+        }
+    }
+
+    if ghost_parts.marker.is_none() {
+        let e = commands
+            .spawn((
+                StructureGhostRoot,
+                InGameEntity,
+                Mesh2d(ms.place_ring.clone()),
+                MeshMaterial2d(mat.clone()),
+                Transform::from_xyz(pos.x, pos.y, 275.0),
+                GlobalTransform::default(),
+            ))
+            .id();
+        ghost_parts.marker = Some(e);
+    }
+
+    if wants_range {
+        if let Some(rm) = range_mesh {
+            if let Some(re) = ghost_parts.range {
+                if commands.get_entity(re).is_ok() {
+                    commands.entity(re).insert(Mesh2d(rm.clone()));
+                    commands
+                        .entity(re)
+                        .insert(Transform::from_xyz(pos.x, pos.y, 274.0));
+                    commands
+                        .entity(re)
+                        .insert(MeshMaterial2d(range_color.clone()));
+                } else {
+                    ghost_parts.range = None;
+                }
+            }
+            if ghost_parts.range.is_none() {
+                let re = commands
+                    .spawn((
+                        GhostRangeRing,
+                        InGameEntity,
+                        Mesh2d(rm),
+                        MeshMaterial2d(range_color),
+                        Transform::from_xyz(pos.x, pos.y, 274.0),
+                        GlobalTransform::default(),
+                    ))
+                    .id();
+                ghost_parts.range = Some(re);
+            }
+        }
+    } else if let Some(re) = ghost_parts.range.take() {
+        commands.entity(re).despawn();
+    }
+}
+
+fn system_attach_building_visuals(
+    mut commands: Commands,
+    game_opt: Option<Res<GameState>>,
+    mesh: Option<Res<StructureMarkerMeshes>>,
+    settings: Res<ClientSettings>,
+    asset_server: Res<AssetServer>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    q_new: Query<(Entity, &Building), Without<BuildingVisualDone>>,
+) {
+    let Some(game) = game_opt.as_deref() else {
+        return;
+    };
+    let Some(marker) = mesh.as_ref() else {
+        return;
+    };
+    let mw = game.map.width;
+    let mh = game.map.height;
+    let pending: Vec<(Entity, Building)> = q_new.iter().map(|(e, b)| (e, *b)).collect();
+    for (e, b) in pending {
+        let rgb = game
+            .player(b.owner_id)
+            .map(|p| p.color)
+            .unwrap_or([0.7, 0.7, 0.7]);
+        let mat = materials.add(ColorMaterial::from_color(Color::srgba(
+            rgb[0], rgb[1], rgb[2], 0.88,
+        )));
+        let pos = tile_idx_to_world(b.tile_idx, mw, mh);
+        commands.entity(e).insert((
+            BuildingVisualDone,
+            BuildingMapVisualRoot,
+            Transform::from_xyz(pos.x, pos.y, 268.0),
+            GlobalTransform::default(),
+            Visibility::default(),
+        ));
+        let font = settings.font.clone();
+        commands.entity(e).with_children(|ch| {
+            ch.spawn((
+                InGameEntity,
+                Mesh2d(marker.place_ring.clone()),
+                MeshMaterial2d(mat),
+                Transform::default(),
+                GlobalTransform::default(),
+                Visibility::default(),
+            ));
+            ch.spawn((
+                InGameEntity,
+                Sprite {
+                    image: asset_server.load(building_kind_icon_path(b.kind)),
+                    custom_size: Some(Vec2::splat(TILE_SIZE * 2.4)),
+                    ..default()
+                },
+                Transform::from_xyz(0.0, 0.0, 1.0),
+                GlobalTransform::default(),
+                Visibility::default(),
+            ));
+            ch.spawn((
+                InGameEntity,
+                BuildingLabelTarget(e),
+                Text2d::new(format!(
+                    "{}{}",
+                    building_kind_short(b.kind),
+                    b.level
+                )),
+                TextFont {
+                    font,
+                    font_size: 11.0,
+                    weight: FontWeight::SEMIBOLD,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                TextLayout::new_with_justify(Justify::Center),
+                Transform::from_xyz(0.0, TILE_SIZE * 0.42, 2.0),
+            ));
+        });
+    }
+}
+
+fn system_sync_building_visual_lod(
+    q_camera: Query<&Projection, With<Camera2d>>,
+    mut q_visuals: Query<&mut Transform, With<BuildingMapVisualRoot>>,
+) {
+    let Ok(projection) = q_camera.single() else {
+        return;
+    };
+    let Projection::Orthographic(ortho) = projection else {
+        return;
+    };
+
+    // OpenFront keeps structure symbols readable by scaling icon stages with zoom.
+    // Bevy orthographic scale grows as the camera zooms out, so compensate the
+    // world-space visual root only; the deterministic simulation never sees this.
+    let visual_scale = (ortho.scale / 1.4).clamp(1.0, 7.0);
+    let scale = Vec3::splat(visual_scale);
+    for mut transform in &mut q_visuals {
+        if transform.scale != scale {
+            transform.scale = scale;
+        }
+    }
+}
+
+fn system_sync_building_map_labels(
+    game_opt: Option<Res<GameState>>,
+    q_b: Query<&Building>,
+    mut q_l: Query<(&BuildingLabelTarget, &mut Text2d)>,
+) {
+    if game_opt.is_none() {
+        return;
+    }
+    for (t, mut text) in q_l.iter_mut() {
+        let Ok(b) = q_b.get(t.0) else {
+            continue;
+        };
+        let pending = if b.under_construction { "…" } else { "" };
+        let line = format!(
+            "{}{}{}",
+            building_kind_short(b.kind),
+            b.level,
+            pending
+        );
+        if text.0 != line {
+            text.0 = line.clone();
+        }
+    }
+}
+
 /// Server stamps player_id → bundles into next Turn → broadcasts → we apply next frame.
 /// Key `B` force-boat path (OpenFront `DoBoatAttackEvent`): same resolver as right-click.
 #[derive(bevy::ecs::system::SystemParam)]
@@ -1909,7 +2797,10 @@ struct ForceBoatKeyCtx<'w> {
 fn system_force_boat_key(
     kb: Res<ButtonInput<KeyCode>>,
     hovered: Res<HoveredTile>,
-    bottom_hud_hit: Query<&RelativeCursorPosition, With<BottomHudRoot>>,
+    mut hud_hit: ParamSet<(
+        Query<&RelativeCursorPosition, With<BottomHudRoot>>,
+        Query<&RelativeCursorPosition, With<ActionDockPointerSink>>,
+    )>,
     mut commands: Commands,
     ring_mesh: Res<AttackRingMesh>,
     mut materials: ResMut<Assets<ColorMaterial>>,
@@ -1921,7 +2812,9 @@ fn system_force_boat_key(
     if !kb.just_pressed(KeyCode::KeyB) {
         return;
     }
-    if bottom_hud_hit.iter().any(|rcp| rcp.cursor_over) {
+    let over_hud = hud_hit.p0().iter().any(|rcp| rcp.cursor_over)
+        || hud_hit.p1().iter().any(|rcp| rcp.cursor_over);
+    if over_hud {
         return;
     }
     let Some(game) = ctx.game_opt.as_deref() else {
@@ -2004,9 +2897,14 @@ fn player_click(
     touch_gesture: Res<TouchGestureState>,
     hovered:     Res<HoveredTile>,
     settings:    Res<ClientSettings>,
-    bottom_hud_hit: Query<&RelativeCursorPosition, With<BottomHudRoot>>,
+    mut hud_hit: ParamSet<(
+        Query<&RelativeCursorPosition, With<BottomHudRoot>>,
+        Query<&RelativeCursorPosition, With<ActionDockPointerSink>>,
+    )>,
     mut senders: Query<&mut MessageSender<ClientGameplayMessage>>,
     local_buf: Option<ResMut<LocalIntentBuffer>>,
+    build_mode: Res<BuildStructureMode>,
+    q_building: Query<(Entity, &Building)>,
     mut ctx: ClickCtx,
 ) {
     // We trigger ONLY on release to support dragging.
@@ -2024,7 +2922,9 @@ fn player_click(
     if drag_state.accumulated_drag > 10.0 { return; } // It was a drag, not a click
 
     // Clicks/releases over the combat HUD must not issue map attacks (OpenFront: UI eats pointer).
-    if bottom_hud_hit.iter().any(|rcp| rcp.cursor_over) {
+    let over_hud = hud_hit.p0().iter().any(|rcp| rcp.cursor_over)
+        || hud_hit.p1().iter().any(|rcp| rcp.cursor_over);
+    if over_hud {
         return;
     }
 
@@ -2045,10 +2945,62 @@ fn player_click(
 
     let pid = ctx.my_id.0;
     let Some(player) = game.player(pid) else { return };
-    if !player.alive || player.troops < config::EXPAND_COST { return; }
+    if !player.alive {
+        return;
+    }
 
     let target_owner = game.map.owner_id(x, y);
+    let map_w = game.map.width;
+    let target_tile = y * map_w + x;
+
     if target_owner == pid {
+        if wants_force_boat {
+            return;
+        }
+        if let Some(kind) = build_mode.0 {
+            let place_release = left_mouse_release || touch_release;
+            if place_release {
+                let snapshot: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
+                let positions =
+                    existing_structure_positions_with_width(snapshot.iter(), map_w, None);
+                if let Some(bid) =
+                    find_upgrade_target_id(&game.map, pid, kind, target_tile, &snapshot)
+                {
+                    let cost = structure_build_cost_gold(kind, pid, &snapshot);
+                    if player.gold >= cost && cost.is_finite() {
+                        send_gameplay_intent(
+                            GameplayIntent::UpgradeStructure { building_id: bid },
+                            pid,
+                            local_buf,
+                            &mut senders,
+                        );
+                    }
+                    return;
+                }
+                if resolve_structure_spawn_tile(&game.map, pid, kind, target_tile, &positions)
+                    .is_some()
+                {
+                    let cost = structure_build_cost_gold(kind, pid, &snapshot);
+                    if player.gold >= cost && cost.is_finite() {
+                        send_gameplay_intent(
+                            GameplayIntent::BuildStructure {
+                                kind,
+                                target_tile,
+                            },
+                            pid,
+                            local_buf,
+                            &mut senders,
+                        );
+                    }
+                    return;
+                }
+            }
+            return;
+        }
+        return;
+    }
+
+    if player.troops < config::EXPAND_COST {
         return;
     }
 
@@ -2057,7 +3009,6 @@ fn player_click(
     //   • neutral-owned tile  → ground attack if BFS through neutral land (≤200) reaches my territory
     //   • otherwise          → boat if I share a water component with a reachable shoreline
     let border_tiles: &[u32] = &player.border_tiles;
-    let target_tile = y * game.map.width + x;
 
     let can_ground_attack = if target_owner != 0 {
         shares_border_with(&game.map, border_tiles, target_owner)
@@ -2085,6 +3036,7 @@ fn player_click(
     if send < config::EXPAND_COST {
         return;
     }
+
 
     // Decide intent first (OpenFront: LMB canAttack wins; auto-boat only when route resolves).
     // Right-click / force-boat skips ground branch and uses the same resolver as the simulation.
@@ -2414,16 +3366,41 @@ fn handle_tile_change(
 
 
 fn update_hud(
-    game_opt:  Option<Res<GameState>>,
     overlay: Res<OverlayDiagnostics>,
-    mut fps_q: Query<&mut Text, With<FpsText>>,
+    build_mode: Res<BuildStructureMode>,
+    highest: Res<HighestReceivedTurn>,
+    mut fps_q: Query<&mut Text, (With<FpsText>, Without<GameTimerText>)>,
+    mut timer_q: Query<&mut Text, With<GameTimerText>>,
 ) {
-    let tick = game_opt.map(|g| g.tick).unwrap_or(0);
-    
     if let Some(mut fps_text) = fps_q.iter_mut().next() {
-        let fps_str = format!("{}  |  Ping: {}  |  {} FPS", overlay.status_line, overlay.ping_value, overlay.fps_value);
+        let show_build_line =
+            build_mode.0.is_some() && !overlay.build_hint.is_empty();
+        let fps_str = if show_build_line {
+            format!(
+                "{}  |  Ping: {}  |  {} FPS  |  {}",
+                overlay.status_line,
+                overlay.ping_value,
+                overlay.fps_value,
+                overlay.build_hint
+            )
+        } else {
+            format!(
+                "{}  |  Ping: {}  |  {} FPS",
+                overlay.status_line, overlay.ping_value, overlay.fps_value
+            )
+        };
         if **fps_text != fps_str {
             **fps_text = fps_str;
+        }
+    }
+
+    if let Some(mut timer_text) = timer_q.iter_mut().next() {
+        let seconds = (highest.0.unwrap_or(0) as f64 * 0.040).floor() as u64;
+        let mins = seconds / 60;
+        let secs = seconds % 60;
+        let time_str = format!("{:02}:{:02}", mins, secs);
+        if **timer_text != time_str {
+            **timer_text = time_str;
         }
     }
 }
@@ -2559,19 +3536,43 @@ fn system_sync_bottom_combat_hud(
     my_id: Res<MyPlayerId>,
     attack_ratio: Res<AttackRatio>,
     settings: Res<ClientSettings>,
-    q_exec: Query<&AttackExecution>,
-    mut q_summary: Query<
-        (&mut Text, &mut TextFont),
-        (With<AttackSummaryText>, Without<AttackRatioReadout>),
-    >,
     mut q_readout: Query<
         (&mut Text, &mut TextFont, &mut Node),
         (
             With<AttackRatioReadout>,
-            Without<AttackSummaryText>,
+            Without<BottomHudCap>,
+            Without<BottomHudTroops>,
+            Without<BottomHudGold>,
             Without<AttackRatioTrack>,
             Without<AttackRatioBarShell>,
             Without<AttackRatioFill>,
+        ),
+    >,
+    mut q_cap: Query<
+        &mut Text,
+        (
+            With<BottomHudCap>,
+            Without<AttackRatioReadout>,
+            Without<BottomHudTroops>,
+            Without<BottomHudGold>,
+        ),
+    >,
+    mut q_gold: Query<
+        &mut Text,
+        (
+            With<BottomHudGold>,
+            Without<AttackRatioReadout>,
+            Without<BottomHudCap>,
+            Without<BottomHudTroops>,
+        ),
+    >,
+    mut q_troops: Query<
+        &mut Text,
+        (
+            With<BottomHudTroops>,
+            Without<AttackRatioReadout>,
+            Without<BottomHudCap>,
+            Without<BottomHudGold>,
         ),
     >,
     mut q_track: Query<
@@ -2602,19 +3603,21 @@ fn system_sync_bottom_combat_hud(
         ),
     >,
 ) {
-    let Some(game) = game_opt else { return };
-    let (Ok((mut summary, mut sum_font)), Ok((mut readout, mut read_font, mut read_node)), Ok(mut fill)) = (
-        q_summary.single_mut(),
-        q_readout.single_mut(),
-        q_fill.single_mut(),
-    ) else {
+    let Some(game) = game_opt.as_deref() else { return };
+
+    let Ok((mut readout, mut readout_font, mut readout_node)) = q_readout.single_mut() else { return };
+    
+    if my_id.0 == 0 {
+        **readout = String::new();
+        if let Ok(mut g) = q_cap.single_mut() { **g = "0".to_string(); }
+        if let Ok(mut gl) = q_gold.single_mut() { **gl = "0".to_string(); }
+        if let Ok(mut t) = q_troops.single_mut() { **t = "0".to_string(); }
         return;
-    };
+    }
 
     let s = clamp_ui_scale(settings.config.ui.combat_hud_scale);
-    sum_font.font_size = 16.0 * s;
-    read_font.font_size = 18.0 * s;
-    read_node.width = Val::Px(180.0 * s);
+    readout_font.font_size = 18.0 * s;
+    readout_node.width = Val::Px(180.0 * s);
     if let Ok(mut n) = q_track.single_mut() {
         n.height = Val::Px(32.0 * s);
     }
@@ -2624,64 +3627,118 @@ fn system_sync_bottom_combat_hud(
     }
 
     let r = attack_ratio.0.clamp(0.01, 1.0);
-    fill.width = Val::Percent(r * 100.0);
+    if let Ok(mut fill) = q_fill.single_mut() {
+        fill.width = Val::Percent(r * 100.0);
+    }
 
-    if my_id.0 == 0 {
-        **summary = String::new();
-        **readout = String::new();
-        return;
+    // Economy Sync
+    if let Some(player) = game.player(my_id.0) {
+        let fmt = |v: f64| -> String {
+            if v >= 1_000_000.0 {
+                format!("{:.1}M", v / 1_000_000.0)
+            } else if v >= 1_000.0 {
+                format!("{:.1}K", v / 1_000.0)
+            } else {
+                format!("{:.0}", v)
+            }
+        };
+
+        if let Ok(mut g) = q_cap.single_mut() {
+            let s = fmt(player.max_troops);
+            if **g != s { **g = s; }
+        }
+        if let Ok(mut gl) = q_gold.single_mut() {
+            let s = fmt(player.gold);
+            if **gl != s { **gl = s; }
+        }
+        if let Ok(mut t) = q_troops.single_mut() {
+            let s = fmt(player.troops);
+            if **t != s { **t = s; }
+        }
     }
 
     let preview_troops = game
         .player(my_id.0)
         .map(|p| (p.troops * r as f64).floor().max(0.0))
         .unwrap_or(0.0);
-    let readout_str = format!("⚔ {:.0}% ({:.0})", r * 100.0, preview_troops);
+    let readout_str = format!("{}% ({:.0})", (r * 100.0).round(), preview_troops);
     if **readout != readout_str {
         **readout = readout_str;
     }
 
-    let mut incoming: Vec<&AttackExecution> = q_exec
-        .iter()
-        .filter(|e| {
-            e.target_owner == my_id.0 && e.owner_id != my_id.0 && !e.retreating
-        })
-        .collect();
-    incoming.sort_by_key(|e| e.id);
+}
 
-    fn target_name(game: &GameState, owner_id: u16) -> String {
-        if owner_id == 0 {
-            "Neutral".to_string()
-        } else {
-            game.player(owner_id)
-                .map(|p| hud_trunc_name(&p.name, 16))
-                .unwrap_or_else(|| format!("{}", owner_id))
+#[derive(Component)]
+pub struct EventFeedLine {
+    pub timer: Timer,
+}
+
+fn system_update_event_feed(
+    mut commands: Commands,
+    time: Res<Time>,
+    game_opt: Option<Res<GameState>>,
+    mut last_event_idx: Local<usize>,
+    settings: Res<ClientSettings>,
+    q_container: Query<Entity, With<EventFeedContainer>>,
+    mut q_lines: Query<(Entity, &mut EventFeedLine, &mut TextColor)>,
+) {
+    let Some(container_ent) = q_container.iter().next() else { return };
+
+    for (entity, mut line, mut color) in q_lines.iter_mut() {
+        line.timer.tick(time.delta());
+        let alpha = line.timer.fraction_remaining();
+        color.0.set_alpha(alpha);
+        if alpha <= 0.0 {
+            commands.entity(entity).despawn();
         }
     }
 
-    let mut lines = Vec::new();
-    if !incoming.is_empty() {
-        lines.push("↓ Te atacan".to_string());
-        for e in &incoming {
-            let who = target_name(&game, e.owner_id);
-            lines.push(format!(
-                "  ▸ {}  {:.0}/{:.0} trp  ·{} cola",
-                who,
-                e.troops.max(0.0),
-                e.initial_troops.max(0.0),
-                e.to_conquer.len()
-            ));
-        }
-    } else {
-        lines.push("Sin ataques entrantes.".to_string());
-    }
-    lines.push(String::new());
-    lines.push("↑ Tus salientes: filas debajo (✕ cancelar).".to_string());
-    lines.push("T/Y — subir/bajar %.".to_string());
-    let body = lines.join("\n");
+    let Some(game) = game_opt else { return };
 
-    if **summary != body {
-        **summary = body;
+    // New events
+    let current_len = game.events.len();
+    if *last_event_idx < current_len {
+        let s = clamp_ui_scale(settings.config.ui.combat_hud_scale);
+        
+        for i in *last_event_idx..current_len {
+            let ev = &game.events[i];
+            let msg = match ev {
+                GameEvent::PlayerEliminated { player_id } => {
+                    let name = game.player(*player_id).map(|p| p.name.as_str()).unwrap_or("Unknown");
+                    format!("Eliminated: {}", name)
+                }
+                GameEvent::StructureSpawned { owner_id, kind, .. } => {
+                    let name = game.player(*owner_id).map(|p| p.name.as_str()).unwrap_or("Unknown");
+                    format!("Built: {} {}", name, kind.as_str())
+                }
+                GameEvent::StructureUpgraded { kind, level, .. } => {
+                    format!("Upgraded: {} to Lvl {}", kind.as_str(), level)
+                }
+                GameEvent::TileCaptured { .. } => {
+                    // Ignore tile captures, too noisy
+                    continue;
+                }
+                _ => continue,
+            };
+
+            commands.entity(container_ent).with_children(|p| {
+                p.spawn((
+                    EventFeedLine { timer: Timer::from_seconds(5.0, TimerMode::Once) },
+                    Text::new(msg),
+                    TextFont {
+                        font: settings.font.clone(),
+                        font_size: 14.0 * s,
+                        ..default()
+                    },
+                    TextColor(Color::srgba(0.9, 0.9, 0.9, 1.0)),
+                    Node {
+                        margin: UiRect::bottom(Val::Px(4.0 * s)),
+                        ..default()
+                    },
+                ));
+            });
+        }
+        *last_event_idx = current_len;
     }
 }
 
@@ -2753,11 +3810,19 @@ fn system_sync_outgoing_attack_rows(
                 .map(|p| hud_trunc_name(&p.name, 14))
                 .unwrap_or_else(|| format!("{}", exec.target_owner))
         };
+        let fmt_num = |v: f64| -> String {
+            if v >= 10_000.0 {
+                format!("{:.1}k", v / 1000.0)
+            } else {
+                format!("{:.0}", v)
+            }
+        };
+        
         let line = format!(
-            "↑ {} — {:.0} / {:.0} trp",
+            "To: {}\n{} / {}",
             who,
-            exec.troops.max(0.0),
-            exec.initial_troops.max(0.0),
+            fmt_num(exec.troops.max(0.0)),
+            fmt_num(exec.initial_troops.max(0.0)),
         );
 
         if let Some((_, text_e)) = row_map.0.get(&exec.id).copied() {
@@ -2775,12 +3840,12 @@ fn system_sync_outgoing_attack_rows(
                     ChildOf(slot),
                     OutgoingAttackRowRoot,
                     Node {
-                        width: Val::Percent(100.0),
-                        flex_direction: FlexDirection::Row,
+                        width: Val::Px(120.0 * s),
+                        height: Val::Px(80.0 * s),
+                        flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Center,
                         justify_content: JustifyContent::SpaceBetween,
-                        column_gap: Val::Px(8.0 * s),
-                        padding: UiRect::axes(Val::Px(10.0 * s), Val::Px(6.0 * s)),
+                        padding: UiRect::axes(Val::Px(4.0 * s), Val::Px(6.0 * s)),
                         border: UiRect::all(Val::Px(1.0 * s)),
                         border_radius: BorderRadius::all(Val::Px(row_radius)),
                         ..default()
@@ -2801,8 +3866,10 @@ fn system_sync_outgoing_attack_rows(
                         ..default()
                     },
                     TextColor(text_primary()),
+                    TextLayout::new_with_justify(Justify::Center),
                     Node {
                         flex_grow: 1.0,
+                        align_self: AlignSelf::Center,
                         ..default()
                     },
                 ))
@@ -2826,7 +3893,7 @@ fn system_sync_outgoing_attack_rows(
                 ))
                 .with_children(|b| {
                     b.spawn((
-                        Text::new("✕"),
+                        Text::new("X"),
                         TextFont {
                             font,
                             font_size: cancel_icon_font,
@@ -2876,10 +3943,18 @@ fn system_sync_outgoing_attack_rows(
                 .map(|p| hud_trunc_name(&p.name, 14))
                 .unwrap_or_else(|| format!("{}", fleet.target_owner))
         };
+        let fmt_num = |v: f64| -> String {
+            if v >= 10_000.0 {
+                format!("{:.1}k", v / 1000.0)
+            } else {
+                format!("{:.0}", v)
+            }
+        };
+
         let line = format!(
-            "⛵ → {} — {:.0} trp",
+            "⛵ To: {}\n{}",
             who,
-            fleet.troops.max(0.0),
+            fmt_num(fleet.troops.max(0.0)),
         );
 
         if let Some((_, text_e)) = fleet_row_map.0.get(&fleet.id).copied() {
@@ -2897,12 +3972,12 @@ fn system_sync_outgoing_attack_rows(
                     ChildOf(slot),
                     OutgoingFleetRowRoot,
                     Node {
-                        width: Val::Percent(100.0),
-                        flex_direction: FlexDirection::Row,
+                        width: Val::Px(120.0 * s),
+                        height: Val::Px(80.0 * s),
+                        flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Center,
                         justify_content: JustifyContent::SpaceBetween,
-                        column_gap: Val::Px(8.0 * s),
-                        padding: UiRect::axes(Val::Px(10.0 * s), Val::Px(6.0 * s)),
+                        padding: UiRect::axes(Val::Px(4.0 * s), Val::Px(6.0 * s)),
                         border: UiRect::all(Val::Px(1.0 * s)),
                         border_radius: BorderRadius::all(Val::Px(row_radius)),
                         ..default()
@@ -2923,8 +3998,10 @@ fn system_sync_outgoing_attack_rows(
                         ..default()
                     },
                     TextColor(text_primary()),
+                    TextLayout::new_with_justify(Justify::Center),
                     Node {
                         flex_grow: 1.0,
+                        align_self: AlignSelf::Center,
                         ..default()
                     },
                 ))
@@ -2948,7 +4025,7 @@ fn system_sync_outgoing_attack_rows(
                 ))
                 .with_children(|b| {
                     b.spawn((
-                        Text::new("✕"),
+                        Text::new("X"),
                         TextFont {
                             font,
                             font_size: cancel_icon_font,
@@ -3202,7 +4279,6 @@ fn system_sync_player_labels(
             .iter()
             .any(|(_, _, _, _, _, label, _)| label.0 == player.id);
         if !exists {
-            let color = Color::WHITE;
             let base_font = ui.config.ui.font_size;
             let tiles = player.tile_count;
             let mul = player_label_scale(
@@ -3226,7 +4302,7 @@ fn system_sync_player_labels(
                     weight: FontWeight::SEMIBOLD,
                     ..default()
                 },
-                TextColor(color),
+                TextColor(Color::BLACK),
                 TextLayout::new_with_justify(Justify::Center),
                 Transform::from_xyz(0.0, 0.0, 150.0),
             ));
@@ -3244,7 +4320,7 @@ fn system_sync_player_labels(
         mut cache,
     ) in q_labels.iter_mut()
     {
-        *text_color = TextColor(Color::WHITE);
+        *text_color = TextColor(Color::BLACK);
         let Some(player) = game.player(label.0) else { continue };
 
         let new_text = format!("{}\n[{:.0}]", player.name, player.troops);
@@ -3385,8 +4461,12 @@ fn system_cleanup_ingame_entities(
     mut outgoing_map: ResMut<OutgoingAttackRowMap>,
     mut outgoing_fleet_map: ResMut<OutgoingFleetRowMap>,
     mut fresh_tiles: ResMut<FreshlyPaintedTiles>,
+    mut build_mode: ResMut<BuildStructureMode>,
+    mut ghost_parts: ResMut<StructureGhostParts>,
+    mut build_hud: ResMut<BuildableHudState>,
     q_ingame: Query<Entity, With<InGameEntity>>,
     q_execs: Query<Entity, With<AttackExecution>>,
+    q_buildings: Query<Entity, With<Building>>,
 ) {
     ready.0 = false;
     queue.0.clear();
@@ -3395,11 +4475,17 @@ fn system_cleanup_ingame_entities(
     outgoing_map.0.clear();
     outgoing_fleet_map.0.clear();
     fresh_tiles.tiles.clear();
-    
+    build_mode.0 = None;
+    *ghost_parts = StructureGhostParts::default();
+    *build_hud = BuildableHudState::default();
+
     for e in q_ingame.iter() {
         commands.entity(e).despawn();
     }
     for e in q_execs.iter() {
+        commands.entity(e).despawn();
+    }
+    for e in q_buildings.iter() {
         commands.entity(e).despawn();
     }
     commands.remove_resource::<GameState>();
@@ -3618,5 +4704,52 @@ fn update_water_animation_time(
 ) {
     for (_, material) in materials.iter_mut() {
         material.uniforms.time.x = time.elapsed_secs();
+    }
+}
+
+/// Global scroll logic ported from Adventures-Bevy.
+/// Scrolls the scrollable ancestor of whatever the cursor is over.
+fn system_update_scroll_position(
+    mut mouse_wheel_reader: MessageReader<bevy::input::mouse::MouseWheel>,
+    hover_map: Res<bevy::picking::hover::HoverMap>,
+    parent_query: Query<&ChildOf>,
+    mut scrolled: Query<(&mut bevy::ui::ScrollPosition, &bevy::ui::ComputedNode)>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+) {
+    for event in mouse_wheel_reader.read() {
+        let (mut dx, mut dy) = match event.unit {
+            bevy::input::mouse::MouseScrollUnit::Line  => (event.x * 45., event.y * 45.),
+            bevy::input::mouse::MouseScrollUnit::Pixel => (event.x * 2., event.y * 2.),
+        };
+        if keyboard.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
+            std::mem::swap(&mut dx, &mut dy);
+        }
+
+        let mut scroll_targets = std::collections::HashSet::<Entity>::new();
+        use bevy::ecs::relationship::Relationship;
+        for pointer_map in hover_map.values() {
+            for entity in pointer_map.keys().copied() {
+                let mut current = entity;
+                loop {
+                    if scrolled.get(current).is_ok() {
+                        scroll_targets.insert(current);
+                        break;
+                    }
+                    let Some(parent) = parent_query.get(current).ok().map(|c| c.get()) else {
+                        break;
+                    };
+                    current = parent;
+                }
+            }
+        }
+
+        for entity in scroll_targets {
+            if let Ok((mut pos, node)) = scrolled.get_mut(entity) {
+                let range = (node.content_size() - node.size()).max(Vec2::ZERO)
+                    * node.inverse_scale_factor();
+                pos.x = (pos.x - dx).clamp(0., range.x);
+                pos.y = (pos.y - dy).clamp(0., range.y);
+            }
+        }
     }
 }

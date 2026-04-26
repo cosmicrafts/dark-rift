@@ -4,9 +4,13 @@ use std::collections::{BinaryHeap, HashMap};
 
 use bevy::prelude::*;
 
+use crate::building::{
+    existing_structure_positions_with_width,
+    resolve_structure_spawn_tile, structure_build_cost_gold, Building,
+};
 use crate::config;
 use crate::execution::{AttackExecution, PrioritizedTile};
-use crate::game::GameState;
+use crate::game::{BuildingKind, GameEvent, GamePhase, GameState};
 use crate::map::TerrainType;
 use crate::pathfinding::WaterPathfinderScratch;
 use crate::pseudo_random::PseudoRandom;
@@ -165,12 +169,140 @@ pub fn spawn_or_merge_attack_for_fleet_arrival(
     });
 }
 
+fn snapshot_buildings(q: &mut Query<(Entity, &mut Building)>) -> Vec<Building> {
+    q.iter().map(|(_, b)| *b).collect()
+}
+
+fn apply_build_structure_intent(
+    commands: &mut Commands,
+    game: &mut GameState,
+    q_building: &mut Query<(Entity, &mut Building)>,
+    player_id: u16,
+    kind: BuildingKind,
+    target_tile: u32,
+) {
+    if game.phase != GamePhase::Playing {
+        return;
+    }
+    let Some(player) = game.player(player_id) else {
+        return;
+    };
+    if !player.alive {
+        return;
+    }
+    let w = game.map.width;
+    let area = w.saturating_mul(game.map.height);
+    if area == 0 || target_tile >= area {
+        return;
+    }
+    let snapshot = snapshot_buildings(q_building);
+    let positions = existing_structure_positions_with_width(snapshot.iter(), w, None);
+    let Some(spawn_idx) =
+        resolve_structure_spawn_tile(&game.map, player_id, kind, target_tile, &positions)
+    else {
+        bevy::log::warn!(
+            "apply_build_structure: no valid spawn for {:?} at tile {}",
+            kind,
+            target_tile
+        );
+        return;
+    };
+    let cost = structure_build_cost_gold(kind, player_id, &snapshot);
+    let Some(player_mut) = game.player_mut(player_id) else {
+        return;
+    };
+    if player_mut.gold < cost || !cost.is_finite() {
+        return;
+    }
+    player_mut.gold = (player_mut.gold - cost).max(0.0);
+    let id = game.next_building_id;
+    game.next_building_id = game.next_building_id.wrapping_add(1).max(1);
+    let dur = kind.construction_duration_ticks();
+    let under = dur > 0;
+    let ticks = if under { dur } else { 0 };
+    commands.spawn(Building {
+        id,
+        owner_id: player_id,
+        tile_idx: spawn_idx,
+        kind,
+        level: 1,
+        under_construction: under,
+        ticks_until_complete: ticks,
+    });
+    game.events.push(GameEvent::StructureSpawned {
+        id,
+        owner_id: player_id,
+        tile_idx: spawn_idx,
+        kind,
+        level: 1,
+    });
+}
+
+fn apply_upgrade_structure_intent(
+    game: &mut GameState,
+    q_building: &mut Query<(Entity, &mut Building)>,
+    player_id: u16,
+    building_id: u64,
+) {
+    if game.phase != GamePhase::Playing {
+        return;
+    }
+    let mut order: Vec<(Entity, u64)> = q_building.iter().map(|(e, b)| (e, b.id)).collect();
+    order.sort_by_key(|&(_, id)| id);
+    let mut found: Option<(Entity, BuildingKind, u32)> = None;
+    for (e, bid) in &order {
+        if *bid != building_id {
+            continue;
+        }
+        let Ok((_, b)) = q_building.get(*e) else {
+            continue;
+        };
+        if b.owner_id != player_id {
+            bevy::log::warn!("apply_upgrade_structure: wrong owner for {}", building_id);
+            return;
+        }
+        if b.under_construction {
+            return;
+        }
+        if !b.kind.upgradable() {
+            return;
+        }
+        found = Some((*e, b.kind, b.tile_idx));
+        break;
+    }
+    let Some((entity, kind, tile_idx)) = found else {
+        bevy::log::warn!("apply_upgrade_structure: id {} not found", building_id);
+        return;
+    };
+    let snapshot = snapshot_buildings(q_building);
+    let cost = structure_build_cost_gold(kind, player_id, &snapshot);
+    let Some(player_mut) = game.player_mut(player_id) else {
+        return;
+    };
+    if player_mut.gold < cost || !cost.is_finite() {
+        return;
+    }
+    player_mut.gold = (player_mut.gold - cost).max(0.0);
+    let Ok((_, mut b)) = q_building.get_mut(entity) else {
+        return;
+    };
+    b.level = b.level.saturating_add(1);
+    let new_level = b.level;
+    game.events.push(GameEvent::StructureUpgraded {
+        id: building_id,
+        tile_idx,
+        kind,
+        level: new_level,
+    });
+}
+
 /// Apply one stamped intent: mutates `GameState`, `AttackExecution` query, and queues spawns/despawns.
 pub fn apply_stamped_intent(
     commands: &mut Commands,
     game: &mut GameState,
     q_exec: &mut Query<(Entity, &mut AttackExecution)>,
     q_fleet: &mut Query<(Entity, &mut WarpFleet)>,
+    q_building: &mut Query<(Entity, &mut Building)>,
     stamped: &StampedIntent,
     intent_index: u32,
     path_scratch: &mut WaterPathfinderScratch,
@@ -203,6 +335,7 @@ pub fn apply_stamped_intent(
             target_tile,
             troops,
         } => {
+            let buildings: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
             apply_launch_fleet_intent(
                 commands,
                 game,
@@ -213,6 +346,7 @@ pub fn apply_stamped_intent(
                 *target_owner,
                 *target_tile,
                 *troops,
+                &buildings,
             );
         }
         GameplayIntent::CancelAttack { attack_id } => {
@@ -231,6 +365,19 @@ pub fn apply_stamped_intent(
         GameplayIntent::Attack(attack) => {
             apply_attack_intent(commands, game, q_exec, stamped.player_id, attack, intent_index);
         }
+        GameplayIntent::BuildStructure { kind, target_tile } => {
+            apply_build_structure_intent(
+                commands,
+                game,
+                q_building,
+                stamped.player_id,
+                *kind,
+                *target_tile,
+            );
+        }
+        GameplayIntent::UpgradeStructure { building_id } => {
+            apply_upgrade_structure_intent(game, q_building, stamped.player_id, *building_id);
+        }
     }
 }
 
@@ -244,6 +391,7 @@ fn apply_launch_fleet_intent(
     target_owner: u16,
     target_tile: u32,
     troops: f64,
+    _buildings: &[Building],
 ) {
     let Some(player) = game.player(player_id) else {
         bevy::log::warn!("apply_launch_fleet_intent: player {} not found", player_id);
@@ -294,6 +442,7 @@ fn apply_launch_fleet_intent(
         target_tile,
         border_tiles,
         target_border,
+        true,
     ) {
         Ok(r) => r,
         Err(e) => {
@@ -485,6 +634,7 @@ pub fn system_bot_think(
     mut game: ResMut<GameState>,
     mut q_exec: Query<(Entity, &mut AttackExecution)>,
     mut q_fleet: Query<(Entity, &mut WarpFleet)>,
+    mut q_building: Query<(Entity, &mut Building)>,
     mut path_scratch: ResMut<crate::pathfinding::WaterPathfinderScratch>,
     water_components: Res<WaterComponents>,
     config_opt: Option<Res<crate::game_config::GameConfig>>,
@@ -596,10 +746,182 @@ pub fn system_bot_think(
             &mut game,
             &mut q_exec,
             &mut q_fleet,
+            &mut q_building,
             &stamped,
             bot_id as u32,
             &mut *path_scratch,
             &water_components,
         );
+    }
+}
+
+#[cfg(test)]
+mod building_intent_tests {
+    use super::*;
+    use bevy::ecs::system::SystemState;
+    use crate::building::Building;
+    use crate::game::{BuildingKind, GamePhase, GameState};
+    use crate::map::{GameMap, MapTile};
+    use crate::player::Player;
+
+    fn tiny_owned_game_state() -> GameState {
+        let mut m = GameMap::new(5, 1);
+        let owner = 1u16;
+        for x in 0..5 {
+            m.set_owner_id(x, 0, owner);
+            let ri = m.ref_id(x, 0);
+            m.terrain[ri] = MapTile::from_byte(0b1000_0000);
+        }
+        let r0 = m.ref_id(0, 0);
+        m.terrain[r0] = MapTile::from_byte(0b1100_0000);
+        let r4 = m.ref_id(4, 0);
+        m.terrain[r4] = MapTile::from_byte(0b1100_0000);
+
+        let mut game = GameState::new(99, 5, 1);
+        game.phase = GamePhase::Playing;
+        game.map = m;
+        game.players.push(Player::new_human(owner, "t".into(), [1.0, 0.0, 0.0]));
+        game.player_lookup.resize(owner as usize + 1, None);
+        game.player_lookup[owner as usize] = Some(0);
+        if let Some(p) = game.player_mut(owner) {
+            p.troops = 50_000.0;
+            p.gold = 50_000.0;
+        }
+        game
+    }
+
+    #[test]
+    fn build_structure_intent_spawns_building() {
+        let mut world = World::new();
+        world.insert_resource(tiny_owned_game_state());
+
+        let mut state = SystemState::<(
+            Commands,
+            ResMut<GameState>,
+            Query<(Entity, &mut Building)>,
+        )>::new(&mut world);
+        {
+            let (mut commands, mut game, mut q_building) = state.get_mut(&mut world);
+            apply_build_structure_intent(
+                &mut commands,
+                &mut game,
+                &mut q_building,
+                1,
+                BuildingKind::City,
+                2,
+            );
+        }
+        state.apply(&mut world);
+        world.flush();
+
+        let mut q = world.query::<&Building>();
+        let count = q.iter(&world).count();
+        assert_eq!(count, 1);
+        let b = q.iter(&world).next().unwrap();
+        assert_eq!(b.owner_id, 1);
+        assert_eq!(b.kind, BuildingKind::City);
+        assert!(b.under_construction);
+        assert!(b.id >= 1);
+
+        let game = world.resource::<GameState>();
+        let p = game.player(1).unwrap();
+        assert_eq!(p.troops, 50_000.0);
+        assert!(p.gold < 50_000.0);
+    }
+
+    fn wide_owned_line() -> GameState {
+        let w = 48u32;
+        let mut m = GameMap::new(w, 1);
+        let owner = 1u16;
+        for x in 0..w {
+            m.set_owner_id(x, 0, owner);
+            let ri = m.ref_id(x, 0);
+            m.terrain[ri] = MapTile::from_byte(0b1000_0000);
+        }
+        let r0 = m.ref_id(0, 0);
+        m.terrain[r0] = MapTile::from_byte(0b1100_0000);
+        let re = m.ref_id(w - 1, 0);
+        m.terrain[re] = MapTile::from_byte(0b1100_0000);
+
+        let mut game = GameState::new(101, w, 1);
+        game.phase = GamePhase::Playing;
+        game.map = m;
+        game.players.push(Player::new_human(owner, "w".into(), [1.0, 0.0, 0.0]));
+        game.player_lookup.resize(owner as usize + 1, None);
+        game.player_lookup[owner as usize] = Some(0);
+        if let Some(p) = game.player_mut(owner) {
+            p.troops = 50_000.0;
+            p.gold = 50_000.0;
+        }
+        game
+    }
+
+    #[test]
+    fn two_builds_get_monotonic_ids() {
+        let mut world = World::new();
+        world.insert_resource(wide_owned_line());
+
+        let mut state = SystemState::<(
+            Commands,
+            ResMut<GameState>,
+            Query<(Entity, &mut Building)>,
+        )>::new(&mut world);
+        {
+            let (mut commands, mut game, mut q_building) = state.get_mut(&mut world);
+            apply_build_structure_intent(
+                &mut commands,
+                &mut game,
+                &mut q_building,
+                1,
+                BuildingKind::City,
+                5,
+            );
+            apply_build_structure_intent(
+                &mut commands,
+                &mut game,
+                &mut q_building,
+                1,
+                BuildingKind::Factory,
+                40,
+            );
+        }
+        state.apply(&mut world);
+        world.flush();
+
+        let mut q = world.query::<&Building>();
+        let mut ids: Vec<u64> = q.iter(&world).map(|b| b.id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![1, 2]);
+    }
+
+    #[test]
+    fn upgrade_while_under_construction_is_ignored() {
+        let mut world = World::new();
+        world.insert_resource(tiny_owned_game_state());
+        world.spawn(Building {
+            id: 9,
+            owner_id: 1,
+            tile_idx: 2,
+            kind: BuildingKind::City,
+            level: 1,
+            under_construction: true,
+            ticks_until_complete: 5,
+        });
+
+        let mut state = SystemState::<(ResMut<GameState>, Query<(Entity, &mut Building)>)>::new(&mut world);
+        {
+            let (mut game, mut q_building) = state.get_mut(&mut world);
+            apply_upgrade_structure_intent(&mut game, &mut q_building, 1, 9);
+        }
+        state.apply(&mut world);
+        world.flush();
+
+        let b = world
+            .query::<&Building>()
+            .iter(&world)
+            .find(|b| b.id == 9)
+            .unwrap();
+        assert_eq!(b.level, 1);
+        assert!(b.under_construction);
     }
 }

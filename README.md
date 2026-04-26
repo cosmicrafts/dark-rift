@@ -157,6 +157,10 @@ Before blaming architecture, verify:
    must be reproducible if the bug is in sim code.
 4. `rg 'powf|HashMap::new|HashSet::new|Instant::now|thread_rng|rand::random' crates/shared`.
 
+### Economy: gold vs troops (OpenFront parity)
+- **Troops**: territory expansion, ground attacks, and fleets (`Player.troops`, `system_player_income` troop branch).
+- **Gold**: structure build/upgrade costs and passive gold income (`Player.gold`, `structure_build_cost_gold`, `GOLD_BASE_INCOME` + per ready City level in `config.rs`). Authoritative deduction happens in `apply_build_structure_intent` / `apply_upgrade_structure_intent` (`intent.rs`).
+
 ## WASM local build (Fase 1)
 
 One-time toolchain:

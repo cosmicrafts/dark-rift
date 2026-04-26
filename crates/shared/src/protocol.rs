@@ -7,6 +7,8 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::game::BuildingKind;
+
 // ─── Intents (Client → Server) ─────────────────────────────────────────────
 
 /// A player wants to attack/expand toward a tile owner.
@@ -28,6 +30,14 @@ pub enum GameplayIntent {
         troops: f64,
     },
     RecallFleet { fleet_id: u64 },
+    /// OpenFront `build_unit` for structures: `target_tile` is the clicked tile index (`y * width + x`);
+    /// simulation resolves final spawn (spacing / port shore) like `PlayerImpl.canBuild`.
+    BuildStructure {
+        kind: BuildingKind,
+        target_tile: u32,
+    },
+    /// OpenFront `upgrade_structure`: pays gold cost again and increments `level`.
+    UpgradeStructure { building_id: u64 },
 }
 
 /// Stamped intent bundled into a turn (attack or cancel).

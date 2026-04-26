@@ -24,8 +24,29 @@ echo "========================================================="
 cyan "🚀 Iniciando Despliegue a Producción (Dark Rift -> VPS)"
 echo "========================================================="
 
-# 1. Compilaciones en Paralelo
-cyan "==> 1. [PARALELO] Compilando Backend y Frontend..."
+# 1. Bump Version before compilation
+cyan "==> 1. Actualizando version.txt..."
+
+VERSION_FILE="${ROOT}/version.txt"
+if [[ ! -f "${VERSION_FILE}" ]]; then
+  echo "0.1.0" > "${VERSION_FILE}"
+fi
+
+# Leer version actual y separar
+CURRENT_VERSION=$(cat "${VERSION_FILE}")
+MAJOR_MINOR=$(echo "${CURRENT_VERSION}" | cut -d. -f1,2)
+PATCH=$(echo "${CURRENT_VERSION}" | cut -d. -f3)
+
+# Incrementar el parche
+NEW_PATCH=$((PATCH + 1))
+CLEAN_VERSION="${MAJOR_MINOR}.${NEW_PATCH}"
+
+# Guardar la nueva versión para que el compilador la lea
+echo "${CLEAN_VERSION}" > "${VERSION_FILE}"
+green "✅ Versión actualizada a ${CLEAN_VERSION}"
+
+# 2. Compilaciones en Paralelo
+cyan "==> 2. [PARALELO] Compilando Backend y Frontend..."
 
 # Lanzar compilar Cliente en background
 cargo build --release -p dark-rift-client --target wasm32-unknown-unknown &
@@ -45,23 +66,7 @@ cyan "==> 2. Empaquetando Frontend (wasm-bindgen)..."
 rm -rf dist
 mkdir -p dist
 
-# Generar version secuencial limpia (0.1.0, 0.1.1, etc.)
-VERSION_FILE="${ROOT}/version.txt"
-if [[ ! -f "${VERSION_FILE}" ]]; then
-  echo "0.1.0" > "${VERSION_FILE}"
-fi
-
-# Leer version actual y separar
-CURRENT_VERSION=$(cat "${VERSION_FILE}")
-MAJOR_MINOR=$(echo "${CURRENT_VERSION}" | cut -d. -f1,2)
-PATCH=$(echo "${CURRENT_VERSION}" | cut -d. -f3)
-
-# Incrementar el parche
-NEW_PATCH=$((PATCH + 1))
-CLEAN_VERSION="${MAJOR_MINOR}.${NEW_PATCH}"
-
-# Guardar la nueva versión para el siguiente deploy
-echo "${CLEAN_VERSION}" > "${VERSION_FILE}"
+# (La versión ya fue actualizada antes de la compilación)
 
 # Para engañar al caché del navegador seguimos ocupando un archivo de nombre único,
 # pero internamente y en la UI se muestra la versión limpia.

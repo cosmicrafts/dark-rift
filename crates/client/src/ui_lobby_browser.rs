@@ -151,6 +151,7 @@ pub struct LobbyMenuBody;
 #[derive(Component)]
 pub struct LobbyWaitingContent;
 
+/// Typography roles for animated lobby text (each variant is attached via [`LobbyMenuAnimatedText`]).
 #[derive(Clone, Copy, Debug)]
 pub enum LobbyMenuTextRole {
     TitleMain,
@@ -424,14 +425,40 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                 },
             ))
             .with_children(|panel| {
-                panel.spawn((
-                    LobbyMenuAnimHeaderRow,
-                    UiTransform::from_translation(Val2::px(0.0, INTRO_HEADER_Y_PX)),
-                    Node {
-                        display: Display::None,
-                        ..default()
-                    },
-                ));
+                panel
+                    .spawn((
+                        LobbyMenuAnimHeaderRow,
+                        UiTransform::from_translation(Val2::px(0.0, INTRO_HEADER_Y_PX)),
+                        Node {
+                            display: Display::None,
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(6.0),
+                            align_items: AlignItems::FlexStart,
+                            ..default()
+                        },
+                    ))
+                    .with_children(|hdr| {
+                        hdr.spawn((
+                            Text::new("DARK RIFT"),
+                            LobbyMenuAnimatedText(LobbyMenuTextRole::TitleMain),
+                            TextFont {
+                                font: font.clone(),
+                                font_size: 28.0,
+                                ..default()
+                            },
+                            TextColor(base_text_color(LobbyMenuTextRole::TitleMain).with_alpha(0.0)),
+                        ));
+                        hdr.spawn((
+                            Text::new("Browse lobbies or jump into a solo match."),
+                            LobbyMenuAnimatedText(LobbyMenuTextRole::BodyCopy),
+                            TextFont {
+                                font: font.clone(),
+                                font_size: 14.0,
+                                ..default()
+                            },
+                            TextColor(base_text_color(LobbyMenuTextRole::BodyCopy).with_alpha(0.0)),
+                        ));
+                    });
 
                 panel
                     .spawn((
@@ -542,15 +569,39 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
                             ))
                             .with_children(|btn| {
                                 btn.spawn((
-                                    Text::new("SINGLE PLAYER"),
-                                    LobbyMenuAnimatedText(LobbyMenuTextRole::SoloPrimary),
-                                    TextFont {
-                                        font: font.clone(),
-                                        font_size: 22.0,
+                                    Node {
+                                        flex_direction: FlexDirection::Column,
+                                        align_items: AlignItems::Center,
+                                        row_gap: Val::Px(4.0),
                                         ..default()
                                     },
-                                    TextColor(base_text_color(LobbyMenuTextRole::SoloPrimary).with_alpha(0.0)),
-                                ));
+                                ))
+                                .with_children(|col| {
+                                    col.spawn((
+                                        Text::new("SINGLE PLAYER"),
+                                        LobbyMenuAnimatedText(LobbyMenuTextRole::SoloPrimary),
+                                        TextFont {
+                                            font: font.clone(),
+                                            font_size: 22.0,
+                                            ..default()
+                                        },
+                                        TextColor(
+                                            base_text_color(LobbyMenuTextRole::SoloPrimary).with_alpha(0.0),
+                                        ),
+                                    ));
+                                    col.spawn((
+                                        Text::new("Offline skirmish vs bots"),
+                                        LobbyMenuAnimatedText(LobbyMenuTextRole::SoloSecondary),
+                                        TextFont {
+                                            font: font.clone(),
+                                            font_size: 13.0,
+                                            ..default()
+                                        },
+                                        TextColor(
+                                            base_text_color(LobbyMenuTextRole::SoloSecondary).with_alpha(0.0),
+                                        ),
+                                    ));
+                                });
                             });
 
                             spawn_stub_button(right, &font, "RANKED MATCH", ComingSoonKind::Ranked);

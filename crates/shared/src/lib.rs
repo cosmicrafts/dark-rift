@@ -2,6 +2,7 @@ pub mod map;
 pub mod pathfinding;
 pub mod faction;
 pub mod game;
+pub mod building;
 pub mod player;
 pub mod protocol;
 pub mod config;

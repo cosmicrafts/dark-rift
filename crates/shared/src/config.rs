@@ -3,6 +3,15 @@
 /// Starting troops for a new player.
 pub const STARTING_TROOPS: f64 = 100.0;
 
+/// Starting gold for a new player (structures / upgrades consume gold).
+pub const STARTING_GOLD: f64 = 500.0;
+
+/// Gold granted per simulation tick (OpenFront-style passive income; deterministic).
+pub const GOLD_BASE_INCOME: f64 = 1.5;
+
+/// Extra gold per tick per **ready** City level (sum of `Building.level` for cities not under construction).
+pub const GOLD_INCOME_PER_CITY_LEVEL: f64 = 0.25;
+
 /// Radius of the initial spawn cluster (in tiles from center).
 pub const SPAWN_RADIUS: u32 = 3;
 
@@ -24,6 +33,23 @@ pub const TROOP_PER_TILE: f64 = 0.05;
 /// How max troops scale with territory: max_troops = BASE + TILES^0.6 * SCALE.
 pub const MAX_TROOPS_BASE: f64 = 100.0;
 pub const MAX_TROOPS_SCALE: f64 = 50.0;
+
+/// Extra max troops per total **ready** City level (sum of `Building.level`).
+pub const CITY_MAX_TROOPS_PER_LEVEL: f64 = 2_000.0;
+
+/// Factory income multiplier: `1.0 + min(factory_levels * STEP, CAP - 1.0)`.
+pub const FACTORY_INCOME_BONUS_PER_LEVEL: f64 = 0.10;
+pub const FACTORY_INCOME_BONUS_CAP: f64 = 1.50;
+
+/// Manhattan range from a tile for [`crate::building::defense_post_priority_bonus`].
+pub const DEFENSE_POST_RANGE: i32 = 8;
+
+/// Extra attack frontier priority per combined DefensePost level near the defender tile
+/// (higher `PrioritizedTile::priority` ⇒ later conquest).
+pub const DEFENSE_POST_PRIORITY_PER_LEVEL: i64 = 4;
+
+/// SAM coverage radius in tiles (ghost preview; missile combat not implemented yet).
+pub const SAM_RANGE_TILES: i32 = 12;
 
 /// Percentage of tiles needed to win.
 pub const WIN_PERCENTAGE: f64 = 75.0;

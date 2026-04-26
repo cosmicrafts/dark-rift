@@ -155,6 +155,7 @@ fn resolve_fleet_route_ok_same_water_component() {
         4,
         &[0u32],
         Some(&[2u32, 4u32]),
+        true,
     )
     .expect("route");
     assert_eq!(route.landing_tile, 2);
@@ -187,6 +188,7 @@ fn resolve_fleet_route_err_no_landing_wrong_component() {
         4,
         &[0u32],
         Some(&[4u32]),
+        true,
     )
     .unwrap_err();
     assert_eq!(err, FleetLaunchError::NoLandingShore);
@@ -218,10 +220,41 @@ fn resolve_fleet_route_ok_neutral_shore() {
         3,
         &[0u32],
         None,
+        true,
     )
     .expect("neutral route");
     assert_eq!(route.landing_tile, 2);
     assert_eq!(route.src_tile, 0);
+}
+
+#[test]
+fn resolve_fleet_route_err_no_port() {
+    let mut m = GameMap::new(5, 1);
+    let land_shore = MapTile::from_byte(0b1100_0000);
+    let water = MapTile::from_byte(0);
+    m.terrain[0] = land_shore;
+    m.terrain[1] = water;
+    m.terrain[2] = land_shore;
+    m.terrain[3] = water;
+    m.terrain[4] = land_shore;
+    m.state[0] = 1;
+    m.state[2] = 2;
+    m.state[4] = 2;
+    let wc = WaterComponents::compute(&m);
+    let mut scratch = WaterPathfinderScratch::default();
+    let err = resolve_fleet_route(
+        &m,
+        &wc,
+        &mut scratch,
+        1,
+        2,
+        4,
+        &[0u32],
+        Some(&[2u32, 4u32]),
+        false,
+    )
+    .unwrap_err();
+    assert_eq!(err, FleetLaunchError::NoPort);
 }
 
 #[test]

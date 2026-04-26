@@ -7,6 +7,12 @@ use crate::InGameEntity;
 #[derive(Component)]
 pub struct LeaderboardRoot;
 
+#[derive(Component)]
+pub struct LeaderboardToggleButton;
+
+#[derive(Component)]
+pub struct LeaderboardContent;
+
 #[derive(Component)] pub struct LbCellRank(pub usize);
 #[derive(Component)] pub struct LbCellName(pub usize);
 #[derive(Component)] pub struct LbCellOwned(pub usize);
@@ -26,6 +32,7 @@ pub fn format_short(v: f64) -> String {
 pub fn setup_leaderboard(
     mut commands: Commands,
     settings: Res<ClientSettings>,
+    asset_server: Res<AssetServer>,
     cli: Res<Cli>,
 ) {
     if cli.bot { return; }
@@ -41,18 +48,51 @@ pub fn setup_leaderboard(
                 top: Val::Px(SPACE_3),
                 left: Val::Px(SPACE_3),
                 flex_direction: FlexDirection::Column,
-                padding: UiRect::all(Val::Px(SPACE_3)),
+                align_items: AlignItems::FlexStart,
                 row_gap: Val::Px(10.0),
-                border_radius: BorderRadius::all(Val::Px(PANEL_RADIUS)),
-                width: Val::Px(420.0),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.08, 0.11, 0.16, 0.95)),
         ))
-        .insert(BorderColor::all(panel_border()))
         .insert(GlobalZIndex(850))
-        .with_children(|parent| {
-            // Header Row
+        .with_children(|root| {
+            // TOGGLE BUTTON (Siempre visible)
+            root.spawn((
+                Button,
+                LeaderboardToggleButton,
+                Node {
+                    width: Val::Px(48.0),
+                    height: Val::Px(48.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border: UiRect::all(Val::Px(2.0)),
+                    border_radius: BorderRadius::all(Val::Px(BUTTON_RADIUS)),
+                    ..default()
+                },
+                BackgroundColor(panel_bg()),
+                BorderColor::all(panel_border()),
+            )).with_children(|b| {
+                b.spawn((
+                    ImageNode::new(asset_server.load("icons/leaderboard.png")),
+                    Node { width: Val::Px(24.0), height: Val::Px(24.0), ..default() }
+                ));
+            });
+
+            // PANEL CONTENIDO
+            root.spawn((
+                LeaderboardContent,
+                Node {
+                    display: Display::None, // Oculto por defecto
+                    flex_direction: FlexDirection::Column,
+                    padding: UiRect::all(Val::Px(SPACE_3)),
+                    row_gap: Val::Px(10.0),
+                    border_radius: BorderRadius::all(Val::Px(PANEL_RADIUS)),
+                    width: Val::Px(420.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.08, 0.11, 0.16, 0.95)),
+                BorderColor::all(panel_border()),
+            )).with_children(|parent| {
+                // Header Row
             parent.spawn(Node {
                 flex_direction: FlexDirection::Row,
                 width: Val::Percent(100.0),
@@ -70,25 +110,37 @@ pub fn setup_leaderboard(
                 row.spawn((Text::new("Max troops"), TextFont { font: font.clone(), font_size: fs, ..default() }, TextColor(c), Node { width: Val::Px(80.0), ..default() }));
             });
 
-            // 5 Rows
-            for i in 0..5 {
-                parent.spawn(Node {
-                    flex_direction: FlexDirection::Row,
+            parent.spawn((
+                Node {
+                    flex_direction: FlexDirection::Column,
                     width: Val::Percent(100.0),
-                    border: UiRect::bottom(Val::Px(1.0)),
-                    padding: UiRect::bottom(Val::Px(4.0)),
+                    max_height: Val::Px(240.0),
+                    overflow: Overflow::scroll_y(),
                     ..default()
-                }).insert(BorderColor::all(Color::srgba(0.3, 0.4, 0.5, 0.2)))
-                .with_children(|row| {
-                    let fs = 15.0;
-                    let c = Color::WHITE;
-                    row.spawn((LbCellRank(i), Text::new(""), TextFont { font: font.clone(), font_size: fs, ..default() }, TextColor(c), Node { width: Val::Px(30.0), ..default() }));
-                    row.spawn((LbCellName(i), Text::new(""), TextFont { font: font.clone(), font_size: fs, ..default() }, TextColor(c), Node { width: Val::Px(140.0), ..default() }));
-                    row.spawn((LbCellOwned(i), Text::new(""), TextFont { font: font.clone(), font_size: fs, ..default() }, TextColor(c), Node { width: Val::Px(70.0), ..default() }));
-                    row.spawn((LbCellGold(i), Text::new(""), TextFont { font: font.clone(), font_size: fs, ..default() }, TextColor(c), Node { width: Val::Px(60.0), ..default() }));
-                    row.spawn((LbCellMax(i), Text::new(""), TextFont { font: font.clone(), font_size: fs, ..default() }, TextColor(c), Node { width: Val::Px(80.0), ..default() }));
-                });
-            }
+                },
+                bevy::ui::ScrollPosition::default(),
+            )).with_children(|scroll| {
+                // 15 Rows
+                for i in 0..15 {
+                    scroll.spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        width: Val::Percent(100.0),
+                        border: UiRect::bottom(Val::Px(1.0)),
+                        padding: UiRect::bottom(Val::Px(4.0)),
+                        ..default()
+                    }).insert(BorderColor::all(Color::srgba(0.3, 0.4, 0.5, 0.2)))
+                    .with_children(|row| {
+                        let fs = 15.0;
+                        let c = Color::WHITE;
+                        row.spawn((LbCellRank(i), Text::new(""), TextFont { font: font.clone(), font_size: fs, ..default() }, TextColor(c), Node { width: Val::Px(30.0), ..default() }));
+                        row.spawn((LbCellName(i), Text::new(""), TextFont { font: font.clone(), font_size: fs, ..default() }, TextColor(c), Node { width: Val::Px(140.0), ..default() }));
+                        row.spawn((LbCellOwned(i), Text::new(""), TextFont { font: font.clone(), font_size: fs, ..default() }, TextColor(c), Node { width: Val::Px(70.0), ..default() }));
+                        row.spawn((LbCellGold(i), Text::new(""), TextFont { font: font.clone(), font_size: fs, ..default() }, TextColor(c), Node { width: Val::Px(60.0), ..default() }));
+                        row.spawn((LbCellMax(i), Text::new(""), TextFont { font: font.clone(), font_size: fs, ..default() }, TextColor(c), Node { width: Val::Px(80.0), ..default() }));
+                    });
+                }
+            });
+            });
         });
 }
 
@@ -148,7 +200,23 @@ pub fn system_update_leaderboard(
         if let Some((_, mut text)) = q_max.iter_mut().find(|(c, _)| c.0 == idx) { text.0 = max_str; }
     };
 
-    for i in 0..5 {
+    for i in 0..15 {
         update_cell(i, sorted_players.get(i));
+    }
+}
+
+pub fn system_handle_leaderboard_toggle(
+    mut q_interaction: Query<&Interaction, (Changed<Interaction>, With<LeaderboardToggleButton>)>,
+    mut q_content: Query<&mut Node, With<LeaderboardContent>>,
+) {
+    for interaction in q_interaction.iter_mut() {
+        if *interaction == Interaction::Pressed {
+            for mut node in q_content.iter_mut() {
+                node.display = match node.display {
+                    Display::None => Display::Flex,
+                    _ => Display::None,
+                };
+            }
+        }
     }
 }

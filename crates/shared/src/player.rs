@@ -16,6 +16,10 @@ pub enum PlayerType {
     Bot,
 }
 
+fn default_player_gold() -> f64 {
+    crate::config::STARTING_GOLD
+}
+
 /// Represents a player (human or AI) in the game.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Player {
@@ -25,10 +29,13 @@ pub struct Player {
     pub name: String,
     /// Player type.
     pub player_type: PlayerType,
-    /// Current troop count (the single resource). Used to expand/attack.
+    /// Current troop count. Used to expand/attack and launch fleets.
     pub troops: f64,
     /// Maximum troops this player can hold (grows with territory).
     pub max_troops: f64,
+    /// Gold for structures and upgrades (attacks/expansion still use troops).
+    #[serde(default = "default_player_gold")]
+    pub gold: f64,
     /// RGB color for this player's territory.
     pub color: [f32; 3],
     /// Whether the player is still in the game.
@@ -54,6 +61,7 @@ impl Player {
             player_type: PlayerType::Human,
             troops: crate::config::STARTING_TROOPS,
             max_troops: crate::config::MAX_TROOPS_BASE,
+            gold: crate::config::STARTING_GOLD,
             color,
             alive: true,
             has_spawned: false,
@@ -72,6 +80,7 @@ impl Player {
             player_type: PlayerType::Bot,
             troops: crate::config::STARTING_TROOPS,
             max_troops: crate::config::MAX_TROOPS_BASE,
+            gold: crate::config::STARTING_GOLD,
             color,
             alive: true,
             has_spawned: false,

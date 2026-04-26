@@ -40,6 +40,8 @@ pub enum FleetLaunchError {
     NoLaunchShore { component: u32 },
     /// Water A* found no path between `src_tile` and `landing_tile`.
     NoWaterPath,
+    /// No **ready** Port — OpenFront requires a port before transport launches.
+    NoPort,
 }
 
 impl fmt::Display for FleetLaunchError {
@@ -58,6 +60,7 @@ impl fmt::Display for FleetLaunchError {
                 write!(f, "no launch shore on water component {component}")
             }
             FleetLaunchError::NoWaterPath => write!(f, "no water path to landing"),
+            FleetLaunchError::NoPort => write!(f, "fleet requires a completed port"),
         }
     }
 }
@@ -76,6 +79,7 @@ pub fn resolve_fleet_route(
     target_tile: u32,
     border_tiles: &[u32],
     target_border: Option<&[u32]>,
+    has_completed_port: bool,
 ) -> Result<FleetRoute, FleetLaunchError> {
     let map_area = map.width.saturating_mul(map.height);
     if map_area == 0 || target_tile >= map_area {
@@ -83,6 +87,9 @@ pub fn resolve_fleet_route(
     }
     if target_owner == player_id {
         return Err(FleetLaunchError::SelfTarget);
+    }
+    if !has_completed_port {
+        return Err(FleetLaunchError::NoPort);
     }
 
     let my_comps = player_water_components(map, water_components, player_id, border_tiles);

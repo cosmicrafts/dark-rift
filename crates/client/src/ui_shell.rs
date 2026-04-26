@@ -10,6 +10,16 @@ pub enum UiBreakpoint {
     Wide,
 }
 
+/// HUD scale used for the bottom-right build grid + HOME dock (matches `combat_hud_scale` at game start).
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct CombatDockUiScale(pub f32);
+
+impl Default for CombatDockUiScale {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct UiShellState {
     pub breakpoint: UiBreakpoint,
@@ -140,6 +150,7 @@ pub fn system_update_ui_shell_state(
 
 pub fn system_apply_ui_shell_layout(
     state: Res<UiShellState>,
+    dock_scale: Res<CombatDockUiScale>,
     mut regions: ParamSet<(
         Query<&mut Node, With<HudTopBarRegion>>,
         Query<&mut Node, With<HudBottomSheetRegion>>,
@@ -163,10 +174,10 @@ pub fn system_apply_ui_shell_layout(
         let mut bottom_q = regions.p1();
         let Ok(mut bottom) = bottom_q.single_mut() else { return };
         // Same bottom inset as the action dock so combat HUD sits flush with HOME vertically.
-        // Reserve the bottom-right corner so the centered column does not sit under the HOME button.
-        let home_reserve = home_button_width_for_breakpoint(state.breakpoint) + SPACE_2;
+        // Reserve the bottom-right corner so the centered column does not sit under the build grid + HOME.
+        let dock_reserve = action_dock_content_reserve_width(state.breakpoint, dock_scale.0);
         bottom.left = Val::Px(state.inset_left);
-        bottom.right = Val::Px(state.inset_right + home_reserve);
+        bottom.right = Val::Px(state.inset_right + dock_reserve);
         bottom.bottom = Val::Px(state.inset_bottom);
         bottom.flex_direction = FlexDirection::Column;
         bottom.justify_content = JustifyContent::FlexEnd;
@@ -178,7 +189,32 @@ pub fn system_apply_ui_shell_layout(
         let Ok(mut dock) = dock_q.single_mut() else { return };
         dock.right = Val::Px(state.inset_right);
         dock.bottom = Val::Px(state.inset_bottom);
+        dock.flex_direction = FlexDirection::Row;
+        dock.justify_content = JustifyContent::FlexEnd;
+        dock.align_items = AlignItems::FlexEnd;
+        dock.column_gap = Val::Px(SPACE_2);
     }
+}
+
+/// `(cell_side, gap, inner_padding)` in px for the 3×2 build command grid (matches `spawn_action_dock` in client).
+#[inline]
+pub fn action_dock_grid_layout_sizes(dock_s: f32) -> (f32, f32, f32) {
+    let s = dock_s.clamp(0.35, 3.0);
+    (52.0 * s, 4.0 * s, 8.0 * s)
+}
+
+/// Outer width of the bordered build grid panel (3 columns × 2 rows).
+#[inline]
+pub fn action_dock_grid_outer_width_px(dock_s: f32) -> f32 {
+    let (cell, gap, pad) = action_dock_grid_layout_sizes(dock_s);
+    let frame = 2.0 * dock_s.clamp(0.35, 3.0);
+    pad.mul_add(2.0, 3.0_f32.mul_add(cell, 2.0 * gap)) + frame * 2.0
+}
+
+/// Total width to reserve on the bottom sheet so content clears the action dock (grid + gap + HOME).
+#[inline]
+pub fn action_dock_content_reserve_width(bp: UiBreakpoint, dock_s: f32) -> f32 {
+    action_dock_grid_outer_width_px(dock_s) + SPACE_2 + home_button_width_for_breakpoint(bp) + 8.0
 }
 
 /// HOME hit box width (matches `system_apply_responsive_hud_layout` in `main.rs`).
