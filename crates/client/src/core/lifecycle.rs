@@ -192,6 +192,7 @@ pub fn system_cleanup_ingame_entities(
     q_ingame: Query<Entity, With<InGameEntity>>,
     q_execs: Query<Entity, With<AttackExecution>>,
     q_buildings: Query<Entity, With<Building>>,
+    q_fleets: Query<Entity, With<dark_rift_shared::warp_fleet::WarpFleet>>,
 ) {
     ready.0 = false;
     queue.0.clear();
@@ -212,6 +213,9 @@ pub fn system_cleanup_ingame_entities(
     }
     for e in q_buildings.iter() {
         commands.entity(e).despawn();
+    }
+    for e in q_fleets.iter() {
+        commands.entity(e).despawn_recursive();
     }
     commands.remove_resource::<GameState>();
     commands.remove_resource::<SinglePlayerState>();
