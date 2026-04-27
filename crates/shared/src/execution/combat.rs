@@ -7,6 +7,7 @@ use crate::pathfinding::WaterPathfinderScratch;
 use crate::warp_fleet::{best_shore_spawn_for_transport, WarpFleet};
 use crate::water_components::WaterComponents;
 use crate::intent::spawn_or_merge_attack_for_fleet_arrival;
+use crate::rng::NextIntExt;
 use super::{fractional_extra_tiles_milli, refund_fleet_troops_to_player, AttackExecution, PrioritizedTile, RETREAT_PENALTY_VS_PLAYER};
 
 // System analogous to AttackExecution.tick() in OpenFront

@@ -215,7 +215,7 @@ pub fn system_cleanup_ingame_entities(
         commands.entity(e).despawn();
     }
     for e in q_fleets.iter() {
-        commands.entity(e).despawn_recursive();
+        commands.entity(e).despawn();
     }
     commands.remove_resource::<GameState>();
     commands.remove_resource::<SinglePlayerState>();

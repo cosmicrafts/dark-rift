@@ -3,7 +3,7 @@ use crate::game::GameState;
 use crate::protocol::*;
 use crate::building::{Building, existing_structure_positions_with_width, structure_kind_enabled, structure_build_cost_gold, resolve_structure_spawn_tile};
 use crate::execution::AttackExecution;
-use crate::pseudo_random::PseudoRandom;
+use crate::rng::NextIntExt;
 use crate::config;
 use crate::water_components::WaterComponents;
 use crate::intent::apply_stamped_intent;
@@ -58,7 +58,6 @@ pub fn system_bot_think(
 
     let config = config_opt.map(|c| c.clone()).unwrap_or_default();
     let tick = game.tick;
-    let seed = game.seed;
     let (attack_interval_base, trigger_ratio, reserve_ratio, expand_ratio, random_attack_div) =
         match config.bot_difficulty {
             crate::game_config::BotDifficulty::BrainDead => (500, 0.9, 0.8, 0.12, 8),
@@ -67,16 +66,15 @@ pub fn system_bot_think(
         };
 
     let mut schedule: Vec<(u16, u64, u64)> = Vec::new();
-    for p in game.players.iter() {
+    for p in game.players.iter_mut() {
         if p.is_human() || !p.alive {
             continue;
         }
         let bot_id = p.id;
-        let mut bot_rng = PseudoRandom::new(seed.wrapping_add(bot_id as u64).wrapping_add(1337));
-        let interval = bot_rng
+        let interval = p.bot_rng
             .next_int(attack_interval_base as i32, (attack_interval_base as i32 * 2).max(1))
             .max(1) as u64;
-        let offset = bot_rng.next_int(0, interval as i32) as u64;
+        let offset = p.bot_rng.next_int(0, interval as i32) as u64;
         schedule.push((bot_id, interval, offset));
     }
     schedule.sort_unstable_by_key(|(bot_id, _, _)| *bot_id);
@@ -96,11 +94,6 @@ pub fn system_bot_think(
         let two_thirds = (offset + (interval * 2) / 3) % interval;
         let do_attack = phase == offset;
         let do_structures = do_attack || phase == one_third || phase == two_thirds;
-        let mut bot_rng = PseudoRandom::new(
-            seed
-                .wrapping_add(tick.rotate_left(11))
-                .wrapping_add((bot_id as u64).wrapping_mul(0x9E37_79B9)),
-        );
 
         if do_structures {
             let Some(player) = game.player(bot_id) else {
@@ -171,10 +164,12 @@ pub fn system_bot_think(
         if !do_attack {
             continue;
         }
-        let Some(player) = game.player(bot_id) else {
-            continue;
+        let (troops, max_troops, border_tiles) = {
+            let Some(player) = game.player(bot_id) else {
+                continue;
+            };
+            (player.troops, player.max_troops, player.border_coords(game.map.width))
         };
-        let border_tiles = player.border_coords(game.map.width);
         if border_tiles.is_empty() {
             continue;
         }
@@ -199,18 +194,19 @@ pub fn system_bot_think(
         } else if player_targets.is_empty() {
             continue;
         } else {
-            let t = if bot_rng.next_int(0, random_attack_div) == 0 {
-                player_targets[bot_rng.next_int(0, player_targets.len() as i32) as usize]
+            let p_mut = game.player_mut(bot_id).unwrap();
+            let t = if p_mut.bot_rng.next_int(0, random_attack_div) == 0 {
+                player_targets[p_mut.bot_rng.next_int(0, player_targets.len() as i32) as usize]
             } else {
                 player_targets[0]
             };
             (t, false)
         };
-        if !is_neutral && player.troops < player.max_troops * trigger_ratio {
+        if !is_neutral && troops < max_troops * trigger_ratio {
             continue;
         }
-        let reserve = player.max_troops * if is_neutral { expand_ratio } else { reserve_ratio };
-        let p_send = (player.troops - reserve).max(0.0);
+        let reserve = max_troops * if is_neutral { expand_ratio } else { reserve_ratio };
+        let p_send = (troops - reserve).max(0.0);
         if p_send < config::EXPAND_COST {
             continue;
         }

@@ -1560,10 +1560,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_prng"
+version = "0.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c7f82969910be95e576a6a5c851d476302890a23274619d918b01c407ce4e94"
+dependencies = [
+ "bevy_ecs",
+ "bevy_reflect",
+ "chacha20 0.10.0",
+ "getrandom 0.4.2",
+ "rand_core 0.10.1",
+ "rand_core 0.9.5",
+ "rand_pcg",
+ "rand_xoshiro 0.8.0",
+ "serde",
+ "wyrand",
+]
+
+[[package]]
 name = "bevy_ptr"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7a9329e8dc4e01ced480eeec4902e6d7cb56e56ec37f6fbc4323e5c937290a7"
+
+[[package]]
+name = "bevy_rand"
+version = "0.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "526ba09324b96fb64f275a0cb4f6112d36b6c916ce2f14e38d5a8739dd2ac7f9"
+dependencies = [
+ "bevy_app",
+ "bevy_ecs",
+ "bevy_prng",
+ "bevy_reflect",
+ "getrandom 0.4.2",
+ "rand_core 0.10.1",
+ "rand_core 0.9.5",
+]
 
 [[package]]
 name = "bevy_reflect"
@@ -2303,13 +2336,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "chacha20"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f8d983286843e49675a4b7a2d174efe136dc93a18d69130dd18198a6c167601"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.0",
+ "rand_core 0.10.1",
+]
+
+[[package]]
 name = "chacha20poly1305"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10cd79432192d1c0f4e1a0fef9527696cc039165d729fb41b3f4f4f354c2dc35"
 dependencies = [
  "aead",
- "chacha20",
+ "chacha20 0.9.1",
  "cipher",
  "poly1305",
  "zeroize",
@@ -2749,6 +2793,7 @@ dependencies = [
  "crossbeam-channel",
  "dark-rift-shared",
  "getrandom 0.2.17",
+ "getrandom 0.4.2",
  "gloo-net",
  "instant",
  "js-sys",
@@ -2780,11 +2825,15 @@ name = "dark-rift-shared"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_prng",
+ "bevy_rand",
  "bincode 1.3.3",
  "bitfield",
  "getrandom 0.2.17",
+ "getrandom 0.4.2",
  "lightyear",
  "rand 0.8.6",
+ "rand_core 0.10.1",
  "serde",
  "serde_json",
 ]
@@ -3431,10 +3480,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0de51e6874e94e7bf76d726fc5d13ba782deca734ff60d5bb2fb2607c7406555"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi 6.0.0",
+ "rand_core 0.10.1",
  "wasip2",
  "wasip3",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -5070,7 +5122,7 @@ dependencies = [
  "quanta",
  "radix_trie",
  "rand 0.9.4",
- "rand_xoshiro",
+ "rand_xoshiro 0.7.0",
  "sketches-ddsketch",
 ]
 
@@ -6172,6 +6224,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand_core"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
+
+[[package]]
 name = "rand_distr"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6182,12 +6240,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand_pcg"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "caa0f4137e1c0a72f4c651489402276c8e8e1cf081f3b0ba156d2cbeef09e86a"
+dependencies = [
+ "rand_core 0.10.1",
+ "serde",
+]
+
+[[package]]
 name = "rand_xoshiro"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f703f4665700daf5512dcca5f43afa6af89f09db47fb56be587f80636bda2d41"
 dependencies = [
  "rand_core 0.9.5",
+]
+
+[[package]]
+name = "rand_xoshiro"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f0b2cc7bfeef8f0320ca45f88b00157a03c67137022d59393614352d6bf4312"
+dependencies = [
+ "rand_core 0.10.1",
+ "serde",
 ]
 
 [[package]]
@@ -8701,6 +8779,16 @@ dependencies = [
  "octets",
  "thiserror 2.0.18",
  "url",
+]
+
+[[package]]
+name = "wyrand"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5484c3d24f0e2e117d30bce6f8792e193be33e2b6e0b3f8945ccf265c56c6da"
+dependencies = [
+ "rand_core 0.10.1",
+ "serde",
 ]
 
 [[package]]

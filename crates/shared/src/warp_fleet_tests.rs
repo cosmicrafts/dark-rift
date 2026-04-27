@@ -8,7 +8,8 @@ use crate::map::{GameMap, MapTile};
 use crate::pathfinding::WaterAStar;
 use crate::intent::build_attack_frontier;
 use crate::player::Player;
-use crate::pseudo_random::PseudoRandom;
+use bevy_prng::WyRand;
+use rand_core::SeedableRng;
 use std::collections::VecDeque;
 
 use crate::pathfinding::WaterPathfinderScratch;
@@ -73,7 +74,7 @@ fn setup_wide_river_game() -> GameState {
 fn frontier_nonempty_after_manual_landing_tile() {
     let mut game = setup_wide_river_game();
     game.set_tile_owner(14, 0, 1);
-    let mut rng = PseudoRandom::new(1);
+    let mut rng = WyRand::seed_from_u64(1);
     let mut seq = 0u32;
     let border = game.player(1).unwrap().border_coords(game.map.width);
     assert!(border.contains(&(14, 0)));

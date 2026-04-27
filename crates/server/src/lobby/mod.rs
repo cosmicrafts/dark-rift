@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 use dark_rift_shared::config;
 use dark_rift_shared::protocol::*;
+use dark_rift_shared::rng::SeedableRng;
 use crate::core::*;
 
 /// Implements OpenFront's "Always Active" Lobby Pattern
@@ -91,7 +92,8 @@ pub fn system_master_lobby(
                             let player_id = (roster.0.len() + 1) as u16;
                             let color = dark_rift_shared::player::bot_territory_color(meta.seed, player_id);
                             
-                            let mut rng = dark_rift_shared::pseudo_random::PseudoRandom::new(meta.seed.wrapping_add(player_id as u64));
+                            let mut rng = dark_rift_shared::rng::WyRand::seed_from_u64(meta.seed.wrapping_add(player_id as u64));
+                            use dark_rift_shared::rng::NextIntExt;
                             let p_idx = rng.next_int(0, prefixes.len() as i32) as usize;
                             let s_idx = rng.next_int(0, suffixes.len() as i32) as usize;
                             let mut bot_name = format!("👤 {} {}", prefixes[p_idx], suffixes[s_idx]);
@@ -302,7 +304,8 @@ pub fn pick_spawn(roster: &MatchRoster, player_id: u16, metadata: &MatchMetadata
 
     // 2. Fallback: Search the map for a valid land tile using a deterministic spiral/hash
     if let Some(map) = &metadata.map_cache {
-        let mut rng = dark_rift_shared::pseudo_random::PseudoRandom::new(metadata.seed + player_id as u64);
+        let mut rng = dark_rift_shared::rng::WyRand::seed_from_u64(metadata.seed + player_id as u64);
+        use dark_rift_shared::rng::NextIntExt;
         for _ in 0..1000 { // Attempt 1000 random probes
             let sx = rng.next_int(margin as i32, w.saturating_sub(margin) as i32) as u32;
             let sy = rng.next_int(margin as i32, h.saturating_sub(margin) as i32) as u32;

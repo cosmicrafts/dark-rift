@@ -6,7 +6,7 @@ pub mod building;
 pub mod player;
 pub mod protocol;
 pub mod config;
-pub mod pseudo_random;
+pub mod rng;
 pub mod execution;
 pub mod intent;
 pub mod warp_fleet;

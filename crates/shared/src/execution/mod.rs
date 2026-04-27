@@ -3,7 +3,8 @@ use std::collections::BinaryHeap;
 use bevy::prelude::*;
 use crate::game::GameState;
 use crate::map::TerrainType;
-use crate::pseudo_random::PseudoRandom;
+use bevy_prng::WyRand;
+use crate::rng::NextIntExt;
 
 pub mod income;
 pub mod combat;
@@ -65,7 +66,7 @@ pub struct AttackExecution {
     pub initial_troops: f64,
     pub to_conquer: BinaryHeap<PrioritizedTile>,
     pub insert_seq_counter: u32,
-    pub rng: PseudoRandom,
+    pub rng: WyRand,
     /// Player cancelled via HUD; next tick refunds remaining troops (with penalty vs players).
     pub retreating: bool,
 }

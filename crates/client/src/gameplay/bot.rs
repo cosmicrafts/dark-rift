@@ -5,7 +5,7 @@ use dark_rift_shared::protocol::{ClientGameplayMessage, GameplayIntent, AttackIn
 use lightyear::prelude::MessageSender;
 use dark_rift_shared::protocol::ReliableChannel;
 use crate::MyPlayerId;
-use dark_rift_shared::pseudo_random::PseudoRandom;
+use dark_rift_shared::rng::{WyRand, NextIntExt, SeedableRng};
 
 #[derive(Resource)]
 pub struct HeadlessBotState {
@@ -60,7 +60,7 @@ pub fn system_headless_bot_engine(
         });
     }
 
-    let mut bot_rng = PseudoRandom::new(game.seed.wrapping_add(game.tick as u64).wrapping_add(1999));
+    let mut bot_rng = WyRand::seed_from_u64(game.seed.wrapping_add(game.tick as u64).wrapping_add(1999));
 
     let (target_owner, is_neutral) = if has_neutral {
         (0, true)

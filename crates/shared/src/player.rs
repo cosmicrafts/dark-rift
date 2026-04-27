@@ -2,7 +2,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::pseudo_random::PseudoRandom;
+use bevy_prng::WyRand;
+use rand_core::SeedableRng;
+use crate::rng::NextIntExt;
 
 /// Unique player identifier.
 pub type PlayerId = u16;
@@ -50,6 +52,8 @@ pub struct Player {
     pub tile_count: u32,
     /// Deterministic, strictly sorted cache of linear indices of border tiles.
     pub border_tiles: Vec<u32>,
+    /// RNG stream for bot logic. Persists across ticks and serializes natively.
+    pub bot_rng: WyRand,
 }
 
 impl Player {
@@ -69,6 +73,7 @@ impl Player {
             sum_y: 0,
             tile_count: 0,
             border_tiles: Vec::with_capacity(512),
+            bot_rng: WyRand::seed_from_u64(id as u64),
         }
     }
 
@@ -88,6 +93,7 @@ impl Player {
             sum_y: 0,
             tile_count: 0,
             border_tiles: Vec::with_capacity(512),
+            bot_rng: WyRand::seed_from_u64(id as u64),
         }
     }
 
@@ -143,7 +149,7 @@ pub fn bot_territory_color(game_seed: u64, bot_id: u16) -> [f32; 3] {
         .wrapping_mul(0x9E37_79B9_7F4A_7C15)
         ^ (bot_id as u64).wrapping_shl(32)
         ^ (bot_id as u64);
-    let mut rng = PseudoRandom::new(mix);
+    let mut rng = WyRand::seed_from_u64(mix);
     let h = rng.next_int(0, 10_000) as f32 / 10_000.0;
     let s = 0.28 + rng.next_int(0, 1000) as f32 / 1000.0 * 0.18;
     let v = 0.52 + rng.next_int(0, 1000) as f32 / 1000.0 * 0.18;

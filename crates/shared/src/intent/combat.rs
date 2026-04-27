@@ -3,7 +3,9 @@ use std::collections::BinaryHeap;
 use crate::game::GameState;
 use crate::protocol::*;
 use crate::execution::{AttackExecution, PrioritizedTile};
-use crate::pseudo_random::PseudoRandom;
+use bevy_prng::WyRand;
+use rand_core::SeedableRng;
+use crate::rng::NextIntExt;
 use crate::map::TerrainType;
 use crate::config;
 pub fn merge_frontiers(
@@ -32,7 +34,7 @@ pub fn build_attack_frontier(
     player_id: u16,
     target_owner: u16,
     border_tiles: &[(u32, u32)],
-    rng: &mut PseudoRandom,
+    rng: &mut WyRand,
     insert_seq_counter: &mut u32,
 ) -> BinaryHeap<PrioritizedTile> {
     let mut to_conquer = BinaryHeap::new();
@@ -96,7 +98,7 @@ pub fn spawn_or_merge_attack_for_fleet_arrival(
         .wrapping_add(game.tick)
         .wrapping_add(fleet_id)
         .wrapping_add(0xB04F_0000);
-    let mut rng = PseudoRandom::new(exec_seed);
+    let mut rng = WyRand::seed_from_u64(exec_seed);
     let mut initial_seq = 0u32;
     let Some(player) = game.player(owner_id) else {
         return;
@@ -235,7 +237,7 @@ pub fn apply_attack_intent(
         return;
     }
 
-    let mut rng = PseudoRandom::new(
+    let mut rng = WyRand::seed_from_u64(
         game
             .seed
             .wrapping_add(game.tick)
