@@ -3,6 +3,26 @@ use dark_rift_shared::game::GameState;
 use dark_rift_shared::protocol::*;
 
 use crate::*;
+use std::collections::VecDeque;
+
+#[derive(Resource)]
+pub struct DesyncTracker {
+    pub log: VecDeque<TurnLogEntry>,
+}
+
+impl Default for DesyncTracker {
+    fn default() -> Self {
+        Self {
+            log: VecDeque::with_capacity(512),
+        }
+    }
+}
+
+pub struct TurnLogEntry {
+    pub tick: u64,
+    pub checksum: u64,
+    pub intents: Vec<dark_rift_shared::protocol::StampedIntent>,
+}
 
 pub fn start_game_core(
     msg:           ServerStartMessage,
@@ -71,6 +91,7 @@ pub fn start_game_core(
             commands.insert_resource(game);
             params.ready.0 = true;
             params.next_state.set(AppState::InGame);
+            commands.insert_resource(DesyncTracker::default());
 
             commands.insert_resource(CombatDockUiScale(hud_s));
             if let Some(s) = &params.shell {
@@ -119,6 +140,7 @@ pub fn pop_turn(
     mut q_building: Query<(Entity, &mut Building)>,
     mut path_scratch: ResMut<WaterPathfinderScratch>,
     water_components: Res<WaterComponents>,
+    mut desync_tracker: ResMut<DesyncTracker>,
 ) {
     if let Some(turn) = queue.0.pop_front() {
         for (i, stamped) in turn.intents.iter().enumerate() {
@@ -133,6 +155,23 @@ pub fn pop_turn(
                 &mut *path_scratch,
                 &water_components,
             );
+        }
+
+        let checksum = dark_rift_shared::checksum::compute_state_hash(
+            &game,
+            q_building.iter().map(|(_, b)| b as &Building),
+            q_fleet.iter().map(|(_, f)| f as &WarpFleet),
+            q_exec.iter().map(|(_, e)| e as &AttackExecution),
+        );
+        
+        desync_tracker.log.push_back(TurnLogEntry {
+            tick: turn.turn_number,
+            checksum,
+            intents: turn.intents,
+        });
+
+        if desync_tracker.log.len() > 500 {
+            desync_tracker.log.pop_front();
         }
     }
 }

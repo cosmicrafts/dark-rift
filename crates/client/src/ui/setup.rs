@@ -439,18 +439,20 @@ pub fn update_hud(
     if let Some(mut fps_text) = fps_q.iter_mut().next() {
         let show_build_line =
             build_mode.0.is_some() && !overlay.build_hint.is_empty();
+        let tick = highest.0.unwrap_or(0);
         let fps_str = if show_build_line {
             format!(
-                "{}  |  Ping: {}  |  {} FPS  |  {}",
+                "{}  |  Ping: {}  |  {} FPS  |  Tick: {}  |  {}",
                 overlay.status_line,
                 overlay.ping_value,
                 overlay.fps_value,
+                tick,
                 overlay.build_hint
             )
         } else {
             format!(
-                "{}  |  Ping: {}  |  {} FPS",
-                overlay.status_line, overlay.ping_value, overlay.fps_value
+                "{}  |  Ping: {}  |  {} FPS  |  Tick: {}",
+                overlay.status_line, overlay.ping_value, overlay.fps_value, tick
             )
         };
         if **fps_text != fps_str {

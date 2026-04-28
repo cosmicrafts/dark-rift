@@ -4,6 +4,45 @@
 
 Welcome to **Dark Rift**, the ECS-driven (Bevy + Lightyear) child of OpenFront.
 
+## Current Architecture Snapshot
+
+- Shared deterministic simulation is split across module trees:
+  - `crates/shared/src/execution/mod.rs` (`combat.rs`, `income.rs`)
+  - `crates/shared/src/intent/mod.rs` (`combat.rs`, `fleet.rs`, `buildings.rs`, `bot.rs`)
+  - `crates/shared/src/building/mod.rs` (`core.rs`, `placement.rs`, `cost.rs`, `construction.rs`, `upgrade.rs`, `hud.rs`)
+- Client lockstep schedule is chained in `crates/client/src/main.rs` under `SimulationSchedule`:
+  `pop_turn -> system_player_income -> system_bot_think -> system_warp_fleet_execution ->
+  system_attack_execution -> system_building_construction -> system_game_tick -> decrement_pending`.
+- Server remains turn-relay only; lobby lifecycle and bot roster injection are handled in
+  `crates/server/src/lobby/mod.rs` when a lobby transitions to `Active`.
+
+## OpenFront Parity Matrix (Current)
+
+### Implemented
+- Attack execution (frontier expansion, merge, retreat refund path).
+- Deterministic local bot think (`system_bot_think`) and headless bot sender.
+- Turn relay architecture (`StampedIntent`/`Turn`) with replay-friendly ordering.
+- Player troop/gold income and building aggregate effects.
+- Structure build + upgrade intents with placement and cost validation.
+- Construction tick system with `StructureReady` events.
+- Fleet launch/recall/landing flow plus merge into attack execution.
+
+### Partial
+- Spawn lifecycle (server-selected spawn points; no full TS spawn phase execution).
+- Retreat behavior (immediate retreat flag; no delayed `RetreatExecution` window yet).
+- Defense posts (frontier priority pressure implemented; active turret projectile loop not yet).
+- City/factory/port economics are present, but no full trade/rail execution family.
+- Game-over experience is currently client-evaluated by alive-count, not full shared win-check logic.
+
+### Missing
+- WinCheckExecution parity using tile percentage threshold as authoritative shared sim logic.
+- Pause/disconnect execution family (`PauseExecution`, `MarkDisconnectedExecution` equivalents).
+- Nuclear and projectile stack (`Nuke`, `MIRV`, `SAMLauncher/SAMMissile`, `ShellExecution`).
+- Naval combat stack (`Warship`, `TradeShip`, richer transport edge cases).
+- Rail stack (`Train`, `TrainStation`, rail cluster recompute).
+- Diplomacy/social/economy transfer stack (alliances, emoji/chat, donations, embargo).
+- Advanced Nation AI orchestration.
+
 
 ## Philosophy: "Organic Feel" vs Strict Math
 In OpenFront (Typescript), we achieved an incredible dynamic combat feel: attacks looked alive, expanding like mycelium, waves, and organic tentacles. When porting this to Rust for flawless Lockstep synchronization and WASM/Mobile cross-play, we quickly realized that a 1-to-1 math translation wasn't enough. Rust is mathematically rigid, and its standard library contracts exposed deep underlying flaws that Typescript's V8 engine implicitly hid.
@@ -135,14 +174,14 @@ DoS mitigation). Forbidden inside `SimulationSchedule` systems,
 anything reachable from them.
 - OK: use `HashMap` as a **dedup scratch buffer** only if you immediately
   collect into a `Vec` and `sort_by(|a, b| a.cmp(b))` with a *total* order
-  (see `merge_frontiers` in `crates/shared/src/intent.rs`).
+  (see `merge_frontiers` in `crates/shared/src/intent/combat.rs`).
 - Prefer: `Vec`, `BinaryHeap<PrioritizedTile>`, linear scans over
   `game.map.state` / `game.players`.
 
 ### 2. Every `Ord` must end with an absolute spatial tie-breaker
 Never terminate an `Ord::cmp` with `Ordering::Equal`. The tie-break chain for
 any tile struct must end with `(y, x)` — map coordinates are immutable and
-unique per tile. See `PrioritizedTile` in `crates/shared/src/execution.rs`:
+unique per tile. See `PrioritizedTile` in `crates/shared/src/execution/mod.rs`:
 `priority → insert_seq → y → x`.
 
 ### 3. Stateful Caches MUST use absolute spatial ordering
@@ -169,11 +208,11 @@ The current implementation is strictly deterministic across Native and WASM arch
 
 1. **Immutable Ordered Snapshots**: Both `system_bot_think` and `system_attack_execution` snapshot simulation inputs (`q_building` -> `Vec<Building>`) and rigidly sort them by `Building.id` before any calculations or state mutations occur (e.g., `defense_post_priority_bonus`). `q_building.iter()` yields an unstable memory-layout order across clients and entity generations, making the sorting step a critical Poka-Yoke.
 2. **Deterministic Bot Scheduling**: The bot schedule is built from `game.players` and then sorted by `bot_id`. Insertion order in `GameState.players` must not affect behavior.
-3. **Isolated Bot Entropy**: Each bot gets its own `PseudoRandom` seeded from `(game.seed, game.tick, bot_id)`. There is no shared global bot RNG stream; one bot taking a different branch cannot shift random draws for later bots.
+3. **Isolated Bot Entropy**: Each bot carries a persistent `WyRand` stream (`Player.bot_rng`) and each `AttackExecution` has its own `WyRand`. There is no shared global bot RNG stream; one bot taking a different branch cannot shift random draws for later bots.
 4. **Stable Target Sets**: Enemy target candidates are `sort_unstable()` + `dedup()` before selection, so duplicate border contacts and scan order do not affect the target set.
 5. **Two-Phase Application**: Structure and attack decisions are collected into `BotDecision`, sorted by `(bot_id, BotDecisionKind)`, and only then applied through `apply_stamped_intent`.
 6. **Integer Escalation**: OpenFront-style exponential structure costs use integer doubling in `scaled_pow2_cost`, strictly avoiding `powf`/`powi` or other platform-sensitive math.
-7. **f64 Subnormal Mitigation**: Combat boundary expansion curves (`max_tiles_f64`) explicitly cast operands to `f64`. While `f32` is nominally IEEE-754 compliant, intermediate truncation of `f32` subnormals during division between massive troop counts and small boundaries has been observed to deviate by 1 ULP across WASM (`f32.min`/`f32.max`) and x86_64, causing cascade desyncs. `f64` inherently prevents these catastrophic precision cliffs.
+7. **Fixed-Point Combat Math**: Troops/gold and combat rates now use `i64` fixed-point-style units (with milli-scaling for ratios where needed), removing prior floating-point drift concerns from the shared simulation hot path.
 8. **HashMap-Free Frontier Merge**: `merge_frontiers` must **never** use `HashMap` for dedup. When two `BinaryHeap` frontiers are merged and both contain a tile at the same `(x,y)` with identical `priority` values (rare but happens when RNG draws collide), `HashMap` insertion order is randomized by SipHash, so different clients would keep different `insert_seq` values — silently diverging the expansion wavefront. The fix uses `Vec` sort by `(x, y, priority, insert_seq)` + `dedup_by_key((x, y))`, which is fully deterministic. This was the root cause of the "starts light then completely diverges during PvP" desync pattern.
 9. **Negative Troop Clamping in PvP**: Defender `troops` can go negative when multiple attacks drain simultaneously before `system_player_income` restores them. All PvP reads of defender troops must clamp with `.max(0.0)` **before** computing `ratio` or `def_loss`. Without the clamp, negative troops produce negative `def_loss` — meaning the defender **gains** troops when tiles are captured — compounding each tick and diverging exponentially. The specific lines are: `defender_troops = p.troops.max(0.0)` (expansion speed) and `def_loss = target_player.troops.max(0.0) / tile_count` (attrition).
 
@@ -184,13 +223,11 @@ cargo test -p dark-rift-shared bot_think_is_stable_across_player_insertion_order
 cargo test -p dark-rift-shared bot_think_is_repeatable_same_seed_and_order
 ```
 
-### 6. No `f64::powf` / `f32::powf` / `exp` / `ln` / transcendentals on game state
-`libm` transcendentals are **not** bit-identical across
-`x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`, and
-`wasm32-unknown-unknown`. Allowed f64 ops on game state: `+ - * /`, `sqrt`,
-`min`, `max`, `clamp`, comparisons, `abs`. Decompose `x^k` into `sqrt`
-chains (see `system_player_income` in `crates/shared/src/execution.rs`:
-`x^0.625 = sqrt(x) * sqrt(sqrt(sqrt(x)))`).
+### 6. No float transcendentals in shared simulation
+The current shared sim is intentionally integer-driven (`i64` + scaled ratios).
+Keep `powf`/`exp`/`ln` out of deterministic gameplay state transitions unless
+there is strict proof of cross-target bit-identical behavior and regression
+coverage.
 
 ### 7. No hidden allocations in simulation hot paths
 Per-tile allocations (e.g. `Vec::with_capacity(5)` in `set_tile_owner`,
@@ -236,9 +273,21 @@ Before blaming architecture, verify:
    must be reproducible if the bug is in sim code.
 4. `rg 'powf|HashMap::new|HashSet::new|Instant::now|thread_rng|rand::random' crates/shared`.
 
+### Deterministic Integration Checklist (for new subsystems)
+Before adding any new execution family, validate all items:
+
+1. New player actions enter through `GameplayIntent` / `StampedIntent` (`crates/shared/src/protocol.rs`).
+2. Authoritative state mutation runs only in chained simulation systems (`SimulationSchedule` on client).
+3. Query iteration order is explicitly stabilized (collect and sort by monotonic domain IDs).
+4. No wall-clock timing (`Instant`/`SystemTime`) in shared simulation logic.
+5. No unordered `HashMap`/`HashSet` iteration in simulation mutation paths.
+6. No parallelism (`par_iter`, unordered system sets) in shared simulation update order.
+7. Any new long-lived execution entity has a deterministic ID source (e.g., `GameState` counters).
+8. Tests include repeatability by seed and insertion-order stability.
+
 ### Economy: gold vs troops (OpenFront parity)
 - **Troops**: territory expansion, ground attacks, and fleets (`Player.troops`, `system_player_income` troop branch).
-- **Gold**: structure build/upgrade costs and passive gold income (`Player.gold`, `structure_build_cost_gold`, `GOLD_BASE_INCOME` + per ready City level in `config.rs`). Authoritative deduction happens in `apply_build_structure_intent` / `apply_upgrade_structure_intent` (`intent.rs`).
+- **Gold**: structure build/upgrade costs and passive gold income (`Player.gold`, `structure_build_cost_gold`, `GOLD_BASE_INCOME` + per ready City level in `config.rs`). Authoritative deduction happens in `apply_build_structure_intent` / `apply_upgrade_structure_intent` (`intent/buildings.rs`).
 
 ## WASM local build (Fase 1)
 
@@ -260,7 +309,7 @@ python3 -m http.server 8000 -d dist/
 
 Open `http://localhost:8000/` to run the client in the browser.
 
-**Multiplayer from the browser:** the WASM client uses **`wss://darkrift.ai/ws/`** for the WebSocket transport (TLS in the browser). Netcode still embeds a numeric **`IP:25565`** in the connect token; on `wasm32-unknown-unknown` Rust cannot resolve hostnames, so before production deploy set `WASM_NETCODE_SOCKET` in `crates/client/src/main.rs` to your VPS public IPv4 (same port Nginx forwards to the game server).
+**Multiplayer from the browser:** the WASM client uses **`wss://darkrift.ai/ws/`** for the WebSocket transport (TLS in the browser). Netcode still embeds a numeric **`IP:25565`** in the connect token; on `wasm32-unknown-unknown` Rust cannot resolve hostnames, so before production deploy set `WASM_NETCODE_SOCKET` in `crates/client/src/network/network.rs` to your VPS public IPv4 (same port Nginx forwards to the game server).
 
 ## Deployment & Orchestration
 
@@ -291,3 +340,9 @@ The `run_cluster.py` script has been supercharged to act as an all-in-one orches
 ./run_cluster.py --stress 120 --server <VPS_IP:25565>
 ```
 *Spawns 120 local instances of the client pointing to the given cloud server IP to test its limits.*
+
+## Cleanup Items (Tracked)
+
+- `crates/shared/src/test_bevy.rs` appears to be scratch code and should be removed in a cleanup pass.
+- `scripts/deploy_cloud.sh` still rewrites `crates/client/src/main.rs` to patch IPs, while runtime networking constants now live in `crates/client/src/network/network.rs`; this should be migrated to avoid stale deploy behavior.
+- `TURN_INTERVAL_MS` in `crates/server/src/core/mod.rs` is currently `10.0` while the nearby comment describes `100ms = 10 turns/sec`; align comment and value semantics.

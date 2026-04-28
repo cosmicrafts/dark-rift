@@ -282,6 +282,10 @@ fn main() {
             player_click,
             system_force_boat_key,
             system_exit_button,
+        ).run_if(in_state(AppState::InGame)));
+
+        app.add_systems(Update, (
+            system_dump_desync_tracker,
             system_home_button,
             update_hud,
             system_apply_responsive_hud_layout,

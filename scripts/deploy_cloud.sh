@@ -45,41 +45,18 @@ CLEAN_VERSION="${MAJOR_MINOR}.${NEW_PATCH}"
 echo "${CLEAN_VERSION}" > "${VERSION_FILE}"
 green "✅ Versión actualizada a ${CLEAN_VERSION}"
 
-# 2. Compilaciones en Paralelo
-cyan "==> 2. [PARALELO] Compilando Backend y Frontend..."
+# 2. Compilar Web y Servidor secuencialmente (Evita bloqueo de File Lock de Cargo)
+cyan "==> 2. Compilando Backend y Frontend..."
 
-# Lanzar compilar Cliente en background
-cargo build --release -p dark-rift-client --target wasm32-unknown-unknown &
-CLIENT_PID=$!
+# Compilar Cliente Web
+cyan "-> Construyendo Cliente WASM..."
+cargo build --release -p dark-rift-client --target wasm32-unknown-unknown
 
-# Lanzar compilar Servidor en background
-cargo build --release -p dark-rift-server --target x86_64-unknown-linux-musl &
-SERVER_PID=$!
-
-# Preparar Cliente Nativo Linux (reemplazando IP temporalmente)
-cyan "==> 2.1 [PARALELO] Compilando Cliente Nativo Linux..."
-cp crates/client/src/main.rs crates/client/src/main.rs.bak
-sed -i "s/127.0.0.1:25565/${VPS_IP}:25565/g" crates/client/src/main.rs
-
-# Lanzar compilar Cliente Nativo en background
-cargo build --release -p dark-rift-client --target x86_64-unknown-linux-gnu &
-LINUX_CLIENT_PID=$!
-
-
-# Esperar a que terminen todos
-wait $CLIENT_PID || { red "❌ Error compilando Cliente WASM"; exit 1; }
-wait $SERVER_PID || { red "❌ Error compilando Servidor Musl"; exit 1; }
-wait $LINUX_CLIENT_PID || { red "❌ Error compilando Cliente Nativo Linux"; mv crates/client/src/main.rs.bak crates/client/src/main.rs; exit 1; }
-
-# Restaurar main.rs a como estaba (127.0.0.1)
-mv crates/client/src/main.rs.bak crates/client/src/main.rs
+# Compilar Servidor
+cyan "-> Construyendo Servidor Musl..."
+cargo build --release -p dark-rift-server --target x86_64-unknown-linux-musl
 
 green "✅ Compilaciones de Rust exitosas."
-
-# Mover el binario de Linux a builds/
-mkdir -p builds
-cp target/x86_64-unknown-linux-gnu/release/dark-rift-client builds/dark_rift_linux_v${CLEAN_VERSION}
-green "✅ Cliente Nativo guardado en builds/dark_rift_linux_v${CLEAN_VERSION}"
 
 
 # 2. Empaquetado Web (Wasm-bindgen y Brotli)
