@@ -9,6 +9,12 @@ use crate::gameplay::buildings::building_kind_icon_path;
 use crate::state::*;
 use crate::ui::*;
 
+#[derive(Component)]
+pub struct BuildPillIcon;
+
+#[derive(Component)]
+pub struct BuildPillHotkey;
+
 pub fn spawn_action_dock(
     commands: &mut Commands,
     shell: &HudShellRegions,
@@ -47,9 +53,12 @@ pub fn spawn_action_dock(
             dock.spawn((
                 BuildPillRow,
                 Node {
-                    width: Val::Px(outer_w),
-                    flex_direction: FlexDirection::Column,
+                    max_width: Val::Px(outer_w),
+                    flex_direction: FlexDirection::Row,
+                    flex_wrap: FlexWrap::Wrap,
+                    justify_content: JustifyContent::Center,
                     row_gap: Val::Px(gap),
+                    column_gap: Val::Px(gap),
                     padding: UiRect::all(Val::Px(pad)),
                     border: UiRect::all(Val::Px(frame)),
                     border_radius: BorderRadius::all(Val::Px(6.0 * s)),
@@ -59,91 +68,79 @@ pub fn spawn_action_dock(
                 BorderColor::all(panel_border()),
             ))
             .with_children(|grid| {
-                for row_i in 0..2 {
+                for idx in 0..6 {
+                    let kind = BuildingKind::ALL[idx];
+                    let hk = (idx + 1).to_string();
                     grid.spawn((
+                        Button,
+                        BuildPillButton(kind),
                         Node {
-                            width: Val::Percent(100.0),
-                            flex_direction: FlexDirection::Row,
-                            justify_content: JustifyContent::Center,
-                            column_gap: Val::Px(gap),
+                            width: Val::Px(cell),
+                            height: Val::Px(cell),
+                            flex_direction: FlexDirection::Column,
+                            padding: UiRect::all(Val::Px(3.0 * s)),
+                            justify_content: JustifyContent::FlexStart,
+                            row_gap: Val::Px(1.0 * s),
+                            border_radius: BorderRadius::all(Val::Px(4.0 * s)),
+                            border: UiRect::all(Val::Px(1.0 * s)),
                             ..default()
                         },
+                        BackgroundColor(panel_bg()),
+                        BorderColor::all(panel_border()),
                     ))
-                    .with_children(|row| {
-                        for c in 0..3 {
-                            let idx = row_i * 3 + c;
-                            let kind = BuildingKind::ALL[idx];
-                            let hk = (idx + 1).to_string();
-                            row.spawn((
-                                Button,
-                                BuildPillButton(kind),
-                                Node {
-                                    width: Val::Px(cell),
-                                    height: Val::Px(cell),
-                                    flex_direction: FlexDirection::Column,
-                                    padding: UiRect::all(Val::Px(3.0 * s)),
-                                    justify_content: JustifyContent::FlexStart,
-                                    row_gap: Val::Px(1.0 * s),
-                                    border_radius: BorderRadius::all(Val::Px(4.0 * s)),
-                                    border: UiRect::all(Val::Px(1.0 * s)),
+                    .with_children(|cell_ui| {
+                        cell_ui.spawn((
+                            Node {
+                                width: Val::Percent(100.0),
+                                flex_direction: FlexDirection::Row,
+                                justify_content: JustifyContent::FlexEnd,
+                                min_height: Val::Px(11.0 * s),
+                                ..default()
+                            },
+                        ))
+                        .with_children(|hk_row| {
+                            hk_row.spawn((
+                                BuildPillHotkey,
+                                Text::new(hk),
+                                BuildPillLabel { slot: 3, kind },
+                                TextFont {
+                                    font: font.clone(),
+                                    font_size: 10.0 * s,
                                     ..default()
                                 },
-                                BackgroundColor(panel_bg()),
-                                BorderColor::all(panel_border()),
-                            ))
-                            .with_children(|cell_ui| {
-                                cell_ui.spawn((
-                                    Node {
-                                        width: Val::Percent(100.0),
-                                        flex_direction: FlexDirection::Row,
-                                        justify_content: JustifyContent::FlexEnd,
-                                        min_height: Val::Px(11.0 * s),
-                                        ..default()
-                                    },
-                                ))
-                                .with_children(|hk_row| {
-                                    hk_row.spawn((
-                                        Text::new(hk),
-                                        BuildPillLabel { slot: 3, kind },
-                                        TextFont {
-                                            font: font.clone(),
-                                            font_size: 10.0 * s,
-                                            ..default()
-                                        },
-                                        TextColor(Color::srgb(0.55, 0.62, 0.72)),
-                                    ));
-                                });
-                                cell_ui.spawn((
-                                    ImageNode::new(asset_server.load(building_kind_icon_path(kind))),
-                                    Node {
-                                        width: Val::Px(icon),
-                                        height: Val::Px(icon),
-                                        align_self: AlignSelf::Center,
-                                        ..default()
-                                    },
-                                ));
-                                cell_ui.spawn((
-                                    Text::new("0"),
-                                    BuildPillLabel { slot: 1, kind },
-                                    TextFont {
-                                        font: font.clone(),
-                                        font_size: 10.0 * s,
-                                        ..default()
-                                    },
-                                    TextColor(Color::srgb(0.85, 0.9, 1.0)),
-                                ));
-                                cell_ui.spawn((
-                                    Text::new("0"),
-                                    BuildPillLabel { slot: 2, kind },
-                                    TextFont {
-                                        font: font.clone(),
-                                        font_size: 9.5 * s,
-                                        ..default()
-                                    },
-                                    TextColor(Color::srgb(0.75, 0.78, 0.82)),
-                                ));
-                            });
-                        }
+                                TextColor(Color::srgb(0.55, 0.62, 0.72)),
+                            ));
+                        });
+                        cell_ui.spawn((
+                            BuildPillIcon,
+                            ImageNode::new(asset_server.load(building_kind_icon_path(kind))),
+                            Node {
+                                width: Val::Px(icon),
+                                height: Val::Px(icon),
+                                align_self: AlignSelf::Center,
+                                ..default()
+                            },
+                        ));
+                        cell_ui.spawn((
+                            Text::new("0"),
+                            BuildPillLabel { slot: 1, kind },
+                            TextFont {
+                                font: font.clone(),
+                                font_size: 10.0 * s,
+                                ..default()
+                            },
+                            TextColor(Color::srgb(0.85, 0.9, 1.0)),
+                        ));
+                        cell_ui.spawn((
+                            Text::new("0"),
+                            BuildPillLabel { slot: 2, kind },
+                            TextFont {
+                                font: font.clone(),
+                                font_size: 9.5 * s,
+                                ..default()
+                            },
+                            TextColor(Color::srgb(0.75, 0.78, 0.82)),
+                        ));
                     });
                 }
             });
@@ -223,6 +220,7 @@ pub fn spawn_bottom_combat_hud(
                 padding: UiRect::bottom(Val::Px(16.0 * s)),
                 ..default()
             },
+            BackgroundColor(Color::NONE), // dynamically set to black-transparent on compact
         ))
         .with_children(|root| {
             root.spawn((
@@ -244,6 +242,7 @@ pub fn spawn_bottom_combat_hud(
             ));
 
             root.spawn((
+                crate::ui::hud_combat::BottomHudPanel,
                 Node {
                     width: Val::Percent(96.0),
                     max_width: Val::Px(800.0 * s),
@@ -255,6 +254,7 @@ pub fn spawn_bottom_combat_hud(
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.1, 0.1, 0.15, 0.85)),
+                BorderColor::all(Color::NONE), // placeholder for uniform tuple size
             ))
             .with_children(|panel| {
                 // Top row: Economy (Cap | Gold | Troops)
@@ -262,7 +262,7 @@ pub fn spawn_bottom_combat_hud(
                     Node {
                         width: Val::Percent(100.0),
                         flex_direction: FlexDirection::Row,
-                        justify_content: JustifyContent::SpaceBetween,
+                        justify_content: JustifyContent::Center,
                         column_gap: Val::Px(8.0 * s),
                         ..default()
                     },
@@ -272,9 +272,9 @@ pub fn spawn_bottom_combat_hud(
                         Node {
                             flex_direction: FlexDirection::Row,
                             align_items: AlignItems::Center,
-                            padding: UiRect::axes(Val::Px(12.0 * s), Val::Px(6.0 * s)),
+                            padding: UiRect::axes(Val::Px(8.0 * s), Val::Px(4.0 * s)),
                             border_radius: BorderRadius::all(Val::Px(8.0 * s)),
-                            column_gap: Val::Px(6.0 * s),
+                            column_gap: Val::Px(4.0 * s),
                             ..default()
                         },
                         BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.04)), // OpenFront bg-white/4
@@ -301,9 +301,9 @@ pub fn spawn_bottom_combat_hud(
                         Node {
                             flex_direction: FlexDirection::Row,
                             align_items: AlignItems::Center,
-                            padding: UiRect::axes(Val::Px(12.0 * s), Val::Px(6.0 * s)),
+                            padding: UiRect::axes(Val::Px(8.0 * s), Val::Px(4.0 * s)),
                             border_radius: BorderRadius::all(Val::Px(8.0 * s)),
-                            column_gap: Val::Px(6.0 * s),
+                            column_gap: Val::Px(4.0 * s),
                             ..default()
                         },
                         BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.04)),
@@ -330,9 +330,9 @@ pub fn spawn_bottom_combat_hud(
                         Node {
                             flex_direction: FlexDirection::Row,
                             align_items: AlignItems::Center,
-                            padding: UiRect::axes(Val::Px(12.0 * s), Val::Px(6.0 * s)),
+                            padding: UiRect::axes(Val::Px(8.0 * s), Val::Px(4.0 * s)),
                             border_radius: BorderRadius::all(Val::Px(8.0 * s)),
-                            column_gap: Val::Px(6.0 * s),
+                            column_gap: Val::Px(4.0 * s),
                             ..default()
                         },
                         BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.04)), // OpenFront bg-white/4
@@ -374,7 +374,7 @@ pub fn spawn_bottom_combat_hud(
                         },
                         TextColor(Color::WHITE),
                         Node {
-                            width: Val::Px(180.0 * s),
+                            width: Val::Px(110.0 * s),
                             ..default()
                         },
                     ));
@@ -423,6 +423,21 @@ pub fn spawn_bottom_combat_hud(
                                     BackgroundColor(Color::srgb(0.2, 0.2, 0.25)),
                                 ));
                             });
+                            
+                        track.spawn((
+                            crate::ui::hud_combat::AttackRatioHandle,
+                            Node {
+                                position_type: PositionType::Absolute,
+                                width: Val::Px(24.0 * s),
+                                height: Val::Px(24.0 * s),
+                                border_radius: BorderRadius::all(Val::Px(12.0 * s)),
+                                left: Val::Percent(20.0),
+                                margin: UiRect::left(Val::Px(-12.0 * s)), // center the handle
+                                ..default()
+                            },
+                            BackgroundColor(Color::WHITE),
+                            BorderColor::all(Color::BLACK),
+                        ));
                     });
                 });
             });

@@ -1,4 +1,9 @@
-(
+(// for custom settings like const PLAYER_COLOR_BLEND:
+//border_color: LinearRgba: search in:
+
+//  assets/shaders/border.wgsl
+//  crates/client/src/gameplay/environment.rs
+
     visuals: (
         enable_combat_particles: false,
         enable_hdr_bloom: false,
@@ -6,18 +11,19 @@
         enable_floating_labels: true,
     ),
     ui: (
-        font_path: "fonts/Rajdhani-Medium.ttf",
-        font_size: 16.0,
-        label_offset_y: 14.0,
+        font_path: "fonts/Goldman-Bold.ttf",
+        font_size: 18.0,
+        label_offset_y: 16.0,
         label_size_ref_tiles: 64.0,
-        label_max_scale: 5.0,
-        attack_ratio: 0.5,
+        label_max_scale: 25.0,
+        attack_ratio: 0.25,
         click_feedback_scale: 2.0,
         click_troop_label_scale: 2.0,
         fleet_boat_scale: 2.0,
         fleet_target_ring_scale: 2.0,
         fleet_wake_scale: 2.0,
-        combat_hud_scale: 0.85,
+        combat_hud_scale: 1.0,
+        mobile_hud_scale: 0.9,
         combat_hud_fleet_rows: true,
     ),
     profile: (
@@ -25,10 +31,12 @@
     ),
     gameplay: (
         tick_rate_ms: 50.0,
-        attack_cost_enemy: 5.0,
+        attack_cost_enemy: 10.0,
         attack_cost_neutral: 1.0,
+        neutral_expansion_multiplier: 0.5,
+        pvp_expansion_multiplier: 0.25,
         bot_attack_interval_ticks: 8,
-        starting_troops: 100.0,
+        starting_troops: 1000.0,
         starting_gold: 250.0,
         gold_base_income: 1.25,
         troop_base_income: 2.0,
@@ -36,5 +44,17 @@
         max_troops_base: 100.0,
         max_troops_scale: 50.0,
         city_max_troops_per_level: 2000.0,
+        bot: (
+            attack_interval_base: 250,
+            trigger_ratio: 0.6,
+            reserve_ratio: 0.3,
+            expand_ratio: 0.15,
+            random_attack_div: 5,
+            sam_ratio: 0.20,
+            defense_post_ratio: 0.25,
+            port_ratio: 0.75,
+            factory_ratio: 0.75,
+            silo_ratio: 0.20,
+        ),
     ),
 )

@@ -25,7 +25,7 @@ pub struct OutgoingAttackRowRoot;
 pub struct OutgoingAttackLineText;
 
 #[derive(Resource, Default)]
-pub struct OutgoingAttackRowMap(pub std::collections::HashMap<u64, (Entity, Entity)>);
+pub struct OutgoingAttackRowMap(pub std::collections::HashMap<u64, (Entity, Entity, Entity)>);
 
 #[derive(Component)]
 pub struct OutgoingFleetRowRoot;
@@ -34,7 +34,7 @@ pub struct OutgoingFleetRowRoot;
 pub struct OutgoingFleetLineText;
 
 #[derive(Resource, Default)]
-pub struct OutgoingFleetRowMap(pub HashMap<u64, (Entity, Entity)>);
+pub struct OutgoingFleetRowMap(pub HashMap<u64, (Entity, Entity, Entity)>);
 
 pub fn system_update_event_feed(
     mut commands: Commands,
@@ -44,6 +44,7 @@ pub fn system_update_event_feed(
     settings: Res<ClientSettings>,
     q_container: Query<Entity, With<EventFeedContainer>>,
     mut q_lines: Query<(Entity, &mut EventFeedLine, &mut TextColor)>,
+    ui_shell: Res<UiShellState>,
 ) {
     let Some(container_ent) = q_container.iter().next() else { return };
 
@@ -57,6 +58,10 @@ pub fn system_update_event_feed(
     }
 
     let Some(game) = game_opt else { return };
+    // Skip event feed log on mobile (attack rows in OutgoingRowsContainer are still shown)
+    if matches!(ui_shell.breakpoint, crate::ui::shell::UiBreakpoint::Compact) {
+        return; // No scrolling event feed on mobile, but attack rows still show
+    }
 
     // New events
     let current_len = game.events.len();
@@ -124,10 +129,10 @@ pub fn system_sync_outgoing_attack_rows(
     };
 
     if my_id.0 == 0 {
-        for (_, (row_e, _)) in row_map.0.drain() {
+        for (_, (row_e, _, _)) in row_map.0.drain() {
             commands.entity(row_e).despawn();
         }
-        for (_, (row_e, _)) in fleet_row_map.0.drain() {
+        for (_, (row_e, _, _)) in fleet_row_map.0.drain() {
             commands.entity(row_e).despawn();
         }
         return;
@@ -159,7 +164,7 @@ pub fn system_sync_outgoing_attack_rows(
         .filter(|id| !desired.contains(id))
         .collect();
     for id in stale {
-        if let Some((row_e, _)) = row_map.0.remove(&id) {
+        if let Some((row_e, _, _)) = row_map.0.remove(&id) {
             commands.entity(row_e).despawn();
         }
     }
@@ -181,19 +186,21 @@ pub fn system_sync_outgoing_attack_rows(
             }
         };
         
-        let line = format!(
-            "To: {}\n{} / {}",
-            who,
-            fmt_num(exec.troops.max(0.0)),
-            fmt_num(exec.initial_troops.max(0.0)),
-        );
+        let to_text = format!("To: {}", who);
+        let count_text = fmt_num(exec.troops.max(0.0));
 
-        if let Some((_, text_e)) = row_map.0.get(&exec.id).copied() {
-            if let Ok((mut t, mut tf)) = q_attack_line.get_mut(text_e) {
-                if **t != line {
-                    **t = line;
+        if let Some((_, text_e1, text_e2)) = row_map.0.get(&exec.id).copied() {
+            if let Ok((mut t1, mut tf1)) = q_attack_line.get_mut(text_e1) {
+                if **t1 != to_text {
+                    **t1 = to_text;
                 }
-                tf.font_size = row_font;
+                tf1.font_size = row_font;
+            }
+            if let Ok((mut t2, mut tf2)) = q_attack_line.get_mut(text_e2) {
+                if **t2 != count_text {
+                    **t2 = count_text;
+                }
+                tf2.font_size = row_font;
             }
         } else {
             let font = settings.font.clone();
@@ -203,14 +210,15 @@ pub fn system_sync_outgoing_attack_rows(
                     ChildOf(slot),
                     OutgoingAttackRowRoot,
                     Node {
-                        width: Val::Px(120.0 * s),
-                        height: Val::Px(80.0 * s),
-                        flex_direction: FlexDirection::Column,
+                        width: Val::Percent(100.0),
+                        height: Val::Px(if matches!(ui_shell.breakpoint, crate::ui::shell::UiBreakpoint::Compact) { 34.0 * s } else { 44.0 * s }),
+                        flex_direction: FlexDirection::Row,
                         align_items: AlignItems::Center,
                         justify_content: JustifyContent::SpaceBetween,
-                        padding: UiRect::axes(Val::Px(4.0 * s), Val::Px(6.0 * s)),
+                        padding: UiRect::axes(Val::Px(8.0 * s), Val::Px(4.0 * s)),
                         border: UiRect::all(Val::Px(1.0 * s)),
                         border_radius: BorderRadius::all(Val::Px(row_radius)),
+                        column_gap: Val::Px(6.0 * s),
                         ..default()
                     },
                     BackgroundColor(panel_bg()),
@@ -218,21 +226,41 @@ pub fn system_sync_outgoing_attack_rows(
                 ))
                 .id();
 
-            let text_e = commands
+            let text_e1 = commands
                 .spawn((
                     ChildOf(row_e),
                     OutgoingAttackLineText,
-                    Text::new(line),
+                    Text::new(to_text),
                     TextFont {
                         font: font.clone(),
                         font_size: row_font,
                         ..default()
                     },
                     TextColor(text_primary()),
-                    TextLayout::new_with_justify(Justify::Center),
+                    TextLayout::new_with_justify(Justify::Left),
                     Node {
                         flex_grow: 1.0,
                         align_self: AlignSelf::Center,
+                        ..default()
+                    },
+                ))
+                .id();
+
+            let text_e2 = commands
+                .spawn((
+                    ChildOf(row_e),
+                    OutgoingAttackLineText,
+                    Text::new(count_text),
+                    TextFont {
+                        font: font.clone(),
+                        font_size: row_font,
+                        ..default()
+                    },
+                    TextColor(Color::srgba(0.9, 0.7, 0.1, 1.0)), // Golden count
+                    TextLayout::new_with_justify(Justify::Right),
+                    Node {
+                        align_self: AlignSelf::Center,
+                        margin: UiRect::right(Val::Px(8.0 * s)),
                         ..default()
                     },
                 ))
@@ -266,13 +294,13 @@ pub fn system_sync_outgoing_attack_rows(
                     ));
                 });
 
-            row_map.0.insert(exec_id, (row_e, text_e));
+            row_map.0.insert(exec_id, (row_e, text_e1, text_e2));
         }
     }
 
     // Outgoing boats (`WarpFleet`) — OpenFront `AttacksDisplay` transport rows + recall.
     if !settings.config.ui.combat_hud_fleet_rows {
-        for (_, (row_e, _)) in fleet_row_map.0.drain() {
+        for (_, (row_e, _, _)) in fleet_row_map.0.drain() {
             commands.entity(row_e).despawn();
         }
         return;
@@ -292,7 +320,7 @@ pub fn system_sync_outgoing_attack_rows(
         .filter(|id| !desired_f.contains(id))
         .collect();
     for id in stale_f {
-        if let Some((row_e, _)) = fleet_row_map.0.remove(&id) {
+        if let Some((row_e, _, _)) = fleet_row_map.0.remove(&id) {
             commands.entity(row_e).despawn();
         }
     }
@@ -314,18 +342,21 @@ pub fn system_sync_outgoing_attack_rows(
             }
         };
 
-        let line = format!(
-            "⛵ To: {}\n{}",
-            who,
-            fmt_num(fleet.troops.max(0.0)),
-        );
+        let to_text = format!("Fleet To: {}", who);
+        let count_text = fmt_num(fleet.troops.max(0.0));
 
-        if let Some((_, text_e)) = fleet_row_map.0.get(&fleet.id).copied() {
-            if let Ok((mut t, mut tf)) = q_fleet_line.get_mut(text_e) {
-                if **t != line {
-                    **t = line;
+        if let Some((_, text_e1, text_e2)) = fleet_row_map.0.get(&fleet.id).copied() {
+            if let Ok((mut t1, mut tf1)) = q_fleet_line.get_mut(text_e1) {
+                if **t1 != to_text {
+                    **t1 = to_text;
                 }
-                tf.font_size = row_font;
+                tf1.font_size = row_font;
+            }
+            if let Ok((mut t2, mut tf2)) = q_fleet_line.get_mut(text_e2) {
+                if **t2 != count_text {
+                    **t2 = count_text;
+                }
+                tf2.font_size = row_font;
             }
         } else {
             let font = settings.font.clone();
@@ -335,36 +366,57 @@ pub fn system_sync_outgoing_attack_rows(
                     ChildOf(slot),
                     OutgoingFleetRowRoot,
                     Node {
-                        width: Val::Px(120.0 * s),
-                        height: Val::Px(80.0 * s),
-                        flex_direction: FlexDirection::Column,
+                        width: Val::Percent(100.0),
+                        height: Val::Px(44.0 * s),
+                        flex_direction: FlexDirection::Row,
                         align_items: AlignItems::Center,
                         justify_content: JustifyContent::SpaceBetween,
-                        padding: UiRect::axes(Val::Px(4.0 * s), Val::Px(6.0 * s)),
+                        padding: UiRect::axes(Val::Px(12.0 * s), Val::Px(6.0 * s)),
                         border: UiRect::all(Val::Px(1.0 * s)),
                         border_radius: BorderRadius::all(Val::Px(row_radius)),
+                        column_gap: Val::Px(8.0 * s),
                         ..default()
                     },
-                    BackgroundColor(panel_bg()),
-                    BorderColor::all(panel_border()),
+                    BackgroundColor(Color::srgba(0.06, 0.1, 0.16, 0.85)),
+                    BorderColor::all(Color::srgba(0.2, 0.4, 0.8, 0.6)),
                 ))
                 .id();
 
-            let text_e = commands
+            let text_e1 = commands
                 .spawn((
                     ChildOf(row_e),
                     OutgoingFleetLineText,
-                    Text::new(line),
+                    Text::new(to_text),
                     TextFont {
                         font: font.clone(),
                         font_size: row_font,
                         ..default()
                     },
-                    TextColor(text_primary()),
-                    TextLayout::new_with_justify(Justify::Center),
+                    TextColor(Color::srgba(0.8, 0.9, 1.0, 1.0)),
+                    TextLayout::new_with_justify(Justify::Left),
                     Node {
                         flex_grow: 1.0,
                         align_self: AlignSelf::Center,
+                        ..default()
+                    },
+                ))
+                .id();
+
+            let text_e2 = commands
+                .spawn((
+                    ChildOf(row_e),
+                    OutgoingFleetLineText,
+                    Text::new(count_text),
+                    TextFont {
+                        font: font.clone(),
+                        font_size: row_font,
+                        ..default()
+                    },
+                    TextColor(Color::srgba(0.9, 0.7, 0.1, 1.0)),
+                    TextLayout::new_with_justify(Justify::Right),
+                    Node {
+                        align_self: AlignSelf::Center,
+                        margin: UiRect::right(Val::Px(8.0 * s)),
                         ..default()
                     },
                 ))
@@ -398,7 +450,7 @@ pub fn system_sync_outgoing_attack_rows(
                     ));
                 });
 
-            fleet_row_map.0.insert(fleet_id, (row_e, text_e));
+            fleet_row_map.0.insert(fleet_id, (row_e, text_e1, text_e2));
         }
     }
 }

@@ -62,9 +62,9 @@ pub fn system_attack_execution(
         }
 
         let max_tiles_f64 = if execution.target_owner == 0 {
-            // Neutral expansion speed: OpenFront parity (proportional to border size)
+            // Neutral expansion speed
             let adjacent = execution.to_conquer.len() as f64;
-            (adjacent * 0.4).max(1.0).min(50.0) // Bounded organic growth
+            (adjacent * game.config.neutral_expansion_multiplier).max(1.0).min(50.0) // Bounded organic growth
         } else {
             // PvP expansion speed: ratio based
             // Defensive clamp: troops CAN go negative when multiple attacks drain
@@ -81,7 +81,7 @@ pub fn system_attack_execution(
             let adjacent = execution.to_conquer.len() as f64;
 
             // OpenFront parity speed curve
-            let power = (ratio * 0.5).clamp(0.05, 0.4); 
+            let power = (ratio * game.config.pvp_expansion_multiplier).clamp(0.05, 0.4); 
             (power * adjacent).max(0.1).min(100.0) // At least 0.1 (10% chance per tick), max 100 tiles/tick
         };
 

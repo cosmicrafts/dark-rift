@@ -12,19 +12,14 @@ use crate::game::BuildingKind;
 fn bot_structure_target_count(
     kind: BuildingKind,
     city_equivalent: u32,
-    difficulty: crate::game_config::BotDifficulty,
+    bot_config: &crate::game_config::BotConfig,
 ) -> u32 {
-    let sam_ratio = match difficulty {
-        crate::game_config::BotDifficulty::BrainDead => 0.15,
-        crate::game_config::BotDifficulty::Vanilla => 0.20,
-        crate::game_config::BotDifficulty::Terminator => 0.30,
-    };
     match kind {
-        BuildingKind::DefensePost => ((city_equivalent as f64) * 0.25).floor() as u32,
-        BuildingKind::Port => ((city_equivalent as f64) * 0.75).floor() as u32,
-        BuildingKind::Factory => ((city_equivalent as f64) * 0.75).floor() as u32,
-        BuildingKind::SamLauncher => ((city_equivalent as f64) * sam_ratio).floor() as u32,
-        BuildingKind::MissileSilo => ((city_equivalent as f64) * 0.2).floor() as u32,
+        BuildingKind::DefensePost => ((city_equivalent as f64) * bot_config.defense_post_ratio).floor() as u32,
+        BuildingKind::Port => ((city_equivalent as f64) * bot_config.port_ratio).floor() as u32,
+        BuildingKind::Factory => ((city_equivalent as f64) * bot_config.factory_ratio).floor() as u32,
+        BuildingKind::SamLauncher => ((city_equivalent as f64) * bot_config.sam_ratio).floor() as u32,
+        BuildingKind::MissileSilo => ((city_equivalent as f64) * bot_config.silo_ratio).floor() as u32,
         BuildingKind::City => city_equivalent.saturating_add(1),
     }
 }
@@ -58,12 +53,8 @@ pub fn system_bot_think(
 
     let config = config_opt.map(|c| c.clone()).unwrap_or_default();
     let tick = game.tick;
-    let (attack_interval_base, trigger_ratio, reserve_ratio, expand_ratio, random_attack_div) =
-        match config.bot_difficulty {
-            crate::game_config::BotDifficulty::BrainDead => (500, 0.9, 0.8, 0.12, 8),
-            crate::game_config::BotDifficulty::Vanilla => (250, 0.6, 0.3, 0.15, 5),
-            crate::game_config::BotDifficulty::Terminator => (125, 0.4, 0.1, 0.18, 3),
-        };
+    let bot_config = &config.bot;
+    let attack_interval_base = bot_config.attack_interval_base;
 
     let mut schedule: Vec<(u16, u64, u64)> = Vec::new();
     let mut any_structures = false;
@@ -138,7 +129,7 @@ pub fn system_bot_think(
                     .filter(|b| b.owner_id == bot_id && b.kind == kind && !b.under_construction)
                     .count() as u32;
                 let target_count =
-                    bot_structure_target_count(kind, city_equivalent, config.bot_difficulty);
+                    bot_structure_target_count(kind, city_equivalent, bot_config);
                 if kind == BuildingKind::MissileSilo && owned >= 3 {
                     continue;
                 }
@@ -220,17 +211,17 @@ pub fn system_bot_think(
             continue;
         } else {
             let p_mut = game.player_mut(bot_id).unwrap();
-            let t = if p_mut.bot_rng.next_int(0, random_attack_div) == 0 {
+            let t = if p_mut.bot_rng.next_int(0, bot_config.random_attack_div) == 0 {
                 player_targets[p_mut.bot_rng.next_int(0, player_targets.len() as i32) as usize]
             } else {
                 player_targets[0]
             };
             (t, false)
         };
-        if !is_neutral && troops < max_troops * trigger_ratio {
+        if !is_neutral && troops < max_troops * bot_config.trigger_ratio {
             continue;
         }
-        let reserve = max_troops * if is_neutral { expand_ratio } else { reserve_ratio };
+        let reserve = max_troops * if is_neutral { bot_config.expand_ratio } else { bot_config.reserve_ratio };
         let p_send = (troops - reserve).max(0.0);
         if p_send < game.config.attack_cost_neutral {
             continue;
@@ -439,35 +430,6 @@ mod building_intent_tests {
     }
 
     #[test]
-    fn bot_structure_ratio_targets_follow_openfront_like_values() {
-        let city_equivalent = 10;
-        let sam_vanilla = bot_structure_target_count(
-            BuildingKind::SamLauncher,
-            city_equivalent,
-            crate::game_config::BotDifficulty::Vanilla,
-        );
-        let sam_terminator = bot_structure_target_count(
-            BuildingKind::SamLauncher,
-            city_equivalent,
-            crate::game_config::BotDifficulty::Terminator,
-        );
-        let ports = bot_structure_target_count(
-            BuildingKind::Port,
-            city_equivalent,
-            crate::game_config::BotDifficulty::Terminator,
-        );
-        let silos = bot_structure_target_count(
-            BuildingKind::MissileSilo,
-            city_equivalent,
-            crate::game_config::BotDifficulty::Terminator,
-        );
-        assert_eq!(sam_vanilla, 2);
-        assert_eq!(sam_terminator, 3);
-        assert_eq!(ports, 7);
-        assert_eq!(silos, 2);
-    }
-
-    #[test]
     fn build_intent_rejects_disabled_missile_structures() {
         let mut world = World::new();
         world.insert_resource(tiny_owned_game_state());
@@ -542,8 +504,7 @@ mod building_intent_tests {
             app.insert_resource(WaterComponents::compute(&g.map));
         }
         app.insert_resource(crate::pathfinding::WaterPathfinderScratch::default());
-        let mut cfg = crate::game_config::GameConfig::default();
-        cfg.bot_difficulty = crate::game_config::BotDifficulty::Terminator;
+        let cfg = crate::game_config::GameConfig::default();
         app.insert_resource(cfg);
         app.add_systems(bevy::prelude::Update, system_bot_think);
 

@@ -159,7 +159,7 @@ pub fn spawn_shader_map(
     let material = crate::rendering::BorderMaterial {
         board_data: board_handle.clone(),
         uniforms: crate::rendering::BorderUniforms {
-            border_color: LinearRgba::new(0.6, 0.6, 0.6, 1.0),
+            border_color: LinearRgba::new(0.45, 0.45, 0.45, 1.0),
             border_thickness: Vec4::new(1.0, 0.0, 0.0, 0.0),
             texture_size: Vec4::new(width as f32, height as f32, 0.0, 0.0),
             time: Vec4::new(0.0, 0.0, 0.0, 0.0),

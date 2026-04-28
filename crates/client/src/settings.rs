@@ -14,7 +14,11 @@ fn default_attack_ratio() -> f32 {
 
 /// Default HUD / map feedback scale (plan: ~2× vs legacy hardcoded sizes).
 fn default_hud_scale_2() -> f32 {
-    2.0
+    1.0
+}
+
+fn default_hud_scale_0_9() -> f32 {
+    0.9
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -83,6 +87,9 @@ pub struct UiSettingsConfig {
     /// Bottom combat HUD: fonts, row paddings, slider, gaps (`spawn_bottom_combat_hud` + row sync).
     #[serde(default = "default_hud_scale_2")]
     pub combat_hud_scale: f32,
+    /// HUD scale override for mobile (compact breakpoint).
+    #[serde(default = "default_hud_scale_0_9")]
+    pub mobile_hud_scale: f32,
     /// Show outgoing `WarpFleet` payload rows with recall (OpenFront `AttacksDisplay` transport list).
     #[serde(default = "default_true")]
     pub combat_hud_fleet_rows: bool,
@@ -102,7 +109,8 @@ impl Default for UiSettingsConfig {
             fleet_boat_scale: 2.0,
             fleet_target_ring_scale: 2.0,
             fleet_wake_scale: 2.0,
-            combat_hud_scale: 2.0,
+            combat_hud_scale: 1.0,
+            mobile_hud_scale: 0.9,
             combat_hud_fleet_rows: true,
         }
     }

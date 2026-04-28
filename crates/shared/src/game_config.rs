@@ -1,11 +1,34 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub enum BotDifficulty {
-    BrainDead,
-    #[default]
-    Vanilla,
-    Terminator,
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct BotConfig {
+    pub attack_interval_base: u64,
+    pub trigger_ratio: f64,
+    pub reserve_ratio: f64,
+    pub expand_ratio: f64,
+    pub random_attack_div: i32,
+    pub sam_ratio: f64,
+    pub defense_post_ratio: f64,
+    pub port_ratio: f64,
+    pub factory_ratio: f64,
+    pub silo_ratio: f64,
+}
+
+impl Default for BotConfig {
+    fn default() -> Self {
+        Self {
+            attack_interval_base: 250,
+            trigger_ratio: 0.6,
+            reserve_ratio: 0.3,
+            expand_ratio: 0.15,
+            random_attack_div: 5,
+            sam_ratio: 0.20,
+            defense_post_ratio: 0.25,
+            port_ratio: 0.75,
+            factory_ratio: 0.75,
+            silo_ratio: 0.20,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, bevy::prelude::Resource)]
@@ -31,7 +54,7 @@ impl Default for BotProfile {
 pub struct GameConfig {
     pub max_players: u32,
     pub bot_count: u32,
-    pub bot_difficulty: BotDifficulty,
+    pub bot: BotConfig,
 
     // Map Config
     pub map_name: String,
@@ -42,6 +65,8 @@ pub struct GameConfig {
     pub tick_rate_ms: f32,
     pub attack_cost_enemy: f64,
     pub attack_cost_neutral: f64,
+    pub neutral_expansion_multiplier: f64,
+    pub pvp_expansion_multiplier: f64,
     pub bot_attack_interval_ticks: u64,
     
     // Economy Modifiers
@@ -63,7 +88,7 @@ impl Default for GameConfig {
         Self {
             max_players: 12,
             bot_count: 200,
-            bot_difficulty: BotDifficulty::Vanilla,
+            bot: BotConfig::default(),
             map_name: "europe".to_string(),
             map_width: 2904,
             map_height: 1672,
@@ -71,6 +96,8 @@ impl Default for GameConfig {
             tick_rate_ms: 100.0,
             attack_cost_enemy: 5.0,
             attack_cost_neutral: 1.0,
+            neutral_expansion_multiplier: 0.4,
+            pvp_expansion_multiplier: 0.5,
             bot_attack_interval_ticks: 24,
             starting_troops: 100.0,
             starting_gold: 250.0,

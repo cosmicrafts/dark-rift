@@ -21,10 +21,16 @@ pub struct BottomHudTroops;
 pub struct BottomHudGold;
 
 #[derive(Component)]
+pub struct BottomHudPanel;
+
+#[derive(Component)]
 pub struct AttackRatioTrack;
 
 #[derive(Component)]
 pub struct AttackRatioFill;
+
+#[derive(Component)]
+pub struct AttackRatioHandle;
 
 #[derive(Component)]
 pub struct AttackRatioReadout;
@@ -45,6 +51,9 @@ pub struct ExitButton;
 pub struct SettingsButton;
 
 #[derive(Component)]
+pub struct DevStatsPill;
+
+#[derive(Component)]
 pub struct CancelAttackButton(pub u64);
 
 #[derive(Component)]
@@ -52,22 +61,36 @@ pub struct CancelFleetButton(pub u64);
 
 pub fn system_apply_responsive_hud_layout(
     ui_shell: Res<UiShellState>,
+    settings: Res<crate::ClientSettings>,
     mut nodes: ParamSet<(
-        Query<&mut Node, With<BottomHudRoot>>,
-        Query<&mut Node, With<AttackRatioTrack>>,
-        Query<&mut Node, With<OutgoingRowsContainer>>,
-        Query<&mut Node, (With<HomeButton>, With<Button>)>,
-        Query<&mut Node, (With<ExitButton>, With<Button>)>,
+        Query<(&mut Node, &mut BackgroundColor), With<BottomHudRoot>>,   // p0
+        Query<&mut Node, With<AttackRatioTrack>>,                         // p1
+        Query<&mut Node, With<OutgoingRowsContainer>>,                    // p2
+        Query<&mut Node, (With<HomeButton>, With<Button>)>,               // p3
+        Query<&mut Node, (With<ExitButton>, With<Button>)>,               // p4
+        Query<(&mut BackgroundColor, &mut BorderColor, &mut Node), With<crate::ui::hud_build::BuildPillRow>>,  // p5
+        Query<(&mut BackgroundColor, &mut BorderColor, &mut Node), With<BottomHudPanel>>, // p6
+        Query<&mut Node, With<crate::ui::hud_build::BuildPillButton>>,    // p7
     )>,
+    mut q_icons: Query<(&mut Node, &mut Visibility), With<crate::ui::setup::BuildPillIcon>>,
+    mut q_hotkeys: Query<&mut Visibility, (With<crate::ui::setup::BuildPillHotkey>, Without<crate::ui::setup::BuildPillIcon>)>,
 ) {
     let compact = matches!(ui_shell.breakpoint, UiBreakpoint::Compact);
 
     {
         let mut root_q = nodes.p0();
-        let Ok(mut root_node) = root_q.single_mut() else {
+        let Ok((mut root_node, mut root_bg)) = root_q.single_mut() else {
             return;
         };
-        root_node.row_gap = Val::Px(if compact { 8.0 } else { 6.0 });
+        if compact {
+            root_node.row_gap = Val::Px(0.0);
+            root_node.padding = UiRect::ZERO;
+            root_bg.0 = Color::srgba(0.0, 0.0, 0.0, 0.55);
+        } else {
+            root_node.row_gap = Val::Px(6.0);
+            root_node.padding = UiRect::bottom(Val::Px(16.0 * crate::clamp_ui_scale(settings.config.ui.combat_hud_scale)));
+            root_bg.0 = Color::NONE;
+        }
     }
 
     {
@@ -83,16 +106,36 @@ pub fn system_apply_responsive_hud_layout(
         let Ok(mut outgoing_node) = outgoing_q.single_mut() else {
             return;
         };
-        outgoing_node.max_height = Val::Px(if compact { 180.0 } else { 220.0 });
+        if compact {
+            outgoing_node.max_height = Val::Px(140.0); // limit height, but show
+            outgoing_node.display = Display::Flex;
+            outgoing_node.width = Val::Percent(100.0);
+            outgoing_node.max_width = Val::Percent(100.0);
+            outgoing_node.min_width = Val::Auto;
+            outgoing_node.padding = UiRect::axes(Val::Px(4.0), Val::Px(4.0));
+        } else {
+            outgoing_node.max_height = Val::Px(220.0);
+            outgoing_node.display = Display::Flex;
+            outgoing_node.width = Val::Percent(96.0);
+            outgoing_node.max_width = Val::Px(800.0 * crate::clamp_ui_scale(settings.config.ui.combat_hud_scale));
+        }
     }
 
     {
         let mut home_q = nodes.p3();
         if let Ok(mut home_node) = home_q.single_mut() {
-            let size = home_button_size_for_breakpoint(ui_shell.breakpoint);
-            home_node.width = Val::Px(home_button_width_for_breakpoint(ui_shell.breakpoint));
-            home_node.height = Val::Px(size);
-            home_node.border_radius = BorderRadius::all(Val::Px(if compact { 10.0 } else { 12.0 }));
+            if compact {
+                // Match the smaller compact cell size
+                let cell = 38.0;
+                home_node.width = Val::Px(cell);
+                home_node.height = Val::Px(cell);
+                home_node.border_radius = BorderRadius::all(Val::Px(4.0));
+            } else {
+                let size = home_button_size_for_breakpoint(ui_shell.breakpoint);
+                home_node.width = Val::Px(home_button_width_for_breakpoint(ui_shell.breakpoint));
+                home_node.height = Val::Px(size);
+                home_node.border_radius = BorderRadius::all(Val::Px(12.0));
+            }
         }
     }
     {
@@ -103,6 +146,96 @@ pub fn system_apply_responsive_hud_layout(
             exit_node.height = Val::Px(size);
             exit_node.border_radius = BorderRadius::all(Val::Px(if compact { 10.0 } else { 12.0 }));
         }
+    }
+    
+    {
+        let mut build_q = nodes.p5();
+        if let Ok((mut bg, mut border, mut node)) = build_q.single_mut() {
+            if compact {
+                // Transparent — unified background on BottomHudRoot
+                bg.0 = Color::NONE;
+                *border = BorderColor::all(Color::NONE);
+                node.flex_wrap = FlexWrap::NoWrap;
+                node.max_width = Val::Percent(100.0);
+                node.width = Val::Percent(100.0);
+                node.border_radius = BorderRadius::ZERO;
+                node.padding = UiRect::axes(Val::Px(4.0), Val::Px(6.0));
+                node.column_gap = Val::Px(2.0);
+                node.justify_content = JustifyContent::SpaceEvenly;
+            } else {
+                bg.0 = Color::srgba(0.04, 0.05, 0.08, 0.92);
+                *border = BorderColor::all(panel_border());
+                node.flex_wrap = FlexWrap::Wrap;
+                node.border_radius = BorderRadius::all(Val::Px(6.0 * settings.config.ui.combat_hud_scale));
+                let s = crate::clamp_ui_scale(settings.config.ui.combat_hud_scale);
+                node.padding = UiRect::all(Val::Px(8.0 * s));
+                node.column_gap = Val::Px(4.0 * s);
+                node.justify_content = JustifyContent::Center;
+                let (cell, gap, pad) = crate::ui::shell::action_dock_grid_layout_sizes(s);
+                node.max_width = Val::Px(3.0_f32.mul_add(cell, 2.0 * gap) + pad * 2.0 + 4.0); // 3 cols
+            }
+        }
+    }
+    
+    {
+        let mut panel_q = nodes.p6();
+        if let Ok((mut bg, mut border, mut node)) = panel_q.single_mut() {
+            if compact {
+                // Transparent — the shared BottomHudRoot bg covers everything
+                bg.0 = Color::NONE;
+                *border = BorderColor::all(Color::NONE);
+                node.border_radius = BorderRadius::ZERO;
+                node.max_width = Val::Percent(100.0);
+                node.width = Val::Percent(100.0);
+                node.padding = UiRect::axes(Val::Px(4.0), Val::Px(6.0));
+            } else {
+                bg.0 = Color::srgba(0.1, 0.1, 0.15, 0.85);
+                node.border_radius = BorderRadius::all(Val::Px(12.0 * settings.config.ui.combat_hud_scale));
+                node.max_width = Val::Px(800.0 * settings.config.ui.combat_hud_scale);
+                node.width = Val::Percent(96.0);
+                node.padding = UiRect::all(Val::Px(12.0 * settings.config.ui.combat_hud_scale));
+            }
+        }
+    }
+
+    {
+        let mut build_btns = nodes.p7();
+        let s = crate::clamp_ui_scale(settings.config.ui.combat_hud_scale);
+        let normal_cell = crate::ui::shell::action_dock_grid_layout_sizes(s).0;
+        let compact_cell = 38.0; // smaller buttons for mobile to fit 7 elements
+        
+        for mut btn in build_btns.iter_mut() {
+            if compact {
+                btn.width = Val::Px(compact_cell);
+                btn.height = Val::Px(compact_cell);
+                btn.justify_content = JustifyContent::Center;
+                btn.align_items = AlignItems::Center;
+                btn.padding = UiRect::ZERO;
+                btn.row_gap = Val::Px(0.0);
+            } else {
+                btn.width = Val::Px(normal_cell);
+                btn.height = Val::Px(normal_cell);
+                btn.justify_content = JustifyContent::FlexStart;
+                btn.align_items = AlignItems::Stretch;
+            }
+        }
+    }
+    
+    {
+        let icon_size = if compact { 22.0 } else {
+            let s = crate::clamp_ui_scale(settings.config.ui.combat_hud_scale);
+            crate::ui::shell::action_dock_grid_layout_sizes(s).0 * 0.55
+        };
+        for (mut node, mut vis) in q_icons.iter_mut() {
+            node.width = Val::Px(icon_size);
+            node.height = Val::Px(icon_size);
+            *vis = Visibility::Visible;
+        }
+    }
+
+    for mut vis in q_hotkeys.iter_mut() {
+        // Hide hotkey numbers on compact — no space
+        *vis = if compact { Visibility::Hidden } else { Visibility::Visible };
     }
 }
 
@@ -175,6 +308,17 @@ pub fn system_sync_bottom_combat_hud(
             Without<AttackRatioReadout>,
             Without<AttackRatioTrack>,
             Without<AttackRatioBarShell>,
+            Without<AttackRatioHandle>,
+        ),
+    >,
+    mut q_handle: Query<
+        &mut Node,
+        (
+            With<AttackRatioHandle>,
+            Without<AttackRatioReadout>,
+            Without<AttackRatioTrack>,
+            Without<AttackRatioBarShell>,
+            Without<AttackRatioFill>,
         ),
     >,
 ) {
@@ -191,8 +335,9 @@ pub fn system_sync_bottom_combat_hud(
     }
 
     let s = clamp_ui_scale(settings.config.ui.combat_hud_scale);
-    readout_font.font_size = 18.0 * s;
-    readout_node.width = Val::Px(180.0 * s);
+    let compact = settings.config.ui.combat_hud_scale < 1.0;
+    readout_font.font_size = if compact { 13.0 * s } else { 18.0 * s };
+    readout_node.width = Val::Px(if compact { 90.0 * s } else { 110.0 * s });
     if let Ok(mut n) = q_track.single_mut() {
         n.height = Val::Px(32.0 * s);
     }
@@ -204,6 +349,9 @@ pub fn system_sync_bottom_combat_hud(
     let r = attack_ratio.0.clamp(0.01, 1.0);
     if let Ok(mut fill) = q_fill.single_mut() {
         fill.width = Val::Percent(r * 100.0);
+    }
+    if let Ok(mut handle) = q_handle.single_mut() {
+        handle.left = Val::Percent(r * 100.0);
     }
 
     // Economy Sync
@@ -401,6 +549,26 @@ pub fn system_handle_recall_fleet_click(
             let _ = sender.send::<ReliableChannel>(ClientGameplayMessage {
                 intent: GameplayIntent::RecallFleet { fleet_id },
             });
+        }
+    }
+}
+
+/// Toggle dev stats pill visibility when the Settings button is pressed.
+pub fn system_settings_toggle_devstats(
+    mut interaction_q: Query<
+        &Interaction,
+        (Changed<Interaction>, With<SettingsButton>),
+    >,
+    mut q_pill: Query<&mut Node, With<DevStatsPill>>,
+) {
+    for interaction in interaction_q.iter_mut() {
+        if *interaction == Interaction::Pressed {
+            for mut node in q_pill.iter_mut() {
+                node.display = match node.display {
+                    Display::None => Display::Flex,
+                    _ => Display::None,
+                };
+            }
         }
     }
 }

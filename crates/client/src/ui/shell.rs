@@ -96,6 +96,7 @@ pub fn setup_hud_shell(mut commands: Commands) {
                 position_type: PositionType::Absolute,
                 ..default()
             },
+            ZIndex(50),
         ))
         .id();
     let action_dock = commands
@@ -106,6 +107,7 @@ pub fn setup_hud_shell(mut commands: Commands) {
                 position_type: PositionType::Absolute,
                 ..default()
             },
+            ZIndex(100),
         ))
         .id();
 
@@ -118,6 +120,8 @@ pub fn setup_hud_shell(mut commands: Commands) {
 
 pub fn system_update_ui_shell_state(
     mut state: ResMut<UiShellState>,
+    mut dock_scale: ResMut<CombatDockUiScale>,
+    settings: Option<Res<crate::ClientSettings>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
 ) {
     let Ok(window) = windows.single() else { return };
@@ -146,6 +150,13 @@ pub fn system_update_ui_shell_state(
         inset_bottom: inset,
         inset_left: inset,
     };
+
+    if let Some(s) = settings {
+        dock_scale.0 = crate::clamp_ui_scale(match breakpoint {
+            UiBreakpoint::Compact => s.config.ui.mobile_hud_scale,
+            _ => s.config.ui.combat_hud_scale,
+        });
+    }
 }
 
 pub fn system_apply_ui_shell_layout(
@@ -166,33 +177,57 @@ pub fn system_apply_ui_shell_layout(
         top.top = Val::Px(state.inset_top);
         top.flex_direction = FlexDirection::Row;
         top.justify_content = JustifyContent::SpaceBetween;
-        top.align_items = AlignItems::Center;
+        top.align_items = AlignItems::FlexStart;
         top.column_gap = Val::Px(SPACE_2);
     }
 
     {
         let mut bottom_q = regions.p1();
         let Ok(mut bottom) = bottom_q.single_mut() else { return };
-        // Same bottom inset as the action dock so combat HUD sits flush with HOME vertically.
-        // Reserve the bottom-right corner so the centered column does not sit under the build grid + HOME.
-        let dock_reserve = action_dock_content_reserve_width(state.breakpoint, dock_scale.0);
+        // Center the bottom combat HUD on all breakpoints.
+        let compact = matches!(state.breakpoint, UiBreakpoint::Compact);
+        
         bottom.left = Val::Px(state.inset_left);
-        bottom.right = Val::Px(state.inset_right + dock_reserve);
-        bottom.bottom = Val::Px(state.inset_bottom);
+        bottom.right = Val::Px(state.inset_right);
+        
+        if compact {
+            // Stack the attack bar vertically ABOVE the action dock on mobile.
+            // Action dock height is its cell size plus padding.
+            let dock_reserve_h = action_dock_grid_layout_sizes(dock_scale.0).0 + 8.0 * dock_scale.0;
+            bottom.bottom = Val::Px(state.inset_bottom + dock_reserve_h);
+        } else {
+            bottom.bottom = Val::Px(state.inset_bottom);
+        }
+        
         bottom.flex_direction = FlexDirection::Column;
         bottom.justify_content = JustifyContent::FlexEnd;
         bottom.align_items = AlignItems::Center;
+        // Ensure Action Dock draws on top if there is any overlap on narrow desktop windows.
+        // Wait, z-index is set on spawn or through the hierarchy. ActionDockRegion is sibling to BottomSheetRegion.
     }
 
     {
         let mut dock_q = regions.p2();
         let Ok(mut dock) = dock_q.single_mut() else { return };
-        dock.right = Val::Px(state.inset_right);
-        dock.bottom = Val::Px(state.inset_bottom);
-        dock.flex_direction = FlexDirection::Row;
-        dock.justify_content = JustifyContent::FlexEnd;
-        dock.align_items = AlignItems::FlexEnd;
-        dock.column_gap = Val::Px(SPACE_2);
+        let compact = matches!(state.breakpoint, UiBreakpoint::Compact);
+        if compact {
+            // Full-width bottom strip on mobile
+            dock.left = Val::Px(state.inset_left);
+            dock.right = Val::Px(state.inset_right);
+            dock.bottom = Val::Px(state.inset_bottom);
+            dock.flex_direction = FlexDirection::Row;
+            dock.justify_content = JustifyContent::Center;
+            dock.align_items = AlignItems::FlexEnd;
+            dock.column_gap = Val::Px(SPACE_2);
+        } else {
+            dock.left = Val::Auto;
+            dock.right = Val::Px(state.inset_right);
+            dock.bottom = Val::Px(state.inset_bottom);
+            dock.flex_direction = FlexDirection::Row;
+            dock.justify_content = JustifyContent::FlexEnd;
+            dock.align_items = AlignItems::FlexEnd;
+            dock.column_gap = Val::Px(SPACE_2);
+        }
     }
 }
 

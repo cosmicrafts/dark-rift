@@ -282,6 +282,7 @@ fn main() {
             player_click,
             system_force_boat_key,
             system_exit_button,
+            system_settings_toggle_devstats,
         ).run_if(in_state(AppState::InGame)));
 
         app.add_systems(Update, (
