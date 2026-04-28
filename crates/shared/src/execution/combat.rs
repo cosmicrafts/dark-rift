@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::building::{defense_post_priority_bonus, Building};
+use crate::building::{Building, DefenseGrid};
 use crate::config;
 use crate::game::{GameEvent, GamePhase, GameState};
 use crate::map::TerrainType;
@@ -18,6 +18,7 @@ pub fn system_attack_execution(
     q_building: Query<&Building>,
     mut scratch_ordered: Local<Vec<(Entity, u64)>>,
     mut buildings_scratch: Local<Vec<Building>>,
+    mut defense_grid: Local<DefenseGrid>,
 ) {
     let Some(mut game) = game_opt else { return };
     if game.phase != GamePhase::Playing {
@@ -39,6 +40,9 @@ pub fn system_attack_execution(
 
     for &(entity, _) in scratch_ordered.iter() {
         let Ok((_, mut execution)) = query.get_mut(entity) else { continue };
+
+        // Pre-filter defense posts into a spatial grid to crush the O(N^2) scan down to O(1)
+        defense_grid.rebuild(buildings, map_w, game.map.height, 16, execution.target_owner);
 
         if execution.retreating {
             let refund = execution.troops.max(0.0);
@@ -141,9 +145,7 @@ pub fn system_attack_execution(
                     };
 
                     // Defense posts increase attacker losses slightly
-                    let dp_bonus = crate::building::defense_post_priority_bonus(
-                        buildings,
-                        execution.target_owner,
+                    let dp_bonus = defense_grid.priority_bonus(
                         target_tile.x,
                         target_tile.y,
                         map_w,
@@ -180,9 +182,7 @@ pub fn system_attack_execution(
 
                     let terrain = game.map.terrain_type(nx, ny);
                     let mut prio = execution.calc_priority(num_owned_by_me, terrain, tick_now);
-                    prio += defense_post_priority_bonus(
-                        buildings,
-                        execution.target_owner,
+                    prio += defense_grid.priority_bonus(
                         nx,
                         ny,
                         map_w,

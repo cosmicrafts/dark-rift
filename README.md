@@ -108,6 +108,14 @@ fn clear_inputs_on_focus_loss(
 * **Commit:** `fdb15da` (April 13, 2026)
 * **Files Modified:** `crates/client/src/main.rs`, `crates/client/src/gameplay/input.rs`
 
+### 16. The Stateless Entropy Trap (Tick-Based PRNG Hash Collision)
+When porting the bots, we initially seeded a *new* PRNG every tick by hashing `game.seed + game.tick + bot_id`. This seemed deterministic, but it suffered from fatal network desync: if a local client executed a bot intent one tick earlier or later due to network latency interpolation, the `game.tick` hash changed completely, yielding a totally different random outcome and irreversibly splitting the timeline.
+* **The Poka-Yoke (Mistake-Proofing):** Never use ephemeral "tick hashes" to drive continuous random logic. Entropy must be **stateful and persistent**. We migrated the entire engine to `bevy_rand` with the `WyRand` algorithm. Each Bot (`Player`) and `AttackExecution` now owns its own strictly serializable `WyRand` property. The entropy stream flows continuously and is natively synchronized over the network by Bevy, making bot decisions completely immune to tick-jitter.
+
+### 17. The Git Master Dependency Trap (WASM Compilation Death)
+During the RNG migration, we cloned a repository that referenced Bevy's `main` branch directly (`git = "https://github.com/bevyengine/bevy"`). While it worked locally, mixing a git dependency with our `bevy = "0.18"` from crates.io caused `cargo` to compile two completely different versions of the engine (0.19-dev and 0.18). This exploded the WebAssembly build pipeline because sub-dependencies like `getrandom` misaligned their feature flags (`wasm_js`).
+* **The Poka-Yoke (Mistake-Proofing):** Never use `git = ...` dependencies for core architectural components (like ECS or math engines) unless you are ready to fork the entire ecosystem. Always use strict `crates.io` versioning (e.g., `version = "0.14"`) to guarantee feature-flag alignment across complex compile targets like WASM.
+
 ---
 ### 🤖 OpenClaw Integration Test
 This repository is currently being orchestrated and optimized via OpenClaw AI. Automated deployments, config management, and stress-testing logic have been validated.

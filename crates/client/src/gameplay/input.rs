@@ -277,7 +277,7 @@ pub fn player_click(
     }
 
     // OpenFront `canAttack` / `canBoatAttack` decision tree:
-    let border_tiles: &[u32] = &player.border_tiles;
+    let border_tiles = &player.border_tiles;
 
     let can_ground_attack = if target_owner != 0 {
         shares_border_with(&game.map, border_tiles, target_owner)

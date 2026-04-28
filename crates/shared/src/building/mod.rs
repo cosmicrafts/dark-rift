@@ -257,9 +257,9 @@ mod tests {
             under_construction: false,
             ticks_until_complete: 0,
         };
-        let bonus = defense_post_priority_bonus(&[b], 2, 10, 10, w);
+        let bonus = defense_post_priority_bonus(&[b], 10, 10, w);
         assert_eq!(bonus, 2 * crate::config::DEFENSE_POST_PRIORITY_PER_LEVEL);
-        let bonus_far = defense_post_priority_bonus(&[b], 2, 0, 0, w);
+        let bonus_far = defense_post_priority_bonus(&[b], 0, 0, w);
         assert_eq!(bonus_far, 0);
     }
 

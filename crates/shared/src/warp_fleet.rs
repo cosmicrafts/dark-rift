@@ -187,7 +187,7 @@ pub fn player_has_water_access(
     map: &GameMap,
     components: &WaterComponents,
     player_id: u16,
-    border_tiles: &[u32],
+    border_tiles: &std::collections::BTreeSet<u32>,
 ) -> bool {
     let w = map.width;
     for &idx in border_tiles {

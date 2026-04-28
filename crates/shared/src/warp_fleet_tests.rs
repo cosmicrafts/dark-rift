@@ -76,7 +76,7 @@ fn frontier_nonempty_after_manual_landing_tile() {
     game.set_tile_owner(14, 0, 1);
     let mut rng = WyRand::seed_from_u64(1);
     let mut seq = 0u32;
-    let border = game.player(1).unwrap().border_coords(game.map.width);
+    let border: Vec<_> = game.player(1).unwrap().border_coords(game.map.width).collect();
     assert!(border.contains(&(14, 0)));
     let heap = build_attack_frontier(&game, 1, 2, &border, &mut rng, &mut seq);
     assert!(!heap.is_empty(), "expected attack frontier toward player 2");
@@ -155,7 +155,7 @@ fn resolve_fleet_route_ok_same_water_component() {
         2,
         4,
         &[0u32],
-        Some(&[2u32, 4u32]),
+        Some(&[2u32, 4u32] as &[u32]),
         true,
     )
     .expect("route");
@@ -188,7 +188,7 @@ fn resolve_fleet_route_err_no_landing_wrong_component() {
         2,
         4,
         &[0u32],
-        Some(&[4u32]),
+        Some(&[4u32] as &[u32]),
         true,
     )
     .unwrap_err();
@@ -251,7 +251,7 @@ fn resolve_fleet_route_err_no_port() {
         2,
         4,
         &[0u32],
-        Some(&[2u32, 4u32]),
+        Some(&[2u32, 4u32] as &[u32]),
         false,
     )
     .unwrap_err();

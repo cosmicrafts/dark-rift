@@ -50,7 +50,9 @@ pub struct Player {
     pub sum_y: u64,
     /// Number of tiles owned by the player.
     pub tile_count: u32,
-    /// Deterministic, strictly sorted cache of linear indices of border tiles.
+    /// Flat cache of linear indices of border tiles. Order is insertion-deterministic
+    /// across all platforms because the simulation loop is deterministic.
+    /// Uses Vec for contiguous-memory iteration (cache-line friendly on every tick).
     pub border_tiles: Vec<u32>,
     /// RNG stream for bot logic. Persists across ticks and serializes natively.
     pub bot_rng: WyRand,
@@ -72,7 +74,7 @@ impl Player {
             sum_x: 0,
             sum_y: 0,
             tile_count: 0,
-            border_tiles: Vec::with_capacity(512),
+            border_tiles: Vec::new(),
             bot_rng: WyRand::seed_from_u64(id as u64),
         }
     }
@@ -92,7 +94,7 @@ impl Player {
             sum_x: 0,
             sum_y: 0,
             tile_count: 0,
-            border_tiles: Vec::with_capacity(512),
+            border_tiles: Vec::new(),
             bot_rng: WyRand::seed_from_u64(id as u64),
         }
     }
@@ -103,8 +105,27 @@ impl Player {
     }
 
     /// Decode linear indices to (x, y) coordinates.
-    pub fn border_coords(&self, map_width: u32) -> Vec<(u32, u32)> {
-        self.border_tiles.iter().map(|&idx| (idx % map_width, idx / map_width)).collect()
+    pub fn border_coords(&self, map_width: u32) -> impl Iterator<Item = (u32, u32)> + '_ {
+        self.border_tiles.iter().map(move |&idx| (idx % map_width, idx / map_width))
+    }
+
+    /// Absolute spatial order insert via `binary_search`.
+    /// Guarantees strict determinism regardless of network arrival time,
+    /// and replaces O(N) contains with O(log N) search.
+    #[inline]
+    pub fn border_insert(&mut self, idx: u32) {
+        if let Err(pos) = self.border_tiles.binary_search(&idx) {
+            self.border_tiles.insert(pos, idx);
+        }
+    }
+
+    /// Absolute spatial order remove via `binary_search`.
+    /// `swap_remove` is completely banned by the determinism contract.
+    #[inline]
+    pub fn border_remove(&mut self, idx: u32) {
+        if let Ok(pos) = self.border_tiles.binary_search(&idx) {
+            self.border_tiles.remove(pos);
+        }
     }
 }
 

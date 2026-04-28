@@ -40,7 +40,7 @@ pub fn apply_launch_fleet_intent(
         return;
     }
 
-    let border_tiles: &[u32] = match game.player(player_id) {
+    let border_tiles = match game.player(player_id) {
         Some(p) => p.border_tiles.as_slice(),
         None => return,
     };

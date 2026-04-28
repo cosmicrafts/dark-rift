@@ -41,13 +41,18 @@ pub fn system_headless_bot_engine(
     let expand_ratio = bot_state.profile.expand_ratio;
     
     let player = game.player(bot_id).unwrap();
-    let border_tiles = player.border_coords(game.map.width);
+    let border_tiles: Vec<_> = player.border_coords(game.map.width).collect();
     if border_tiles.is_empty() { return; }
 
     let mut has_neutral = false;
     let mut player_targets = Vec::new();
+    let max_scan = border_tiles.len().min(256);
+    let mut bot_rng = WyRand::seed_from_u64(game.seed.wrapping_add(game.tick as u64).wrapping_add(1999));
+    let start_idx = bot_rng.next_int(0, border_tiles.len() as i32) as usize;
 
-    for &(bx, by) in &border_tiles {
+    for i in 0..max_scan {
+        let b_idx = (start_idx + i) % border_tiles.len();
+        let (bx, by) = border_tiles[b_idx];
         game.map.for_each_neighbor(bx, by, |nx, ny| {
             let owner = game.map.owner_id(nx, ny);
             if owner != bot_id {
@@ -59,8 +64,6 @@ pub fn system_headless_bot_engine(
             }
         });
     }
-
-    let mut bot_rng = WyRand::seed_from_u64(game.seed.wrapping_add(game.tick as u64).wrapping_add(1999));
 
     let (target_owner, is_neutral) = if has_neutral {
         (0, true)

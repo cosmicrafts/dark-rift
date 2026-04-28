@@ -7,6 +7,7 @@ use crate::game::{GamePhase, GameState};
 pub fn system_player_income(
     game_opt: Option<ResMut<GameState>>,
     q_building: Query<&Building>,
+    mut buildings_scratch: Local<Vec<Building>>,
 ) {
     let Some(mut game) = game_opt else { return };
     if game.phase != GamePhase::Playing {
@@ -14,8 +15,9 @@ pub fn system_player_income(
     }
 
     let max_pid = game.players.iter().map(|p| p.id as usize).max().unwrap_or(0);
-    let buildings: Vec<Building> = q_building.iter().copied().collect();
-    let aggs = aggregate_buildings_per_player(buildings.into_iter(), max_pid);
+    buildings_scratch.clear();
+    buildings_scratch.extend(q_building.iter().copied());
+    let aggs = aggregate_buildings_per_player(buildings_scratch.iter().copied(), max_pid);
 
     let GameState { map: _, players, .. } = &mut *game;
 

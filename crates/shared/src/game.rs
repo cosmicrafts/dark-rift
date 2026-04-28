@@ -219,24 +219,13 @@ impl GameState {
 
         let linear_idx = (y * self.map.width + x) as u32;
 
-        fn remove_sorted(vec: &mut Vec<u32>, val: u32) {
-            if let Ok(pos) = vec.binary_search(&val) {
-                vec.remove(pos);
-            }
-        }
-        fn insert_sorted(vec: &mut Vec<u32>, val: u32) {
-            if let Err(pos) = vec.binary_search(&val) {
-                vec.insert(pos, val);
-            }
-        }
-
         // Deduct from old owner
         if old_owner != 0 {
             if let Some(p) = self.player_mut(old_owner) {
                 p.sum_x = p.sum_x.saturating_sub(x as u64);
                 p.sum_y = p.sum_y.saturating_sub(y as u64);
                 p.tile_count = p.tile_count.saturating_sub(1);
-                remove_sorted(&mut p.border_tiles, linear_idx);
+                p.border_remove(linear_idx);
             }
         }
 
@@ -256,7 +245,7 @@ impl GameState {
             let is_border = self.map.is_border_tile(x, y, new_owner);
             if is_border {
                 if let Some(p) = self.player_mut(new_owner) {
-                    insert_sorted(&mut p.border_tiles, linear_idx);
+                    p.border_insert(linear_idx);
                 }
             }
         }
@@ -270,7 +259,7 @@ impl GameState {
             if n_owner == old_owner {
                 if old_owner != 0 {
                     if let Some(p) = self.player_mut(old_owner) {
-                        insert_sorted(&mut p.border_tiles, n_idx);
+                        p.border_insert(n_idx);
                     }
                 }
             } else if n_owner == new_owner {
@@ -278,7 +267,7 @@ impl GameState {
                     let is_border = self.map.is_border_tile(nx, ny, new_owner);
                     if !is_border {
                         if let Some(p) = self.player_mut(new_owner) {
-                            remove_sorted(&mut p.border_tiles, n_idx);
+                            p.border_remove(n_idx);
                         }
                     }
                 }

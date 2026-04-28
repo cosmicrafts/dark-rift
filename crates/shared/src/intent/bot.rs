@@ -3,7 +3,7 @@ use crate::game::GameState;
 use crate::protocol::*;
 use crate::building::{Building, existing_structure_positions_with_width, structure_kind_enabled, structure_build_cost_gold, resolve_structure_spawn_tile};
 use crate::execution::AttackExecution;
-use crate::rng::NextIntExt;
+use crate::rng::{NextIntExt, WyRand, SeedableRng};
 use crate::config;
 use crate::water_components::WaterComponents;
 use crate::intent::apply_stamped_intent;
@@ -66,26 +66,43 @@ pub fn system_bot_think(
         };
 
     let mut schedule: Vec<(u16, u64, u64)> = Vec::new();
-    for p in game.players.iter_mut() {
+    let mut any_structures = false;
+    for p in game.players.iter() {
         if p.is_human() || !p.alive {
             continue;
         }
         let bot_id = p.id;
-        let interval = p.bot_rng
+        let mut sched_rng = WyRand::seed_from_u64(
+            game.seed.wrapping_add(bot_id as u64).wrapping_add(attack_interval_base as u64)
+        );
+        let interval = sched_rng
             .next_int(attack_interval_base as i32, (attack_interval_base as i32 * 2).max(1))
             .max(1) as u64;
-        let offset = p.bot_rng.next_int(0, interval as i32) as u64;
+        let offset = sched_rng.next_int(0, interval as i32) as u64;
         schedule.push((bot_id, interval, offset));
+        
+        let phase = tick % interval;
+        let one_third = (offset + interval / 3) % interval;
+        let two_thirds = (offset + (interval * 2) / 3) % interval;
+        let do_attack = phase == offset;
+        let do_structures = do_attack || phase == one_third || phase == two_thirds;
+        if do_structures {
+            any_structures = true;
+        }
     }
     schedule.sort_unstable_by_key(|(bot_id, _, _)| *bot_id);
     if schedule.is_empty() {
         return;
     }
 
-    let mut buildings_snapshot: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
-    buildings_snapshot.sort_unstable_by_key(|b| b.id);
-    let structure_positions =
-        existing_structure_positions_with_width(buildings_snapshot.iter(), game.map.width, None);
+    let mut buildings_snapshot: Vec<Building> = Vec::new();
+    let mut structure_positions = Vec::new();
+    if any_structures {
+        buildings_snapshot = q_building.iter().map(|(_, b)| *b).collect();
+        buildings_snapshot.sort_unstable_by_key(|b| b.id);
+        structure_positions =
+            existing_structure_positions_with_width(buildings_snapshot.iter(), game.map.width, None);
+    }
     let mut decisions: Vec<BotDecision> = Vec::new();
 
     for (bot_id, interval, offset) in schedule {
@@ -129,24 +146,25 @@ pub fn system_bot_think(
                     continue;
                 }
                 let cost = structure_build_cost_gold(kind, bot_id, &buildings_snapshot);
-                let Some(bot_now) = game.player(bot_id) else { continue; };
+                let mut tile_choice: Option<u32> = None;
+                let map_w = game.map.width;
+                let Some(bot_now) = game.player_mut(bot_id) else { continue; };
                 if bot_now.gold < cost {
                     continue;
                 }
 
-                let mut tile_choice: Option<u32> = None;
-                let max_scan = (game.map.width.saturating_mul(game.map.height)).min(2048);
-                for i in 0..max_scan {
-                    let idx = ((i as u64 * (game.map.width as u64) * (game.map.height as u64))
-                        / max_scan.max(1) as u64) as u32;
-                    let x = idx % game.map.width;
-                    let y = idx / game.map.width;
-                    if game.map.owner_id(x, y) != bot_id {
-                        continue;
-                    }
+                // PERF: resolve_structure_spawn_tile allocates vec![false; map_area]
+                // internally (BFS visited array). On a 2000x1200 map that's 2.4MB per call.
+                // With 400 bots × 6 kinds × 256 attempts = OOM / freeze.
+                // Fix: try exactly ONE random border tile. If it fails, wait until next tick.
+                let border_len = bot_now.border_tiles.len();
+                if border_len > 0 {
+                    let pick = bot_now.bot_rng.next_int(0, border_len as i32) as usize;
+                    let raw_idx = bot_now.border_tiles[pick];
+                    let (bx, by) = (raw_idx % map_w, raw_idx / map_w);
+                    let idx = by * map_w + bx;
                     if resolve_structure_spawn_tile(&game.map, bot_id, kind, idx, &structure_positions).is_some() {
                         tile_choice = Some(idx);
-                        break;
                     }
                 }
                 let Some(target_tile) = tile_choice else {
@@ -168,14 +186,21 @@ pub fn system_bot_think(
             let Some(player) = game.player(bot_id) else {
                 continue;
             };
-            (player.troops, player.max_troops, player.border_coords(game.map.width))
+            (player.troops, player.max_troops, player.border_coords(game.map.width).collect::<Vec<_>>())
         };
         if border_tiles.is_empty() {
             continue;
         }
         let mut has_neutral = false;
         let mut player_targets = Vec::new();
-        for &(bx, by) in &border_tiles {
+        let max_scan = border_tiles.len().min(256);
+        let start_idx = {
+             let p_mut = game.player_mut(bot_id).unwrap();
+             p_mut.bot_rng.next_int(0, border_tiles.len() as i32) as usize
+        };
+        for i in 0..max_scan {
+            let b_idx = (start_idx + i) % border_tiles.len();
+            let (bx, by) = border_tiles[b_idx];
             game.map.for_each_neighbor(bx, by, |nx, ny| {
                 let owner = game.map.owner_id(nx, ny);
                 if owner != bot_id {

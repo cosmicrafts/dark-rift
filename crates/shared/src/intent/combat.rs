@@ -103,7 +103,7 @@ pub fn spawn_or_merge_attack_for_fleet_arrival(
     let Some(player) = game.player(owner_id) else {
         return;
     };
-    let border_tiles = player.border_coords(game.map.width);
+    let border_tiles: Vec<_> = player.border_coords(game.map.width).collect();
     let fresh = build_attack_frontier(
         game,
         owner_id,
@@ -244,7 +244,7 @@ pub fn apply_attack_intent(
             .wrapping_add(intent_index as u64),
     );
     let mut initial_seq = 0;
-    let border_tiles = game.player(player_id).unwrap().border_coords(game.map.width);
+    let border_tiles: Vec<_> = game.player(player_id).unwrap().border_coords(game.map.width).collect();
     let fresh = build_attack_frontier(
         game,
         player_id,
