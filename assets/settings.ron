@@ -21,13 +21,13 @@
         combat_hud_fleet_rows: true,
     ),
     profile: (
-        nickname: "Anon697",
+        nickname: "",
     ),
     gameplay: (
-        tick_rate_ms: 100.0,
+        tick_rate_ms: 50.0,
         attack_cost_enemy: 5.0,
         attack_cost_neutral: 1.0,
-        bot_attack_interval_ticks: 24,
+        bot_attack_interval_ticks: 8,
         starting_troops: 100.0,
         starting_gold: 250.0,
         gold_base_income: 1.25,

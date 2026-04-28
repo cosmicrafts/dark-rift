@@ -140,7 +140,8 @@ pub fn generate_default_anon_nickname() -> String {
 
 /// If `profile.nickname` is empty/whitespace, assigns [`generate_default_anon_nickname`]. Returns whether it changed.
 pub fn assign_default_anon_if_nickname_empty(config: &mut ClientSettingsConfig) -> bool {
-    if config.profile.nickname.trim().is_empty() {
+    let trimmed = config.profile.nickname.trim();
+    if trimmed.is_empty() || trimmed == "Anon697" {
         config.profile.nickname = generate_default_anon_nickname();
         true
     } else {
