@@ -46,11 +46,11 @@ fn map_wide_river() -> GameMap {
 }
 
 fn setup_wide_river_game() -> GameState {
-    let mut game = GameState::new(42, 24, 1);
+    let mut game = GameState::new(42, 24, 1, crate::game_config::GameConfig::default());
     game.phase = GamePhase::Playing;
     game.map = map_wide_river();
-    let p1 = Player::new_human(1, "a".into(), [1.0, 0.0, 0.0]);
-    let p2 = Player::new_human(2, "b".into(), [0.0, 1.0, 0.0]);
+    let p1 = Player::new_human(1, "a".into(), [1.0, 0.0, 0.0], &crate::game_config::GameConfig::default());
+    let p2 = Player::new_human(2, "b".into(), [0.0, 1.0, 0.0], &crate::game_config::GameConfig::default());
     game.spawn_player(p1, 2, 0);
     game.spawn_player(p2, 21, 0);
     // Script territory so the river is neutral and tile 14 is a clean P2 beachhead.
@@ -386,10 +386,10 @@ fn warp_fleet_retreat_returns_survivors_with_malus() {
     app.add_plugins(MinimalPlugins);
     app.init_resource::<crate::pathfinding::WaterPathfinderScratch>();
 
-    let mut game = GameState::new(7, 4, 1);
+    let mut game = GameState::new(7, 4, 1, crate::game_config::GameConfig::default());
     game.phase = GamePhase::Playing;
     game.map = map_strip_two_islands();
-    let p1 = Player::new_human(1, "a".into(), [1.0, 0.0, 0.0]);
+    let p1 = Player::new_human(1, "a".into(), [1.0, 0.0, 0.0], &crate::game_config::GameConfig::default());
     game.spawn_player(p1, 0, 0);
     // Troops were already "loaded" onto the fleet in a real launch; pool starts empty here.
     game.player_mut(1).unwrap().troops = 0.0;

@@ -98,7 +98,7 @@ pub fn system_attack_execution(
                 break;
             }
 
-            if execution.troops < config::EXPAND_COST || execution.troops.is_nan() {
+            if execution.troops < game.config.attack_cost_neutral || execution.troops.is_nan() {
                 commands.entity(entity).despawn();
                 break;
             }
@@ -122,7 +122,7 @@ pub fn system_attack_execution(
 
                 if execution.target_owner == 0 {
                     // Neutral: attacker pays constant base cost
-                    execution.troops -= crate::config::EXPAND_COST;
+                    execution.troops -= game.config.attack_cost_neutral;
                 } else {
                     // PvP: Combat resolution (OpenFront Parity)
                     let mut def_loss = 0.0;
@@ -152,7 +152,7 @@ pub fn system_attack_execution(
                     );
                     let dp_multiplier = 1.0 + (dp_bonus as f64 / 10.0); // Approximation of defense buff
 
-                    let atk_loss = crate::config::ATTACK_COST * terrain_multiplier * dp_multiplier;
+                    let atk_loss = game.config.attack_cost_enemy * terrain_multiplier * dp_multiplier;
 
                     execution.troops -= atk_loss;
 

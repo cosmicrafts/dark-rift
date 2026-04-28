@@ -97,6 +97,7 @@ pub enum GameEvent {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Resource)]
 pub struct GameState {
     pub seed: u64,
+    pub config: crate::game_config::GameConfig,
     pub phase: GamePhase,
     pub map: GameMap,
     pub players: Vec<Player>,
@@ -129,9 +130,10 @@ fn default_next_attack_id() -> u64 {
 }
 
 impl GameState {
-    pub fn new(seed: u64, width: u32, height: u32) -> Self {
+    pub fn new(seed: u64, width: u32, height: u32, config: crate::game_config::GameConfig) -> Self {
         Self {
             seed,
+            config,
             phase: GamePhase::Playing,
             map: GameMap::new(width, height),
             players: Vec::new(),

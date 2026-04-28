@@ -108,11 +108,11 @@ mod tests {
         use crate::game::{GameEvent, GamePhase, GameState};
         use crate::player::Player;
         let mut world = World::new();
-        let mut game = GameState::new(3, 5, 1);
+        let mut game = GameState::new(3, 5, 1, crate::game_config::GameConfig::default());
         game.phase = GamePhase::Playing;
         let (map, owner) = tiny_owned_map();
         game.map = map;
-        game.players.push(Player::new_human(owner, "c".into(), [1.0, 0.0, 0.0]));
+        game.players.push(Player::new_human(owner, "c".into(), [1.0, 0.0, 0.0], &crate::game_config::GameConfig::default()));
         game.player_lookup.resize(owner as usize + 1, None);
         game.player_lookup[owner as usize] = Some(0);
         world.insert_resource(game);
@@ -147,11 +147,11 @@ mod tests {
         use crate::game::{GameEvent, GamePhase, GameState};
         use crate::player::Player;
         let mut world = World::new();
-        let mut game = GameState::new(4, 5, 1);
+        let mut game = GameState::new(4, 5, 1, crate::game_config::GameConfig::default());
         game.phase = GamePhase::Playing;
         let (map, owner) = tiny_owned_map();
         game.map = map;
-        game.players.push(Player::new_human(owner, "d".into(), [1.0, 0.0, 0.0]));
+        game.players.push(Player::new_human(owner, "d".into(), [1.0, 0.0, 0.0], &crate::game_config::GameConfig::default()));
         game.player_lookup.resize(owner as usize + 1, None);
         game.player_lookup[owner as usize] = Some(0);
         world.insert_resource(game);

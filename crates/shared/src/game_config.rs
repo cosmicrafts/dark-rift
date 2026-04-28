@@ -37,12 +37,25 @@ pub struct GameConfig {
     pub map_name: String,
     pub map_width: u32,
     pub map_height: u32,
-
-    // Game Rules
     pub random_spawn: bool,
-    pub base_income: f32,
-    pub attack_cost: f32,
-    pub expand_cost: f32,
+    // Gameplay Modifiers
+    pub tick_rate_ms: f32,
+    pub attack_cost_enemy: f64,
+    pub attack_cost_neutral: f64,
+    pub bot_attack_interval_ticks: u64,
+    
+    // Economy Modifiers
+    pub starting_troops: f64,
+    pub starting_gold: f64,
+    pub gold_base_income: f64,
+    pub troop_base_income: f64,
+    pub troop_per_tile: f64,
+    pub max_troops_base: f64,
+    pub max_troops_scale: f64,
+    pub city_max_troops_per_level: f64,
+    pub factory_income_bonus_per_level: f64,
+    pub factory_income_bonus_cap: f64,
+    pub gold_income_per_city_level: f64,
 }
 
 impl Default for GameConfig {
@@ -55,9 +68,21 @@ impl Default for GameConfig {
             map_width: 2904,
             map_height: 1672,
             random_spawn: false,
-            base_income: 1.0,
-            attack_cost: 0.15,
-            expand_cost: 0.05,
+            tick_rate_ms: 100.0,
+            attack_cost_enemy: 5.0,
+            attack_cost_neutral: 1.0,
+            bot_attack_interval_ticks: 24,
+            starting_troops: 100.0,
+            starting_gold: 250.0,
+            gold_base_income: 1.25,
+            troop_base_income: 2.0,
+            troop_per_tile: 0.05,
+            max_troops_base: 100.0,
+            max_troops_scale: 50.0,
+            city_max_troops_per_level: 2000.0,
+            factory_income_bonus_per_level: 0.10,
+            factory_income_bonus_cap: 1.50,
+            gold_income_per_city_level: 0.35,
         }
     }
 }

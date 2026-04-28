@@ -156,6 +156,8 @@ pub struct ClientSettingsConfig {
     pub ui: UiSettingsConfig,
     #[serde(default)]
     pub profile: ProfileConfig,
+    #[serde(default)]
+    pub gameplay: dark_rift_shared::game_config::GameConfig,
 }
 
 impl ClientSettingsConfig {

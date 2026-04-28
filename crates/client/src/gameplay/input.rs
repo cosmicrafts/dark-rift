@@ -120,7 +120,7 @@ pub fn system_force_boat_key(
     let Some(player) = game.player(pid) else {
         return;
     };
-    if !player.alive || player.troops < config::EXPAND_COST {
+    if !player.alive || player.troops < settings.config.gameplay.attack_cost_neutral {
         return;
     }
     let target_owner = game.map.owner_id(x, y);
@@ -130,7 +130,7 @@ pub fn system_force_boat_key(
     let target_tile = y * game.map.width + x;
     let ratio = ctx.attack_ratio.0.clamp(0.01, 1.0) as f64;
     let send = (player.troops * ratio).floor().max(0.0).min(player.troops);
-    if send < config::EXPAND_COST {
+    if send < settings.config.gameplay.attack_cost_neutral {
         return;
     }
     let Some(wc) = ctx.components.as_deref() else {
@@ -291,7 +291,7 @@ pub fn player_click(
         return;
     }
 
-    if player.troops < config::EXPAND_COST {
+    if player.troops < settings.config.gameplay.attack_cost_neutral {
         return;
     }
 
@@ -321,7 +321,7 @@ pub fn player_click(
     let ratio = ctx.attack_ratio.0.clamp(0.01, 1.0) as f64;
     let send_floor = (player.troops * ratio).floor();
     let send = send_floor.max(0.0).min(player.troops);
-    if send < config::EXPAND_COST {
+    if send < settings.config.gameplay.attack_cost_neutral {
         return;
     }
 

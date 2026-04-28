@@ -232,7 +232,7 @@ pub fn system_bot_think(
         }
         let reserve = max_troops * if is_neutral { expand_ratio } else { reserve_ratio };
         let p_send = (troops - reserve).max(0.0);
-        if p_send < config::EXPAND_COST {
+        if p_send < game.config.attack_cost_neutral {
             continue;
         }
         decisions.push(BotDecision {
@@ -290,10 +290,10 @@ mod building_intent_tests {
         let r4 = m.ref_id(4, 0);
         m.terrain[r4] = MapTile::from_byte(0b1100_0000);
 
-        let mut game = GameState::new(99, 5, 1);
+        let mut game = GameState::new(99, 5, 1, crate::game_config::GameConfig::default());
         game.phase = GamePhase::Playing;
         game.map = m;
-        game.players.push(Player::new_human(owner, "t".into(), [1.0, 0.0, 0.0]));
+        game.players.push(Player::new_human(owner, "t".into(), [1.0, 0.0, 0.0], &crate::game_config::GameConfig::default()));
         game.player_lookup.resize(owner as usize + 1, None);
         game.player_lookup[owner as usize] = Some(0);
         if let Some(p) = game.player_mut(owner) {
@@ -356,10 +356,10 @@ mod building_intent_tests {
         let re = m.ref_id(w - 1, 0);
         m.terrain[re] = MapTile::from_byte(0b1100_0000);
 
-        let mut game = GameState::new(101, w, 1);
+        let mut game = GameState::new(101, w, 1, crate::game_config::GameConfig::default());
         game.phase = GamePhase::Playing;
         game.map = m;
-        game.players.push(Player::new_human(owner, "w".into(), [1.0, 0.0, 0.0]));
+        game.players.push(Player::new_human(owner, "w".into(), [1.0, 0.0, 0.0], &crate::game_config::GameConfig::default()));
         game.player_lookup.resize(owner as usize + 1, None);
         game.player_lookup[owner as usize] = Some(0);
         if let Some(p) = game.player_mut(owner) {
@@ -508,11 +508,11 @@ mod building_intent_tests {
     }
 
     fn bot_game_with_order(order: &[u16]) -> GameState {
-        let mut game = GameState::new(777, 12, 1);
+        let mut game = GameState::new(777, 12, 1, crate::game_config::GameConfig::default());
         game.phase = GamePhase::Playing;
         for &pid in order {
             game.players
-                .push(Player::new_bot(pid, format!("b{pid}"), [0.2, 0.3, 0.4]));
+                .push(Player::new_bot(pid, format!("b{pid}"), [0.2, 0.3, 0.4], &crate::game_config::GameConfig::default()));
             let idx = game.players.len() - 1;
             if game.player_lookup.len() <= pid as usize {
                 game.player_lookup.resize(pid as usize + 1, None);
@@ -589,9 +589,9 @@ mod building_intent_tests {
     #[test]
     fn attack_intents_use_monotonic_attack_ids() {
         let mut world = World::new();
-        let mut game = GameState::new(321, 3, 1);
+        let mut game = GameState::new(321, 3, 1, crate::game_config::GameConfig::default());
         game.phase = GamePhase::Playing;
-        game.players.push(Player::new_human(1, "p1".into(), [1.0, 0.0, 0.0]));
+        game.players.push(Player::new_human(1, "p1".into(), [1.0, 0.0, 0.0], &crate::game_config::GameConfig::default()));
         game.player_lookup = vec![None, Some(0)];
         game.set_tile_owner(0, 0, 1);
         game.set_tile_owner(1, 0, 0);

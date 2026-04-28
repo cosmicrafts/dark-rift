@@ -56,46 +56,54 @@ pub struct Player {
     pub border_tiles: Vec<u32>,
     /// RNG stream for bot logic. Persists across ticks and serializes natively.
     pub bot_rng: WyRand,
+    /// Number of factories owned.
+    pub factories: u32,
+    /// Number of cities owned.
+    pub cities: u32,
 }
 
 impl Player {
     /// Create a new human player.
-    pub fn new_human(id: PlayerId, name: String, color: [f32; 3]) -> Self {
+    pub fn new_human(id: u16, name: String, color: [f32; 3], config: &crate::game_config::GameConfig) -> Self {
         Self {
             id,
-            name,
-            player_type: PlayerType::Human,
-            troops: crate::config::STARTING_TROOPS,
-            max_troops: crate::config::MAX_TROOPS_BASE,
-            gold: crate::config::STARTING_GOLD,
-            color,
             alive: true,
+            player_type: PlayerType::Human,
+            name,
+            color,
+            troops: config.starting_troops,
+            max_troops: config.max_troops_base,
+            gold: config.starting_gold,
             has_spawned: false,
             sum_x: 0,
             sum_y: 0,
             tile_count: 0,
             border_tiles: Vec::new(),
             bot_rng: WyRand::seed_from_u64(id as u64),
+            factories: 0,
+            cities: 0,
         }
     }
 
     /// Create a new bot player.
-    pub fn new_bot(id: PlayerId, name: String, color: [f32; 3]) -> Self {
+    pub fn new_bot(id: u16, name: String, color: [f32; 3], config: &crate::game_config::GameConfig) -> Self {
         Self {
             id,
-            name,
-            player_type: PlayerType::Bot,
-            troops: crate::config::STARTING_TROOPS,
-            max_troops: crate::config::MAX_TROOPS_BASE,
-            gold: crate::config::STARTING_GOLD,
-            color,
             alive: true,
+            player_type: PlayerType::Bot,
+            name,
+            color,
+            troops: config.starting_troops,
+            max_troops: config.max_troops_base,
+            gold: config.starting_gold,
             has_spawned: false,
             sum_x: 0,
             sum_y: 0,
             tile_count: 0,
             border_tiles: Vec::new(),
             bot_rng: WyRand::seed_from_u64(id as u64),
+            factories: 0,
+            cities: 0,
         }
     }
 

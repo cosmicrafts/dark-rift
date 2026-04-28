@@ -42,16 +42,16 @@ pub fn start_game_core(
                 params.my_id.0 = 0;
             }
 
-            let mut game = GameState::new(msg.seed, msg.config.map_width, msg.config.map_height);
+            let mut game = GameState::new(msg.seed, msg.config.map_width, msg.config.map_height, msg.config.clone());
             map_fetch::apply_map_to_game(&mut game, &msg.config.map_name, msg.map_data.clone());
 
             for info in &msg.players {
                 let player = match info.player_type {
                     dark_rift_shared::player::PlayerType::Human => {
-                        Player::new_human(info.id, info.name.clone(), info.color)
+                        Player::new_human(info.id, info.name.clone(), info.color, &msg.config)
                     }
                     dark_rift_shared::player::PlayerType::Bot => {
-                        Player::new_bot(info.id, info.name.clone(), info.color)
+                        Player::new_bot(info.id, info.name.clone(), info.color, &msg.config)
                     }
                 };
                 game.spawn_player(player, info.spawn_x, info.spawn_y);

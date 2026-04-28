@@ -85,7 +85,7 @@ pub fn system_headless_bot_engine(
     let reserve = player.max_troops * active_reserve_ratio;
     let p_send = (player.troops - reserve).max(0.0);
     
-    if p_send < GameConfig::default().expand_cost as f64 {
+    if p_send < GameConfig::default().attack_cost_neutral as f64 {
         return;
     }
 

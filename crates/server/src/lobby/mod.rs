@@ -26,7 +26,23 @@ pub fn system_master_lobby(
         let lobby_id = id_gen.0;
         id_gen.0 += 1;
         
+        #[derive(serde::Deserialize)]
+        struct ServerConfigWrapper {
+            #[serde(default)]
+            gameplay: dark_rift_shared::game_config::GameConfig,
+        }
+        
         let mut config = dark_rift_shared::game_config::GameConfig::default();
+        if let Ok(s) = std::fs::read_to_string("assets/settings.ron") {
+            if let Ok(wrapper) = ron::from_str::<ServerConfigWrapper>(&s) {
+                config = wrapper.gameplay;
+                info!("⚙️  Loaded gameplay modifiers from settings.ron");
+            } else {
+                warn!("⚠️ Failed to parse settings.ron gameplay section, using defaults");
+            }
+        } else {
+            warn!("⚠️ Could not read assets/settings.ron, using defaults");
+        }
         
         let maps = ["europe", "world"];
         use rand::Rng;
@@ -46,12 +62,12 @@ pub fn system_master_lobby(
         let new_lobby = commands.spawn((
             Lobby { id: lobby_id },
             StatePhase(LobbyPhase::Waiting),
-            MatchMetadata { seed: 42 + lobby_id, config, map_cache, manifest_cache },
+            MatchMetadata { seed: 42 + lobby_id, config: config.clone(), map_cache, manifest_cache },
             MatchRoster::default(),
             MatchTurnLog::default(),
             MatchIntentBuffer::default(),
             HasSentStart(false),
-            MatchTimer(Timer::from_seconds(TURN_INTERVAL_MS / 1000.0, TimerMode::Repeating)),
+            MatchTimer(Timer::from_seconds(config.tick_rate_ms / 1000.0, TimerMode::Repeating)),
         )).id();
         info!("🏟️  [Master] Generado nuevo Lobby de backup #{}", lobby_id);
         lobby_phases.push((new_lobby, LobbyPhase::Waiting));

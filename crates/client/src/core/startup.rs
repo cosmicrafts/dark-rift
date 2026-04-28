@@ -121,9 +121,9 @@ pub fn setup_offline(
             });
         });
 
-    let mut game = GameState::new(director.record.seed, director.record.config.map_width, director.record.config.map_height);
+    let mut game = GameState::new(director.record.seed, director.record.config.map_width, director.record.config.map_height, director.record.config.clone());
     for info in &director.record.players {
-        let player = Player::new_human(info.id, info.name.clone(), info.color);
+        let player = Player::new_human(info.id, info.name.clone(), info.color, &director.record.config);
         game.spawn_player(player, info.spawn_x, info.spawn_y);
     }
 

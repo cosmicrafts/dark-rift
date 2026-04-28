@@ -2816,6 +2816,7 @@ dependencies = [
  "dark-rift-shared",
  "lightyear",
  "rand 0.8.6",
+ "ron 0.12.1",
  "serde",
  "serde_json",
 ]

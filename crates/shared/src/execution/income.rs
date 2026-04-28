@@ -19,6 +19,7 @@ pub fn system_player_income(
     buildings_scratch.extend(q_building.iter().copied());
     let aggs = aggregate_buildings_per_player(buildings_scratch.iter().copied(), max_pid);
 
+    let config = game.config.clone();
     let GameState { map: _, players, .. } = &mut *game;
 
     for player in players.iter_mut().filter(|p| p.alive) {
@@ -45,27 +46,27 @@ pub fn system_player_income(
         let t_eighth = t_quarter.sqrt();
         let max_troops_bonus = t_half * t_eighth;
         
-        player.max_troops = config::MAX_TROOPS_BASE
-            + max_troops_bonus * config::MAX_TROOPS_SCALE
-            + agg.city_levels as f64 * config::CITY_MAX_TROOPS_PER_LEVEL;
+        player.max_troops = config.max_troops_base
+            + max_troops_bonus * config.max_troops_scale
+            + agg.city_levels as f64 * config.city_max_troops_per_level;
 
         // safe_troops^0.75 = safe_troops^(1/2) * safe_troops^(1/4)
         let s_half = safe_troops.sqrt();
         let s_quarter = s_half.sqrt();
         let s_75 = s_half * s_quarter;
         
-        let raw_income = config::TROOP_BASE_INCOME + (s_75 / 4.6);
+        let raw_income = config.troop_base_income + (s_75 / 4.6);
         let ratio = 1.0 - (safe_troops / player.max_troops).min(1.0);
-        let factory_extra = (agg.factory_levels as f64 * config::FACTORY_INCOME_BONUS_PER_LEVEL)
-            .min(config::FACTORY_INCOME_BONUS_CAP - 1.0);
+        let factory_extra = (agg.factory_levels as f64 * config.factory_income_bonus_per_level)
+            .min(config.factory_income_bonus_cap - 1.0);
         let factory_mult = 1.0 + factory_extra;
         let income = raw_income * ratio * factory_mult;
 
         player.troops = (safe_troops + income).min(player.max_troops);
 
         let safe_gold = player.gold.max(0.0);
-        let gold_income = config::GOLD_BASE_INCOME
-            + agg.city_levels as f64 * config::GOLD_INCOME_PER_CITY_LEVEL;
+        let gold_income = config.gold_base_income
+            + agg.city_levels as f64 * config.gold_income_per_city_level;
         player.gold = safe_gold + gold_income;
     }
 }
@@ -81,9 +82,9 @@ mod tests {
     fn city_levels_raise_max_troops_via_income_system() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        let mut game = GameState::new(42, 8, 8);
+        let mut game = GameState::new(42, 8, 8, crate::game_config::GameConfig::default());
         game.phase = GamePhase::Playing;
-        game.players.push(Player::new_human(1, "p".into(), [1.0, 0.0, 0.0]));
+        game.players.push(Player::new_human(1, "p".into(), [1.0, 0.0, 0.0], &crate::game_config::GameConfig::default()));
         game.player_lookup = vec![None, Some(0)];
         if let Some(p) = game.player_mut(1) {
             p.tile_count = 50;
@@ -117,9 +118,9 @@ mod tests {
     fn factory_income_multiplier_respects_cap() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        let mut game = GameState::new(43, 8, 8);
+        let mut game = GameState::new(43, 8, 8, crate::game_config::GameConfig::default());
         game.phase = GamePhase::Playing;
-        game.players.push(Player::new_human(1, "p".into(), [1.0, 0.0, 0.0]));
+        game.players.push(Player::new_human(1, "p".into(), [1.0, 0.0, 0.0], &crate::game_config::GameConfig::default()));
         game.player_lookup = vec![None, Some(0)];
         if let Some(p) = game.player_mut(1) {
             p.tile_count = 50;
@@ -164,9 +165,9 @@ mod tests {
     fn gold_increments_each_income_tick() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        let mut game = GameState::new(44, 8, 8);
+        let mut game = GameState::new(44, 8, 8, crate::game_config::GameConfig::default());
         game.phase = GamePhase::Playing;
-        game.players.push(Player::new_human(1, "p".into(), [1.0, 0.0, 0.0]));
+        game.players.push(Player::new_human(1, "p".into(), [1.0, 0.0, 0.0], &crate::game_config::GameConfig::default()));
         game.player_lookup = vec![None, Some(0)];
         if let Some(p) = game.player_mut(1) {
             p.tile_count = 10;
@@ -190,9 +191,9 @@ mod tests {
     fn gold_income_scales_with_ready_city_levels() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        let mut game = GameState::new(45, 8, 8);
+        let mut game = GameState::new(45, 8, 8, crate::game_config::GameConfig::default());
         game.phase = GamePhase::Playing;
-        game.players.push(Player::new_human(1, "p".into(), [1.0, 0.0, 0.0]));
+        game.players.push(Player::new_human(1, "p".into(), [1.0, 0.0, 0.0], &crate::game_config::GameConfig::default()));
         game.player_lookup = vec![None, Some(0)];
         if let Some(p) = game.player_mut(1) {
             p.tile_count = 20;

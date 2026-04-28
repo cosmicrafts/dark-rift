@@ -86,7 +86,7 @@ pub fn spawn_or_merge_attack_for_fleet_arrival(
     troops: f64,
     fleet_id: u64,
 ) {
-    if troops < config::EXPAND_COST || !troops.is_finite() {
+    if troops < game.config.attack_cost_neutral || !troops.is_finite() {
         if let Some(p) = game.player_mut(owner_id) {
             p.troops = (p.troops + troops.max(0.0)).min(p.max_troops);
         }
@@ -182,7 +182,7 @@ pub fn apply_attack_intent(
         .max(0.0)
         .min(pool_cap);
 
-    if requested < config::EXPAND_COST {
+    if requested < game.config.attack_cost_neutral {
         return;
     }
 
@@ -205,13 +205,13 @@ pub fn apply_attack_intent(
     enemy_hits.sort_by_key(|(_, id)| *id);
 
     for (e_enemy, _) in &enemy_hits {
-        if remaining < config::EXPAND_COST {
+        if remaining < game.config.attack_cost_neutral {
             break;
         }
         let Ok((_, mut enemy_ex)) = q_exec.get_mut(*e_enemy) else {
             continue;
         };
-        if enemy_ex.troops < config::ATTACK_COST {
+        if enemy_ex.troops < game.config.attack_cost_enemy {
             continue;
         }
         let clash = enemy_ex.troops.min(remaining);
@@ -223,14 +223,14 @@ pub fn apply_attack_intent(
     for (e_enemy, _) in enemy_hits {
         let despawn = q_exec
             .get(e_enemy)
-            .map(|(_, ex)| ex.troops < config::EXPAND_COST)
+            .map(|(_, ex)| ex.troops < game.config.attack_cost_neutral)
             .unwrap_or(false);
         if despawn {
             commands.entity(e_enemy).despawn();
         }
     }
 
-    if remaining < config::EXPAND_COST {
+    if remaining < game.config.attack_cost_neutral {
         if let Some(p) = game.player_mut(player_id) {
             p.troops = (p.troops + remaining).min(p.max_troops);
         }
