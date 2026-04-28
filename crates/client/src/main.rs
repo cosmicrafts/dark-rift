@@ -290,6 +290,7 @@ fn main() {
             system_home_button,
             update_hud,
             system_apply_responsive_hud_layout,
+            system_apply_responsive_hud_icons_and_hotkeys,
             system_sync_bottom_combat_hud,
             system_update_event_feed,
             system_update_scroll_position,

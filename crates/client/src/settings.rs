@@ -278,29 +278,22 @@ pub fn build_client_settings_config() -> ClientSettingsConfig {
     config
 }
 
-/// System that patches the real font Handle into ClientSettings once Assets<Font> is available.
-pub fn init_client_font(mut settings: ResMut<ClientSettings>, mut fonts: ResMut<Assets<Font>>) {
-    let font_bytes = include_bytes!("../../../assets/fonts/Rajdhani-Medium.ttf");
-    settings.font = match Font::try_from_bytes(font_bytes.to_vec()) {
-        Ok(f) => fonts.add(f),
-        Err(e) => {
-            bevy::log::error!("Rajdhani font bytes invalid: {e}");
-            Handle::default()
-        }
-    };
+/// System that patches the real font Handle into ClientSettings once AssetServer is available.
+pub fn init_client_font(mut settings: ResMut<ClientSettings>, asset_server: Res<AssetServer>) {
+    let path = &settings.config.ui.font_path;
+    if !path.is_empty() {
+        settings.font = asset_server.load(path);
+    }
 }
 
 /// Legacy: kept for compatibility, delegates to build+patch.
 #[allow(dead_code)]
-pub fn load_client_settings(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
+pub fn load_client_settings(mut commands: Commands, asset_server: Res<AssetServer>) {
     let config = build_client_settings_config();
-    let font_bytes = include_bytes!("../../../assets/fonts/Rajdhani-Medium.ttf");
-    let font_handle = match Font::try_from_bytes(font_bytes.to_vec()) {
-        Ok(f) => fonts.add(f),
-        Err(e) => {
-            bevy::log::error!("Rajdhani font bytes invalid: {e}; map labels may be invisible");
-            Handle::default()
-        }
+    let font_handle = if !config.ui.font_path.is_empty() {
+        asset_server.load(&config.ui.font_path)
+    } else {
+        Handle::default()
     };
     commands.insert_resource(ClientSettings {
         config,

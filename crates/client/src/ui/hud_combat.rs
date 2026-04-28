@@ -72,8 +72,6 @@ pub fn system_apply_responsive_hud_layout(
         Query<(&mut BackgroundColor, &mut BorderColor, &mut Node), With<BottomHudPanel>>, // p6
         Query<&mut Node, With<crate::ui::hud_build::BuildPillButton>>,    // p7
     )>,
-    mut q_icons: Query<(&mut Node, &mut Visibility), With<crate::ui::setup::BuildPillIcon>>,
-    mut q_hotkeys: Query<&mut Visibility, (With<crate::ui::setup::BuildPillHotkey>, Without<crate::ui::setup::BuildPillIcon>)>,
 ) {
     let compact = matches!(ui_shell.breakpoint, UiBreakpoint::Compact);
 
@@ -221,20 +219,25 @@ pub fn system_apply_responsive_hud_layout(
         }
     }
     
-    {
-        let icon_size = if compact { 22.0 } else {
-            let s = crate::clamp_ui_scale(settings.config.ui.combat_hud_scale);
-            crate::ui::shell::action_dock_grid_layout_sizes(s).0 * 0.55
-        };
-        for (mut node, mut vis) in q_icons.iter_mut() {
-            node.width = Val::Px(icon_size);
-            node.height = Val::Px(icon_size);
-            *vis = Visibility::Visible;
-        }
-    }
+}
 
+pub fn system_apply_responsive_hud_icons_and_hotkeys(
+    ui_shell: Res<UiShellState>,
+    settings: Res<crate::ClientSettings>,
+    mut q_icons: Query<(&mut Node, &mut Visibility), With<crate::ui::setup::BuildPillIcon>>,
+    mut q_hotkeys: Query<&mut Visibility, (With<crate::ui::setup::BuildPillHotkey>, Without<crate::ui::setup::BuildPillIcon>)>,
+) {
+    let compact = matches!(ui_shell.breakpoint, UiBreakpoint::Compact);
+    let icon_size = if compact { 22.0 } else {
+        let s = crate::clamp_ui_scale(settings.config.ui.combat_hud_scale);
+        crate::ui::shell::action_dock_grid_layout_sizes(s).0 * 0.55
+    };
+    for (mut node, mut vis) in q_icons.iter_mut() {
+        node.width = Val::Px(icon_size);
+        node.height = Val::Px(icon_size);
+        *vis = Visibility::Visible;
+    }
     for mut vis in q_hotkeys.iter_mut() {
-        // Hide hotkey numbers on compact — no space
         *vis = if compact { Visibility::Hidden } else { Visibility::Visible };
     }
 }
