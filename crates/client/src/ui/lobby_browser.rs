@@ -409,6 +409,11 @@ pub fn setup_lobby_browser(mut commands: Commands, settings: Res<ClientSettings>
             },
             GlobalZIndex(LOBBY_BROWSER),
             BackgroundColor(menu_backdrop().with_alpha(0.0)),
+            TextFont {
+                font: font.clone(),
+                font_size: 16.0,
+                ..default()
+            },
         ))
         .with_children(|root| {
             root.spawn((

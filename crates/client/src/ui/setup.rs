@@ -48,6 +48,11 @@ pub fn spawn_action_dock(
                 column_gap: Val::Px(SPACE_2),
                 ..default()
             },
+            TextFont {
+                font: font.clone(),
+                font_size: 16.0,
+                ..default()
+            },
         ))
         .with_children(|dock| {
             dock.spawn((
@@ -185,7 +190,7 @@ pub fn spawn_bottom_combat_hud(
     } else {
         Visibility::Visible
     };
-    spawn_action_dock(commands, shell, observer, hud_scale, asset_server, font);
+    spawn_action_dock(commands, shell, observer, hud_scale, asset_server, font.clone());
     commands
         .spawn((
             ChildOf(shell.bottom_sheet),
@@ -201,6 +206,11 @@ pub fn spawn_bottom_combat_hud(
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::FlexEnd,
                 row_gap: Val::Px(4.0 * s),
+                ..default()
+            },
+            TextFont {
+                font: font.clone(),
+                font_size: 16.0,
                 ..default()
             },
         ));
@@ -221,6 +231,11 @@ pub fn spawn_bottom_combat_hud(
                 ..default()
             },
             BackgroundColor(Color::NONE), // dynamically set to black-transparent on compact
+            TextFont {
+                font: font.clone(),
+                font_size: 16.0,
+                ..default()
+            },
         ))
         .with_children(|root| {
             root.spawn((

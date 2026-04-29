@@ -81,6 +81,13 @@ pub struct GameConfig {
     pub factory_income_bonus_per_level: f64,
     pub factory_income_bonus_cap: f64,
     pub gold_income_per_city_level: f64,
+    /// Multiplier for train trade gold (OpenFront `goldMultiplierFor`).
+    #[serde(default = "default_train_gold_multiplier")]
+    pub train_gold_multiplier: f64,
+}
+
+fn default_train_gold_multiplier() -> f64 {
+    1.0
 }
 
 impl Default for GameConfig {
@@ -93,11 +100,11 @@ impl Default for GameConfig {
             map_width: 2904,
             map_height: 1672,
             random_spawn: false,
-            tick_rate_ms: 100.0,
+            tick_rate_ms: 50.0,
             attack_cost_enemy: 5.0,
             attack_cost_neutral: 1.0,
-            neutral_expansion_multiplier: 0.4,
-            pvp_expansion_multiplier: 0.5,
+            neutral_expansion_multiplier: 2.4,
+            pvp_expansion_multiplier: 1.5,
             bot_attack_interval_ticks: 24,
             starting_troops: 100.0,
             starting_gold: 250.0,
@@ -110,6 +117,7 @@ impl Default for GameConfig {
             factory_income_bonus_per_level: 0.10,
             factory_income_bonus_cap: 1.50,
             gold_income_per_city_level: 0.35,
+            train_gold_multiplier: 1.0,
         }
     }
 }

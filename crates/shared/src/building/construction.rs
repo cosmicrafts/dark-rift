@@ -11,6 +11,8 @@ pub fn advance_building_construction_tick(
         return;
     }
 
+    let all_buildings: Vec<Building> = q.iter().map(|(_, b)| *b).collect();
+
     let mut scratch: Vec<(Entity, u64)> = q.iter().map(|(e, b)| (e, b.id)).collect();
     scratch.sort_by_key(|&(_, id)| id);
 
@@ -31,6 +33,12 @@ pub fn advance_building_construction_tick(
                 tile_idx: b.tile_idx,
                 kind: b.kind,
             });
+            let bcopy = *b;
+            let map_ref = &game.map;
+            let world_seed = game.seed;
+            game
+                .rail
+                .on_structure_ready(map_ref, world_seed, &all_buildings, &bcopy);
         }
     }
 }

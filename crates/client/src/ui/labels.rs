@@ -92,9 +92,6 @@ pub fn system_sync_player_labels(
                 TextFont {
                     font: ui.font.clone(),
                     font_size: font_px,
-                    // Rajdhani is a vector face: default AA keeps strokes from collapsing to 1px;
-                    // slightly heavier weight reads better on noisy tile colors.
-                    weight: FontWeight::SEMIBOLD,
                     ..default()
                 },
                 TextColor(Color::BLACK),
@@ -146,7 +143,6 @@ pub fn system_sync_player_labels(
             if cache.0 != font_px {
                 cache.0 = font_px;
                 p_font.font_size = font_px;
-                p_font.weight = FontWeight::SEMIBOLD;
             }
         }
     }

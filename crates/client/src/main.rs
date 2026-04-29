@@ -157,6 +157,7 @@ fn main() {
         .init_resource::<WaterComponents>()
         .init_resource::<BuildStructureMode>()
         .init_resource::<StructureGhostParts>()
+        .init_resource::<dark_rift_shared::execution::rail::RailPathScratchResource>()
         .init_resource::<BuildableHudState>();
 
         // Insert ClientSettings BEFORE app.run() so it exists when OnEnter(LobbyBrowser) fires.
@@ -211,6 +212,7 @@ fn main() {
                     setup_network,
                     setup_attack_ring_mesh,
                     setup_fleet_visual_meshes,
+                    setup_rail_visual_meshes,
                     setup_structure_marker_meshes,
                     init_client_font,
                     init_attack_ratio_from_ui_settings,
@@ -314,6 +316,10 @@ fn main() {
             handle_tile_change,
             update_water_animation_time,
         ).run_if(in_state(AppState::InGame)));
+        app.add_systems(
+            PreUpdate,
+            system_mark_rail_color_dirty.run_if(in_state(AppState::InGame)),
+        );
         
         app.add_systems(
             Update,
@@ -327,6 +333,11 @@ fn main() {
             (
                 system_spawn_fleet_visuals,
                 system_sync_fleet_visuals,
+                (
+                    system_rail_topology_rebuild,
+                    system_rail_color_refresh,
+                    system_train_visuals_pool,
+                ).chain(),
                 system_attach_building_visuals,
                 system_sync_building_visual_lod,
                 system_sync_building_map_labels,
@@ -352,6 +363,7 @@ fn main() {
         system_warp_fleet_execution,
         system_attack_execution,
         system_building_construction,
+        system_rail_simulation,
         system_game_tick,
         system_headless_bot_engine.run_if(|cli: Res<Cli>| cli.bot),
         decrement_pending,
