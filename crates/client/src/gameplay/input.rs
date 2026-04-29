@@ -6,7 +6,6 @@ use dark_rift_shared::building::{
     find_upgrade_target_id, resolve_structure_spawn_tile, structure_build_cost_gold,
     existing_structure_positions_with_width, Building,
 };
-use dark_rift_shared::config;
 use dark_rift_shared::protocol::{ClientGameplayMessage, GameplayIntent, AttackIntent};
 use lightyear::prelude::MessageSender;
 use dark_rift_shared::water_components::WaterComponents;
@@ -169,12 +168,22 @@ pub fn system_force_boat_key(
 }
 
 #[derive(bevy::ecs::system::SystemParam)]
-pub struct ClickCtx<'w> {
+pub struct ClickCtx<'w, 's> {
     pub game_opt: Option<Res<'w, GameState>>,
     pub my_id: Res<'w, MyPlayerId>,
     pub attack_ratio: Res<'w, AttackRatio>,
     pub components: Option<Res<'w, WaterComponents>>,
     pub path_scratch: ResMut<'w, WaterPathfinderScratch>,
+    pub q_window: Query<'w, 's, &'static Window, With<bevy::window::PrimaryWindow>>,
+    pub q_ui_blocks: Query<'w, 's,
+        (&'static bevy::ui::ComputedNode, &'static GlobalTransform),
+        Or<(
+            With<Interaction>,
+            With<BottomHudRoot>,
+            With<ActionDockPointerSink>,
+            With<crate::ui::hud_combat::BottomHudPanel>,
+        )>,
+    >,
 }
 
 pub fn player_click(
@@ -188,10 +197,6 @@ pub fn player_click(
     touch_gesture: Res<TouchGestureState>,
     hovered:     Res<HoveredTile>,
     settings:    Res<ClientSettings>,
-    mut hud_hit: ParamSet<(
-        Query<&RelativeCursorPosition, With<BottomHudRoot>>,
-        Query<&RelativeCursorPosition, With<ActionDockPointerSink>>,
-    )>,
     mut senders: Query<&mut MessageSender<ClientGameplayMessage>>,
     local_buf: Option<ResMut<LocalIntentBuffer>>,
     build_mode: Res<BuildStructureMode>,
@@ -212,11 +217,24 @@ pub fn player_click(
     }
     if drag_state.accumulated_drag > 10.0 { return; } // It was a drag, not a click
 
-    // Clicks/releases over the combat HUD must not issue map attacks (OpenFront: UI eats pointer).
-    let over_hud = hud_hit.p0().iter().any(|rcp| rcp.cursor_over)
-        || hud_hit.p1().iter().any(|rcp| rcp.cursor_over);
-    if over_hud {
-        return;
+    let viewport = touch_gesture.last_touch_pos.or_else(|| {
+        ctx.q_window.single().ok().and_then(|w: &Window| w.cursor_position())
+    });
+
+    if let Some(pos) = viewport {
+        let mut over_hud = false;
+        for (node, transform) in &ctx.q_ui_blocks {
+            let size = node.size();
+            let center = transform.translation().truncate();
+            let rect = Rect::from_center_size(center, size);
+            if rect.contains(pos) {
+                over_hud = true;
+                break;
+            }
+        }
+        if over_hud {
+            return;
+        }
     }
 
     let Some(game) = ctx.game_opt.as_deref() else { return };

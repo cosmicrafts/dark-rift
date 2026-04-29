@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 use dark_rift_shared::game::GameState;
-use crate::{ClientSettings, InGameEntity, TILE_SIZE, building_kind_short, player_label_scale, BuildingLabelTarget, Building};
+use crate::{
+    BuildingMapBadgeRoot, ClientSettings, InGameEntity, TILE_SIZE, player_label_scale, Building,
+};
 
 #[derive(Component)]
 pub struct PlayerLabel(pub u16);
@@ -11,24 +13,32 @@ pub struct PlayerLabelRenderCache(pub f32);
 pub fn system_sync_building_map_labels(
     game_opt: Option<Res<GameState>>,
     q_b: Query<&Building>,
-    mut q_l: Query<(&BuildingLabelTarget, &mut Text2d)>,
+    mut q_badge: Query<(&BuildingMapBadgeRoot, &mut Visibility, &Children)>,
+    mut q_text: Query<&mut Text2d>,
 ) {
     if game_opt.is_none() {
         return;
     }
-    for (t, mut text) in q_l.iter_mut() {
-        let Ok(b) = q_b.get(t.0) else {
+    for (marker, mut vis, children) in q_badge.iter_mut() {
+        let Ok(b) = q_b.get(marker.0) else {
             continue;
         };
-        let pending = if b.under_construction { "…" } else { "" };
-        let line = format!(
-            "{}{}{}",
-            building_kind_short(b.kind),
-            b.level,
-            pending
-        );
-        if text.0 != line {
-            text.0 = line.clone();
+        let line = match (b.under_construction, b.level) {
+            (true, _) => "…".to_string(),
+            (false, lvl) if lvl > 1 => lvl.to_string(),
+            _ => String::new(),
+        };
+        *vis = if line.is_empty() {
+            Visibility::Hidden
+        } else {
+            Visibility::Visible
+        };
+        for child in children.iter() {
+            if let Ok(mut text) = q_text.get_mut(child) {
+                if text.0 != line {
+                    text.0 = line.clone();
+                }
+            }
         }
     }
 }

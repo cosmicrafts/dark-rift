@@ -20,7 +20,13 @@ use dark_rift_shared::protocol::StampedIntent;
 impl Default for OverlayDiagnostics { fn default() -> Self { Self { status_line: "Connecting to server...".to_string(), fps_value: "…".to_string(), ping_value: "…".to_string(), build_hint: String::new() } } }
 #[derive(Default)] pub struct PerfOverlayUiState { pub last_fps_refresh: Option<Instant>, pub last_net_refresh: Option<Instant> }
 #[derive(Resource, Default)] pub struct NetTiming { pub connect_started: Option<Instant>, pub handshake_ms: Option<f32>, pub last_turn_at: Option<Instant>, pub turn_spacing_ema_ms: f32 }
-#[derive(Resource)] pub struct StructureMarkerMeshes { pub place_ring: Handle<Mesh>, pub sam_range: Handle<Mesh>, pub defense_range: Handle<Mesh> }
+#[derive(Resource)] pub struct StructureMarkerMeshes {
+    pub place_plate: Handle<Mesh>,
+    pub place_ring: Handle<Mesh>,
+    pub level_badge_capsule: Handle<Mesh>,
+    pub sam_range: Handle<Mesh>,
+    pub defense_range: Handle<Mesh>,
+}
 #[derive(Resource, Default)] pub struct StructureGhostParts { pub marker: Option<Entity>, pub range: Option<Entity> }
 #[derive(Component)] pub struct BuildingVisualDone;
 #[derive(Component)] pub struct BuildingMapVisualRoot;
@@ -36,7 +42,8 @@ impl Default for OverlayDiagnostics { fn default() -> Self { Self { status_line:
 #[derive(Component)] pub struct GameOverPanel;
 #[derive(Component)] pub struct GoBackButton;
 #[derive(Resource)] pub struct ShaderMapData { pub board_data: Handle<Image>, pub player_colors: Handle<Image>, pub colors_dirty: bool }
-#[derive(Component)] pub struct BuildingLabelTarget(pub Entity);
+/// Parent of the level badge mesh + text; holds the building [`Entity`] for sync.
+#[derive(Component)] pub struct BuildingMapBadgeRoot(pub Entity);
 #[derive(Component)] pub struct EventFeedLine { pub timer: Timer }
 #[inline] pub fn tile_idx_to_world(idx: u32, map_width: u32, map_height: u32) -> Vec2 { let x = (idx % map_width) as f32; let y = (idx / map_width) as f32; Vec2::new((x + 0.5) * crate::TILE_SIZE, (map_height as f32 - y - 0.5) * crate::TILE_SIZE) }
 #[inline] pub fn clamp_ui_scale(s: f32) -> f32 { s.clamp(0.25, 8.0) }

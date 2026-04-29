@@ -1,6 +1,5 @@
 use bevy::prelude::*;
 use crate::building::{aggregate_buildings_per_player, Building};
-use crate::config;
 use crate::game::{GamePhase, GameState};
 
 // System analogous to PlayerExecution.tick() in OpenFront
@@ -75,6 +74,7 @@ pub fn system_player_income(
 mod tests {
     use super::*;
     use bevy::prelude::{App, MinimalPlugins};
+    use crate::config;
     use crate::game::BuildingKind;
     use crate::player::Player;
 

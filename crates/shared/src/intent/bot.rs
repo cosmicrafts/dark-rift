@@ -4,7 +4,6 @@ use crate::protocol::*;
 use crate::building::{Building, existing_structure_positions_with_width, structure_kind_enabled, structure_build_cost_gold, resolve_structure_spawn_tile};
 use crate::execution::AttackExecution;
 use crate::rng::{NextIntExt, WyRand, SeedableRng};
-use crate::config;
 use crate::water_components::WaterComponents;
 use crate::intent::apply_stamped_intent;
 use crate::warp_fleet::WarpFleet;

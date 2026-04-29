@@ -257,127 +257,126 @@ pub fn spawn_bottom_combat_hud(
                 BorderColor::all(Color::NONE), // placeholder for uniform tuple size
             ))
             .with_children(|panel| {
-                // Top row: Economy (Cap | Gold | Troops)
+                // Top row: Simplified Economy + Readout
                 panel.spawn((
                     Node {
                         width: Val::Percent(100.0),
                         flex_direction: FlexDirection::Row,
-                        justify_content: JustifyContent::Center,
-                        column_gap: Val::Px(8.0 * s),
+                        justify_content: JustifyContent::SpaceBetween,
+                        align_items: AlignItems::Center,
                         ..default()
                     },
                 )).with_children(|eco_row| {
-                    // Capacity Pill
+                    // Left: Troops / Cap Loading Bar
                     eco_row.spawn((
+                        crate::ui::hud_combat::TroopsBarShell,
                         Node {
+                            width: Val::Px(180.0 * s),
+                            height: Val::Px(28.0 * s),
                             flex_direction: FlexDirection::Row,
                             align_items: AlignItems::Center,
-                            padding: UiRect::axes(Val::Px(8.0 * s), Val::Px(4.0 * s)),
-                            border_radius: BorderRadius::all(Val::Px(8.0 * s)),
-                            column_gap: Val::Px(4.0 * s),
+                            justify_content: JustifyContent::Center,
+                            overflow: Overflow::clip(),
+                            border_radius: BorderRadius::all(Val::Px(6.0 * s)),
+                            border: UiRect::all(Val::Px(1.5 * s)),
                             ..default()
                         },
-                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.04)), // OpenFront bg-white/4
-                    )).with_children(|pill| {
-                        pill.spawn((
-                            ImageNode::new(asset_server.load("icons/capacity.png")),
-                            Node { width: Val::Px(16.0 * s), height: Val::Px(16.0 * s), ..default() }
+                        BackgroundColor(Color::srgba(0.1, 0.1, 0.15, 0.9)),
+                        BorderColor::all(Color::BLACK),
+                    )).with_children(|bar| {
+                        // Damage/Heal animation layer (lerps slowly)
+                        bar.spawn((
+                            crate::ui::hud_combat::TroopsBarDamage,
+                            Node {
+                                position_type: PositionType::Absolute,
+                                left: Val::Px(0.0),
+                                width: Val::Percent(0.0),
+                                height: Val::Percent(100.0),
+                                ..default()
+                            },
+                            BackgroundColor(Color::WHITE),
+                            ZIndex(0),
                         ));
-                        pill.spawn((
-                            BottomHudCap,
-                            Text::new("0"),
-                            TextFont { font_size: 16.0 * s, ..default() },
-                            TextColor(Color::WHITE),
+
+                        // Actual fill layer (snaps instantly)
+                        bar.spawn((
+                            crate::ui::hud_combat::TroopsBarFill,
+                            Node {
+                                position_type: PositionType::Absolute,
+                                left: Val::Px(0.0),
+                                width: Val::Percent(0.0),
+                                height: Val::Percent(100.0),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgb(0.4, 0.9, 0.4)), // will be dynamically colored
+                            ZIndex(1),
                         ));
-                        pill.spawn((
-                            Text::new("Cap"),
-                            TextFont { font_size: 14.0 * s, ..default() },
-                            TextColor(Color::srgb(0.8, 0.8, 0.8)),
-                        ));
+
+                        // Text and Icon container (above fills)
+                        bar.spawn((
+                            Node {
+                                flex_direction: FlexDirection::Row,
+                                align_items: AlignItems::Center,
+                                column_gap: Val::Px(6.0 * s),
+                                ..default()
+                            },
+                            ZIndex(2),
+                        )).with_children(|group| {
+                            group.spawn((
+                                ImageNode::new(asset_server.load("icons/troops.png")),
+                                Node { width: Val::Px(18.0 * s), height: Val::Px(18.0 * s), ..default() }
+                            ));
+                            group.spawn((
+                                BottomHudTroops,
+                                Text::new("0 / 0"),
+                                TextFont { font_size: 16.0 * s, ..default() },
+                                TextColor(Color::WHITE),
+                            ));
+                        });
                     });
 
-                    // Gold Pill
+                    // Center: Gold
                     eco_row.spawn((
                         Node {
                             flex_direction: FlexDirection::Row,
                             align_items: AlignItems::Center,
-                            padding: UiRect::axes(Val::Px(8.0 * s), Val::Px(4.0 * s)),
-                            border_radius: BorderRadius::all(Val::Px(8.0 * s)),
-                            column_gap: Val::Px(4.0 * s),
+                            column_gap: Val::Px(6.0 * s),
                             ..default()
                         },
-                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.04)),
-                    )).with_children(|pill| {
-                        pill.spawn((
+                    )).with_children(|group| {
+                        group.spawn((
                             ImageNode::new(asset_server.load("icons/gold.png")),
-                            Node { width: Val::Px(16.0 * s), height: Val::Px(16.0 * s), ..default() }
+                            Node { width: Val::Px(20.0 * s), height: Val::Px(20.0 * s), ..default() }
                         ));
-                        pill.spawn((
+                        group.spawn((
                             BottomHudGold,
                             Text::new("0"),
                             TextFont { font_size: 16.0 * s, ..default() },
                             TextColor(Color::WHITE),
                         ));
-                        pill.spawn((
-                            Text::new("Gold"),
-                            TextFont { font_size: 14.0 * s, ..default() },
-                            TextColor(Color::srgb(0.8, 0.8, 0.8)),
-                        ));
                     });
 
-                    // Troops Pill
+                    // Right: Slider readout
                     eco_row.spawn((
-                        Node {
-                            flex_direction: FlexDirection::Row,
-                            align_items: AlignItems::Center,
-                            padding: UiRect::axes(Val::Px(8.0 * s), Val::Px(4.0 * s)),
-                            border_radius: BorderRadius::all(Val::Px(8.0 * s)),
-                            column_gap: Val::Px(4.0 * s),
+                        AttackRatioReadout,
+                        Text::new(""),
+                        TextFont {
+                            font_size: 16.0 * s,
                             ..default()
                         },
-                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.04)), // OpenFront bg-white/4
-                    )).with_children(|pill| {
-                        pill.spawn((
-                            ImageNode::new(asset_server.load("icons/troops.png")),
-                            Node { width: Val::Px(16.0 * s), height: Val::Px(16.0 * s), ..default() }
-                        ));
-                        pill.spawn((
-                            BottomHudTroops,
-                            Text::new("0"),
-                            TextFont { font_size: 16.0 * s, ..default() },
-                            TextColor(Color::WHITE),
-                        ));
-                        pill.spawn((
-                            Text::new("Troops"),
-                            TextFont { font_size: 14.0 * s, ..default() },
-                            TextColor(Color::srgb(0.8, 0.8, 0.8)),
-                        ));
-                    });
+                        TextColor(Color::WHITE),
+                    ));
                 });
 
-                // Bottom row: Attack Slider
+                // Bottom row: Attack Slider (Full Width)
                 panel.spawn((
                     Node {
                         width: Val::Percent(100.0),
                         flex_direction: FlexDirection::Row,
                         align_items: AlignItems::Center,
-                        column_gap: Val::Px(16.0 * s),
                         ..default()
                     },
                 )).with_children(|slider_row| {
-                    slider_row.spawn((
-                        AttackRatioReadout,
-                        Text::new(""),
-                        TextFont {
-                            font_size: 18.0 * s,
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                        Node {
-                            width: Val::Px(110.0 * s),
-                            ..default()
-                        },
-                    ));
 
                     slider_row.spawn((
                         Button,

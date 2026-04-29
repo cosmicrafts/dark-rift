@@ -2,17 +2,6 @@ use bevy::prelude::*;
 use dark_rift_shared::game::{GameState, BuildingKind};
 use crate::*;
 
-pub fn building_kind_short(kind: BuildingKind) -> &'static str {
-    match kind {
-        BuildingKind::City => "C",
-        BuildingKind::Factory => "F",
-        BuildingKind::Port => "P",
-        BuildingKind::DefensePost => "D",
-        BuildingKind::SamLauncher => "S",
-        BuildingKind::MissileSilo => "M",
-    }
-}
-
 pub fn building_kind_icon_path(kind: BuildingKind) -> &'static str {
     match kind {
         BuildingKind::City => "icons/building_city.png",
@@ -214,14 +203,18 @@ pub fn system_attach_building_visuals(
     let mw = game.map.width;
     let mh = game.map.height;
     let pending: Vec<(Entity, Building)> = q_new.iter().map(|(e, b)| (e, *b)).collect();
+
+    let plate_fill_mat = materials.add(ColorMaterial::from_color(Color::srgba(
+        0.10, 0.12, 0.16, 0.88,
+    )));
+    let plate_border_mat = materials.add(ColorMaterial::from_color(Color::srgba(
+        0.95, 0.95, 0.95, 0.85,
+    )));
+    let badge_bg_mat = materials.add(ColorMaterial::from_color(Color::srgba(
+        0.06, 0.07, 0.10, 0.92,
+    )));
+
     for (e, b) in pending {
-        let rgb = game
-            .player(b.owner_id)
-            .map(|p| p.color)
-            .unwrap_or([0.7, 0.7, 0.7]);
-        let mat = materials.add(ColorMaterial::from_color(Color::srgba(
-            rgb[0], rgb[1], rgb[2], 0.88,
-        )));
         let pos = tile_idx_to_world(b.tile_idx, mw, mh);
         commands.entity(e).insert((
             BuildingVisualDone,
@@ -234,9 +227,17 @@ pub fn system_attach_building_visuals(
         commands.entity(e).with_children(|ch| {
             ch.spawn((
                 InGameEntity,
-                Mesh2d(marker.place_ring.clone()),
-                MeshMaterial2d(mat),
+                Mesh2d(marker.place_plate.clone()),
+                MeshMaterial2d(plate_fill_mat.clone()),
                 Transform::default(),
+                GlobalTransform::default(),
+                Visibility::default(),
+            ));
+            ch.spawn((
+                InGameEntity,
+                Mesh2d(marker.place_ring.clone()),
+                MeshMaterial2d(plate_border_mat.clone()),
+                Transform::from_xyz(0.0, 0.0, 0.5),
                 GlobalTransform::default(),
                 Visibility::default(),
             ));
@@ -252,23 +253,36 @@ pub fn system_attach_building_visuals(
                 Visibility::default(),
             ));
             ch.spawn((
-                InGameEntity,
-                BuildingLabelTarget(e),
-                Text2d::new(format!(
-                    "{}{}",
-                    building_kind_short(b.kind),
-                    b.level
-                )),
-                TextFont {
-                    font,
-                    font_size: 11.0,
-                    weight: FontWeight::SEMIBOLD,
-                    ..default()
-                },
-                TextColor(Color::WHITE),
-                TextLayout::new_with_justify(Justify::Center),
+                BuildingMapBadgeRoot(e),
+                Visibility::Hidden,
                 Transform::from_xyz(0.0, TILE_SIZE * 0.42, 2.0),
-            ));
+                GlobalTransform::default(),
+            ))
+            .with_children(|badge| {
+                badge.spawn((
+                    InGameEntity,
+                    Mesh2d(marker.level_badge_capsule.clone()),
+                    MeshMaterial2d(badge_bg_mat.clone()),
+                    Transform::default(),
+                    GlobalTransform::default(),
+                    Visibility::default(),
+                ));
+                badge.spawn((
+                    InGameEntity,
+                    Text2d::new(String::new()),
+                    TextFont {
+                        font: font.clone(),
+                        font_size: 11.0,
+                        weight: FontWeight::SEMIBOLD,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                    TextLayout::new_with_justify(Justify::Center),
+                    Transform::from_xyz(0.0, 0.0, 1.0),
+                    GlobalTransform::default(),
+                    Visibility::default(),
+                ));
+            });
         });
     }
 }

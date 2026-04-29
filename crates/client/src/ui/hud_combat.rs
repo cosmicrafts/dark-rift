@@ -12,10 +12,16 @@ use bevy::ui::RelativeCursorPosition;
 pub struct BottomHudRoot;
 
 #[derive(Component)]
-pub struct BottomHudCap;
+pub struct BottomHudTroops;
 
 #[derive(Component)]
-pub struct BottomHudTroops;
+pub struct TroopsBarShell;
+
+#[derive(Component)]
+pub struct TroopsBarFill;
+
+#[derive(Component)]
+pub struct TroopsBarDamage;
 
 #[derive(Component)]
 pub struct BottomHudGold;
@@ -251,7 +257,6 @@ pub fn system_sync_bottom_combat_hud(
         (&mut Text, &mut TextFont, &mut Node),
         (
             With<AttackRatioReadout>,
-            Without<BottomHudCap>,
             Without<BottomHudTroops>,
             Without<BottomHudGold>,
             Without<AttackRatioTrack>,
@@ -259,30 +264,19 @@ pub fn system_sync_bottom_combat_hud(
             Without<AttackRatioFill>,
         ),
     >,
-    mut q_cap: Query<
-        &mut Text,
-        (
-            With<BottomHudCap>,
-            Without<AttackRatioReadout>,
-            Without<BottomHudTroops>,
-            Without<BottomHudGold>,
-        ),
-    >,
     mut q_gold: Query<
         &mut Text,
         (
             With<BottomHudGold>,
             Without<AttackRatioReadout>,
-            Without<BottomHudCap>,
             Without<BottomHudTroops>,
         ),
     >,
     mut q_troops: Query<
-        &mut Text,
+        (&mut Text, &mut TextColor),
         (
             With<BottomHudTroops>,
             Without<AttackRatioReadout>,
-            Without<BottomHudCap>,
             Without<BottomHudGold>,
         ),
     >,
@@ -331,9 +325,8 @@ pub fn system_sync_bottom_combat_hud(
     
     if my_id.0 == 0 {
         **readout = String::new();
-        if let Ok(mut g) = q_cap.single_mut() { **g = "0".to_string(); }
         if let Ok(mut gl) = q_gold.single_mut() { **gl = "0".to_string(); }
-        if let Ok(mut t) = q_troops.single_mut() { **t = "0".to_string(); }
+        if let Ok((mut t, _)) = q_troops.single_mut() { **t = "0 / 0".to_string(); }
         return;
     }
 
@@ -369,17 +362,25 @@ pub fn system_sync_bottom_combat_hud(
             }
         };
 
-        if let Ok(mut g) = q_cap.single_mut() {
-            let s = fmt(player.max_troops);
-            if **g != s { **g = s; }
-        }
         if let Ok(mut gl) = q_gold.single_mut() {
             let s = fmt(player.gold);
             if **gl != s { **gl = s; }
         }
-        if let Ok(mut t) = q_troops.single_mut() {
-            let s = fmt(player.troops);
+        if let Ok((mut t, mut t_color)) = q_troops.single_mut() {
+            let s = format!("{} / {}", fmt(player.troops), fmt(player.max_troops));
             if **t != s { **t = s; }
+
+            let ratio = player.troops / player.max_troops.max(1.0);
+            let color = if ratio < 0.45 {
+                Color::srgb(0.4, 0.9, 0.4) // Green
+            } else if ratio < 0.75 {
+                Color::srgb(0.9, 0.7, 0.1) // Yellow/Orange
+            } else {
+                Color::srgb(0.9, 0.3, 0.3) // Red
+            };
+            if t_color.0 != color {
+                t_color.0 = color;
+            }
         }
     }
 
@@ -573,5 +574,54 @@ pub fn system_settings_toggle_devstats(
                 };
             }
         }
+    }
+}
+
+pub fn system_sync_bottom_troops_bar(
+    game_opt: Option<Res<GameState>>,
+    my_id: Res<MyPlayerId>,
+    time: Res<Time>,
+    mut display_troops: Local<f32>,
+    mut q_shell: Query<&mut BorderColor, With<TroopsBarShell>>,
+    mut q_fill: Query<(&mut Node, &mut BackgroundColor), With<TroopsBarFill>>,
+    mut q_damage: Query<&mut Node, (With<TroopsBarDamage>, Without<TroopsBarFill>)>,
+) {
+    let Some(game) = game_opt.as_deref() else { return };
+    if my_id.0 == 0 { return; }
+
+    let Some(player) = game.player(my_id.0) else { return };
+    let max_troops = player.max_troops.max(1.0);
+    let target_percent = (player.troops / max_troops).clamp(0.0, 1.0) as f32;
+
+    let dt = time.delta_secs();
+    let lerp_speed = 3.33;
+    
+    if (target_percent - *display_troops).abs() < 0.001 {
+        *display_troops = target_percent;
+    } else {
+        *display_troops += (target_percent - *display_troops) * (lerp_speed * dt).min(1.0);
+    }
+
+    let color = if target_percent < 0.45 {
+        Color::srgb(0.4, 0.9, 0.4) // Green
+    } else if target_percent < 0.75 {
+        Color::srgb(0.9, 0.7, 0.1) // Yellow/Orange
+    } else {
+        Color::srgb(0.9, 0.3, 0.3) // Red
+    };
+
+    if let Ok(mut bc) = q_shell.single_mut() {
+        if bc.top != color { *bc = BorderColor::all(color); }
+    }
+
+    if let Ok((mut fill_node, mut bg)) = q_fill.single_mut() {
+        // Instant snap for the actual fill
+        fill_node.width = Val::Percent(target_percent * 100.0);
+        if bg.0 != color { bg.0 = color; }
+    }
+
+    if let Ok(mut dmg_node) = q_damage.single_mut() {
+        // Slow lerp for the damage background
+        dmg_node.width = Val::Percent(*display_troops * 100.0);
     }
 }

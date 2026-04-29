@@ -1,6 +1,5 @@
 use bevy::prelude::*;
 use crate::building::{Building, DefenseGrid};
-use crate::config;
 use crate::game::{GameEvent, GamePhase, GameState};
 use crate::map::TerrainType;
 use crate::pathfinding::WaterPathfinderScratch;
