@@ -221,3 +221,38 @@ pub fn system_cleanup_ingame_entities(
     commands.remove_resource::<SinglePlayerState>();
     commands.remove_resource::<LocalIntentBuffer>();
 }
+
+/// Cleanup rail rendering resources — runs alongside entity cleanup on OnExit(InGame).
+/// Prevents cross-game memory accumulation of mesh handles, pathfinding buffers,
+/// tile caches, and train entity pools.
+pub fn system_cleanup_rail_resources(
+    mut rail_cache: ResMut<crate::rendering::rail::RailRenderCache>,
+    mut rail_dirty: ResMut<crate::rendering::rail::RailColorDirty>,
+    mut rail_pool: ResMut<crate::rendering::rail::RailTrainPool>,
+    mut rail_scratch: ResMut<dark_rift_shared::execution::rail::RailPathScratchResource>,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
+    // Remove the stale mesh asset so GPU memory is freed.
+    if let Some(h) = rail_cache.mesh_handle.take() {
+        meshes.remove(&h);
+    }
+    rail_cache.mesh_entity = None;
+    rail_cache.topo_hash = (0, 0);
+    rail_cache.tile_ranges.clear();
+    rail_cache.tile_ranges.shrink_to_fit();
+    rail_cache.tiles.clear();
+    rail_cache.tiles.shrink_to_fit();
+    rail_cache.tile_owner_cache.clear();
+    rail_cache.tile_owner_cache.shrink_to_fit();
+    rail_cache.next_check = 0;
+
+    rail_dirty.tiles.clear();
+    rail_dirty.tiles.shrink_to_fit();
+
+    // Pool entity references are stale (entities are despawned by system_cleanup_ingame_entities).
+    rail_pool.by_train_id.clear();
+    rail_pool.by_train_id.shrink_to_fit();
+
+    // Reset pathfinding scratch — free the ~95MB backing buffers.
+    *rail_scratch = dark_rift_shared::execution::rail::RailPathScratchResource::default();
+}

@@ -34,7 +34,7 @@ const HEURISTIC_WEIGHT: i32 = 2;
 
 // --- Tile A* (OpenFront `AStarRail` / `RailAdapter`) ------------------------
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct TileSearchNode {
     neg_f: i32,
     neg_g: i32,
@@ -100,30 +100,40 @@ fn manhattan_heuristic(a: u32, b: u32, w: u32) -> i32 {
     HEURISTIC_WEIGHT * ((ax - bx).abs() + (ay - by).abs())
 }
 
-/// Reusable A* scratchpad for rail pathfinding.
-/// Matches OpenFront's `AStar.ts` pattern: pre-allocate once, clear via stamp
-/// increment (O(1) reset) instead of reallocating ~95 MB per call.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+/// Reusable A* engine for rail pathfinding.
+/// Architecture mirrors the proven `WaterAStar` in `pathfinding.rs`:
+/// - Two stamp arrays (`closed_stamp` + `gscore_stamp`) for proper closed-set tracking
+/// - `came_from` as `Vec<i32>` with -1 sentinel (no redundant `prev_for_cost`)
+/// - `BinaryHeap` stored as a field (reused across calls, not re-allocated)
+/// - **No** `Serialize/Deserialize/Clone` — scratch buffers are transient compute artifacts
+#[derive(Debug)]
 pub struct RailPathScratch {
-    g_score: Vec<u32>,
-    came_from: Vec<u32>,
-    prev_for_cost: Vec<u32>,
-    /// Per-node stamps: a node is "open" only when its stamp == self.stamp.
-    g_stamp: Vec<u32>,
+    closed_stamp: Vec<u32>,
+    gscore_stamp: Vec<u32>,
+    gscore: Vec<u32>,
+    came_from: Vec<i32>,
     stamp: u32,
     capacity: usize,
+    heap: BinaryHeap<TileSearchNode>,
 }
 
 impl Default for RailPathScratch {
     fn default() -> Self {
         Self {
-            g_score: Vec::new(),
+            closed_stamp: Vec::new(),
+            gscore_stamp: Vec::new(),
+            gscore: Vec::new(),
             came_from: Vec::new(),
-            prev_for_cost: Vec::new(),
-            g_stamp: Vec::new(),
             stamp: 0,
             capacity: 0,
+            heap: BinaryHeap::new(),
         }
+    }
+}
+
+impl PartialEq for RailPathScratch {
+    fn eq(&self, _other: &Self) -> bool {
+        true // Scratch buffers are semantically equal — they hold no game state
     }
 }
 
@@ -132,27 +142,38 @@ impl RailPathScratch {
         if self.capacity >= n {
             return;
         }
-        self.g_score.resize(n, u32::MAX);
-        self.came_from.resize(n, u32::MAX);
-        self.prev_for_cost.resize(n, u32::MAX);
-        self.g_stamp.resize(n, 0);
+        self.closed_stamp.resize(n, 0);
+        self.gscore_stamp.resize(n, 0);
+        self.gscore.resize(n, u32::MAX);
+        self.came_from.resize(n, -1);
         self.capacity = n;
     }
 
-    /// O(1) logical clear — just bump the stamp.
+    /// O(1) logical clear — bump the stamp. Physical clear only on u32 wraparound.
     fn clear(&mut self) {
         self.stamp = self.stamp.wrapping_add(1);
         if self.stamp == 0 {
-            // Wrapped around — must physically clear stamps.
-            self.g_stamp.fill(0);
+            self.closed_stamp.fill(0);
+            self.gscore_stamp.fill(0);
             self.stamp = 1;
         }
+        self.heap.clear();
+    }
+
+    #[inline]
+    fn is_closed(&self, idx: usize) -> bool {
+        self.closed_stamp[idx] == self.stamp
+    }
+
+    #[inline]
+    fn close(&mut self, idx: usize) {
+        self.closed_stamp[idx] = self.stamp;
     }
 
     #[inline]
     fn g(&self, idx: usize) -> i32 {
-        if self.g_stamp[idx] == self.stamp {
-            self.g_score[idx] as i32
+        if self.gscore_stamp[idx] == self.stamp {
+            self.gscore[idx] as i32
         } else {
             i32::MAX
         }
@@ -160,36 +181,28 @@ impl RailPathScratch {
 
     #[inline]
     fn set_g(&mut self, idx: usize, val: i32) {
-        self.g_score[idx] = val as u32;
-        self.g_stamp[idx] = self.stamp;
+        self.gscore[idx] = val as u32;
+        self.gscore_stamp[idx] = self.stamp;
     }
 
     #[inline]
-    fn set_came_from(&mut self, idx: usize, from: u32) {
+    fn set_came_from(&mut self, idx: usize, from: i32) {
         self.came_from[idx] = from;
     }
 
     #[inline]
     fn get_came_from(&self, idx: usize) -> Option<u32> {
-        if self.g_stamp[idx] == self.stamp && self.came_from[idx] != u32::MAX {
-            Some(self.came_from[idx])
+        if self.gscore_stamp[idx] == self.stamp && self.came_from[idx] >= 0 {
+            Some(self.came_from[idx] as u32)
         } else {
             None
         }
     }
 
-    #[inline]
-    fn set_prev(&mut self, idx: usize, prev: u32) {
-        self.prev_for_cost[idx] = prev;
-    }
-
+    /// Read the previous node for direction-change cost (derived from came_from chain).
     #[inline]
     fn get_prev(&self, idx: usize) -> Option<u32> {
-        if self.g_stamp[idx] == self.stamp && self.prev_for_cost[idx] != u32::MAX {
-            Some(self.prev_for_cost[idx])
-        } else {
-            None
-        }
+        self.get_came_from(idx)
     }
 }
 
@@ -206,10 +219,10 @@ pub fn find_rail_tile_path(map: &GameMap, from: u32, to: u32, scratch: &mut Rail
     scratch.ensure_capacity(n);
     scratch.clear();
     scratch.set_g(from as usize, 0);
+    scratch.set_came_from(from as usize, -1);
 
-    let mut heap = BinaryHeap::new();
     let mut seq: u32 = 0;
-    heap.push(TileSearchNode {
+    scratch.heap.push(TileSearchNode {
         neg_f: -manhattan_heuristic(from, to, w),
         neg_g: 0,
         tile: from,
@@ -219,55 +232,67 @@ pub fn find_rail_tile_path(map: &GameMap, from: u32, to: u32, scratch: &mut Rail
 
     let mut iterations = 20_000;
 
-    while let Some(TileSearchNode { tile: current, .. }) = heap.pop() {
+    while let Some(TileSearchNode { tile: current, .. }) = scratch.heap.pop() {
         if iterations == 0 {
             return Vec::new();
         }
         iterations -= 1;
 
+        let ci = current as usize;
+
+        // Skip already-closed nodes (proper closed-set check)
+        if scratch.is_closed(ci) {
+            continue;
+        }
+        scratch.close(ci);
+
         if current == to {
             break;
         }
-        let current_g = scratch.g(current as usize);
+
+        let current_g = scratch.g(ci);
         if current_g == i32::MAX {
             continue;
         }
+
         let (cx, cy) = tile_xy(current, w);
         let from_shoreline = is_shoreline(map, current);
+        // Read prev from came_from chain (no redundant prev_for_cost array)
+        let prev = scratch.get_prev(ci);
 
-        let try_neighbor = |next: u32, scratch: &mut RailPathScratch, heap: &mut BinaryHeap<TileSearchNode>, seq: &mut u32| {
-            if !is_traversable(map, next, from_shoreline) {
-                return;
+        // Neighbor expansion: N, S, W, E
+        let neighbors: [(bool, u32); 4] = [
+            (cy > 0,            current.wrapping_sub(w)),
+            (cy + 1 < h as i32, current.wrapping_add(w)),
+            (cx > 0,            current.wrapping_sub(1)),
+            (cx + 1 < w as i32, current.wrapping_add(1)),
+        ];
+
+        for &(valid, next) in &neighbors {
+            if !valid {
+                continue;
             }
-            let prev = scratch.get_prev(current as usize);
+            let ni = next as usize;
+            if scratch.is_closed(ni) {
+                continue;
+            }
+            if !is_traversable(map, next, from_shoreline) {
+                continue;
+            }
             let step = tile_move_cost(map, current, next, prev, w);
             let tentative = current_g.saturating_add(step);
-            if tentative < scratch.g(next as usize) {
-                scratch.set_g(next as usize, tentative);
-                scratch.set_came_from(next as usize, current);
-                scratch.set_prev(next as usize, current);
+            if tentative < scratch.g(ni) {
+                scratch.set_g(ni, tentative);
+                scratch.set_came_from(ni, current as i32);
                 let f = tentative + manhattan_heuristic(next, to, w);
-                heap.push(TileSearchNode {
+                scratch.heap.push(TileSearchNode {
                     neg_f: -f,
                     neg_g: -tentative,
                     tile: next,
-                    seq: *seq,
+                    seq,
                 });
-                *seq += 1;
+                seq += 1;
             }
-        };
-
-        if cy > 0 {
-            try_neighbor(current - w, scratch, &mut heap, &mut seq);
-        }
-        if cy + 1 < h as i32 {
-            try_neighbor(current + w, scratch, &mut heap, &mut seq);
-        }
-        if cx > 0 {
-            try_neighbor(current - 1, scratch, &mut heap, &mut seq);
-        }
-        if cx + 1 < w as i32 {
-            try_neighbor(current + 1, scratch, &mut heap, &mut seq);
         }
     }
 
@@ -499,23 +524,23 @@ pub struct TrainRuntime {
     pub current_leg: usize,
     pub idx_in_leg: usize,
     pub trade_stops_visited: u32,
-    pub used_tiles_ring: Vec<u32>,
+    pub used_tiles_ring: std::collections::VecDeque<u32>,
 }
 
 impl TrainRuntime {
     /// Tile index used for client rendering (engine position along current leg).
-    pub fn display_engine_tile(&self, rail: &RailWorld) -> Option<u32> {
+    pub fn display_engine_tile(&self, world: &RailWorld) -> Option<u32> {
         if !self.active || self.path_stations.len() < self.current_leg + 2 {
             return None;
         }
         let from = self.path_stations[self.current_leg];
         let to = self.path_stations[self.current_leg + 1];
-        let tiles = rail.oriented_leg_tiles(from, to)?;
-        if tiles.is_empty() {
+        let rail = world.get_rail_by_stations(from, to)?;
+        if rail.tiles.is_empty() {
             return None;
         }
-        let i = self.idx_in_leg.min(tiles.len().saturating_sub(1));
-        Some(tiles[i])
+        let i = self.idx_in_leg.min(rail.tiles.len().saturating_sub(1));
+        world.oriented_leg_tile(rail, from, i)
     }
 }
 
@@ -564,23 +589,6 @@ impl RailWorld {
 
     fn station_idx_by_id(&self, sid: u32) -> Option<usize> {
         self.stations.iter().position(|s| s.id == sid)
-    }
-
-    fn oriented_tiles(rail: &Railroad, from_sid: u32, to_sid: u32) -> Vec<u32> {
-        if rail.from_station == from_sid && rail.to_station == to_sid {
-            rail.tiles.clone()
-        } else if rail.from_station == to_sid && rail.to_station == from_sid {
-            rail.tiles.iter().rev().copied().collect()
-        } else {
-            Vec::new()
-        }
-    }
-
-    fn get_rail_between(&self, a: u32, b: u32) -> Option<&Railroad> {
-        let ia = self.station_idx_by_id(a)?;
-        let ib = self.station_idx_by_id(b)?;
-        let rid = self.stations[ia].neighbors.get(&self.stations[ib].id).copied()?;
-        self.railroads.iter().find(|r| r.id == rid)
     }
 
     pub fn distance_hops(&self, start_sid: u32, dest_sid: u32, max_distance: i32) -> i32 {
@@ -934,39 +942,23 @@ impl RailWorld {
         }
     }
 
-    fn count_ready_factories_for_owner(&self, buildings: &[Building], owner: u16) -> u32 {
-        buildings
-            .iter()
-            .filter(|b| {
-                b.kind == BuildingKind::Factory && !b.under_construction && b.owner_id == owner
-            })
-            .count() as u32
-    }
-
-    fn cluster_trade_station_ids(&mut self, station_idx: usize) -> Vec<u32> {
-        let root = self.uf.find(station_idx);
-        let mut v: Vec<u32> = self
-            .stations
-            .iter()
-            .enumerate()
-            .filter(|(i, s)| {
-                self.uf.find(*i) == root
-                    && matches!(s.kind, BuildingKind::City | BuildingKind::Port)
-            })
-            .map(|(_, s)| s.id)
-            .collect();
+    fn eligible_trade_destinations(
+        &mut self,
+        train_owner: u16,
+        factory_si: usize,
+        trade_stations_by_root: &std::collections::BTreeMap<usize, Vec<usize>>,
+    ) -> Vec<u32> {
+        let root = self.uf.find(factory_si);
+        let mut v = Vec::new();
+        if let Some(stations) = trade_stations_by_root.get(&root) {
+            for &i in stations {
+                if Self::trade_available(self.stations[i].owner_id, train_owner) {
+                    v.push(self.stations[i].id);
+                }
+            }
+        }
         v.sort();
         v
-    }
-
-    fn eligible_trade_destinations(&mut self, train_owner: u16, factory_si: usize) -> Vec<u32> {
-        self.cluster_trade_station_ids(factory_si)
-            .into_iter()
-            .filter(|&sid| {
-                let si = self.station_idx_by_id(sid).unwrap();
-                Self::trade_available(self.stations[si].owner_id, train_owner)
-            })
-            .collect()
     }
 
     fn reservoir_pick_destination(rng: &mut WyRand, eligible: &[u32]) -> Option<u32> {
@@ -984,10 +976,20 @@ impl RailWorld {
         Some(selected)
     }
 
-    fn has_any_trade_destination(&mut self, train_owner: u16, factory_si: usize) -> bool {
-        !self
-            .eligible_trade_destinations(train_owner, factory_si)
-            .is_empty()
+    fn has_any_trade_destination(
+        &mut self,
+        train_owner: u16,
+        factory_si: usize,
+        trade_stations_by_root: &std::collections::BTreeMap<usize, Vec<usize>>,
+    ) -> bool {
+        let root = self.uf.find(factory_si);
+        if let Some(stations) = trade_stations_by_root.get(&root) {
+            stations.iter().any(|&i| {
+                Self::trade_available(self.stations[i].owner_id, train_owner)
+            })
+        } else {
+            false
+        }
     }
 
     fn try_spawn_train_for_runner(
@@ -996,6 +998,8 @@ impl RailWorld {
         buildings: &[Building],
         runner_i: usize,
         current_tick: u64,
+        ready_factories_by_owner: &std::collections::BTreeMap<u16, u32>,
+        trade_stations_by_root: &std::collections::BTreeMap<usize, Vec<usize>>,
     ) {
         if !self.runners[runner_i].spawn_trains || !self.runners[runner_i].activated {
             return;
@@ -1016,10 +1020,10 @@ impl RailWorld {
             return;
         };
         let owner = b.owner_id;
-        if !self.has_any_trade_destination(owner, factory_si) {
+        if !self.has_any_trade_destination(owner, factory_si, trade_stations_by_root) {
             return;
         }
-        let num_factories = self.count_ready_factories_for_owner(buildings, owner);
+        let num_factories = ready_factories_by_owner.get(&owner).copied().unwrap_or(0);
         let level = b.level.max(1);
         let rate = Self::train_spawn_rate(num_factories);
         let spawn_ok = {
@@ -1036,7 +1040,7 @@ impl RailWorld {
         if !spawn_ok {
             return;
         }
-        let eligible = self.eligible_trade_destinations(owner, factory_si);
+        let eligible = self.eligible_trade_destinations(owner, factory_si, trade_stations_by_root);
         let dest_sid = {
             let runner = &mut self.runners[runner_i];
             match Self::reservoir_pick_destination(&mut runner.spawn_rng, &eligible) {
@@ -1067,14 +1071,27 @@ impl RailWorld {
             current_leg: 0,
             idx_in_leg: 0,
             trade_stops_visited: 0,
-            used_tiles_ring: Vec::new(),
+            used_tiles_ring: std::collections::VecDeque::new(),
         });
         self.runners[runner_i].last_spawn_tick = current_tick;
     }
 
-    pub fn oriented_leg_tiles(&self, from_sid: u32, to_sid: u32) -> Option<Vec<u32>> {
-        let rail = self.get_rail_between(from_sid, to_sid)?;
-        Some(Self::oriented_tiles(rail, from_sid, to_sid))
+    fn get_rail_by_stations(&self, from_sid: u32, to_sid: u32) -> Option<&Railroad> {
+        let from_i = self.stations.iter().position(|s| s.id == from_sid)?;
+        let rail_id = self.stations[from_i].neighbors.get(&to_sid)?;
+        self.railroads.iter().find(|r| r.id == *rail_id)
+    }
+
+    fn oriented_leg_tile(&self, rail: &Railroad, from_sid: u32, idx: usize) -> Option<u32> {
+        if idx >= rail.tiles.len() {
+            return None;
+        }
+        let mapped_idx = if rail.from_station != from_sid {
+            rail.tiles.len() - 1 - idx
+        } else {
+            idx
+        };
+        Some(rail.tiles[mapped_idx])
     }
 
     fn next_leg_trade_ok(&self, train: &TrainRuntime) -> bool {
@@ -1114,21 +1131,6 @@ impl RailWorld {
         }
     }
 
-    fn save_traversed_tiles(train: &mut TrainRuntime, tiles: &[u32], from: usize, count: usize) {
-        let mut tile_to_save = from;
-        for _ in 0..count {
-            if tile_to_save >= tiles.len() {
-                break;
-            }
-            train.used_tiles_ring.push(tiles[tile_to_save]);
-            let cap = (TRAIN_NUM_CARS + 2) * TRAIN_SPACING + 3;
-            while train.used_tiles_ring.len() > cap {
-                train.used_tiles_ring.remove(0);
-            }
-            tile_to_save += 1;
-        }
-    }
-
     fn tick_one_train(&mut self, game: &mut GameState, train: &mut TrainRuntime) {
         if !train.active {
             return;
@@ -1137,28 +1139,59 @@ impl RailWorld {
             train.active = false;
             return;
         }
-        let from_sid = train.path_stations[train.current_leg];
-        let to_sid = train.path_stations[train.current_leg + 1];
-        let mut tiles = match self.oriented_leg_tiles(from_sid, to_sid) {
-            Some(t) if !t.is_empty() => t,
-            _ => {
-                train.active = false;
-                return;
-            }
-        };
-        let spawn_tile = self.stations[self.station_idx_by_id(from_sid).unwrap()].tile_idx;
-        if train.idx_in_leg == 0 && train.current_leg == 0 && tiles[0] != spawn_tile {
-            tiles.insert(0, spawn_tile);
-        }
+
         let mut steps = TRAIN_SPEED;
         while steps > 0 {
-            let remaining = tiles.len().saturating_sub(train.idx_in_leg);
+            if !train.active {
+                break;
+            }
+            let from_sid = train.path_stations[train.current_leg];
+            let to_sid = train.path_stations[train.current_leg + 1];
+            let rail = match self.get_rail_by_stations(from_sid, to_sid) {
+                Some(r) if !r.tiles.is_empty() => r,
+                _ => {
+                    train.active = false;
+                    return;
+                }
+            };
+            let tiles_len = rail.tiles.len();
+
+            let remaining = tiles_len.saturating_sub(train.idx_in_leg);
             if remaining == 0 {
+                // Should not happen, but safety guard
+                train.current_leg += 1;
+                train.idx_in_leg = 0;
+                if train.current_leg + 1 >= train.path_stations.len() {
+                    train.active = false;
+                    return;
+                }
+                continue;
+            }
+
+            let take = remaining.min(steps);
+            
+            // Save traversed tiles into ring buffer without allocations
+            for i in train.idx_in_leg..(train.idx_in_leg + take) {
+                if let Some(tile) = self.oriented_leg_tile(rail, from_sid, i) {
+                    train.used_tiles_ring.push_back(tile);
+                }
+            }
+            let cap = (TRAIN_NUM_CARS + 2) * TRAIN_SPACING + 3;
+            while train.used_tiles_ring.len() > cap {
+                train.used_tiles_ring.pop_front();
+            }
+
+            train.idx_in_leg += take;
+            steps -= take;
+
+            if train.idx_in_leg >= tiles_len {
                 let reached = to_sid;
-                let kind = self.stations[self.station_idx_by_id(reached).unwrap()].kind;
-                if matches!(kind, BuildingKind::City | BuildingKind::Port) {
-                    self.apply_station_stop_gold(game, train, reached);
-                    train.trade_stops_visited = train.trade_stops_visited.saturating_add(1);
+                if let Some(si) = self.station_idx_by_id(reached) {
+                    let kind = self.stations[si].kind;
+                    if matches!(kind, BuildingKind::City | BuildingKind::Port) {
+                        self.apply_station_stop_gold(game, train, reached);
+                        train.trade_stops_visited = train.trade_stops_visited.saturating_add(1);
+                    }
                 }
                 train.current_leg += 1;
                 train.idx_in_leg = 0;
@@ -1170,34 +1203,6 @@ impl RailWorld {
                     train.active = false;
                     return;
                 }
-                return self.tick_one_train(game, train);
-            }
-            let take = remaining.min(steps);
-            Self::save_traversed_tiles(train, &tiles, train.idx_in_leg, take);
-            train.idx_in_leg += take;
-            steps -= take;
-            if train.idx_in_leg >= tiles.len() {
-                let reached = to_sid;
-                let kind = self.stations[self.station_idx_by_id(reached).unwrap()].kind;
-                if matches!(kind, BuildingKind::City | BuildingKind::Port) {
-                    self.apply_station_stop_gold(game, train, reached);
-                    train.trade_stops_visited = train.trade_stops_visited.saturating_add(1);
-                }
-                train.current_leg += 1;
-                train.idx_in_leg = 0;
-                if train.current_leg + 1 >= train.path_stations.len() {
-                    train.active = false;
-                    return;
-                }
-                let new_from = train.path_stations[train.current_leg];
-                let new_to = train.path_stations[train.current_leg + 1];
-                tiles = match self.oriented_leg_tiles(new_from, new_to) {
-                    Some(t) if !t.is_empty() => t,
-                    _ => {
-                        train.active = false;
-                        return;
-                    }
-                };
             }
         }
     }
@@ -1221,6 +1226,22 @@ impl RailWorld {
         let tick = game.tick;
         self.bootstrap_factory_neighbors(game, buildings);
         let n_runners = self.runners.len();
+        
+        let mut ready_factories_by_owner = std::collections::BTreeMap::new();
+        for b in buildings {
+            if b.kind == BuildingKind::Factory && !b.under_construction {
+                *ready_factories_by_owner.entry(b.owner_id).or_insert(0) += 1;
+            }
+        }
+
+        let mut trade_stations_by_root: std::collections::BTreeMap<usize, Vec<usize>> = std::collections::BTreeMap::new();
+        for i in 0..self.stations.len() {
+            if matches!(self.stations[i].kind, BuildingKind::City | BuildingKind::Port) {
+                let root = self.uf.find(i);
+                trade_stations_by_root.entry(root).or_default().push(i);
+            }
+        }
+
         let mut activations_this_tick = 0;
         for i in 0..n_runners {
             if !self.runners[i].activated {
@@ -1232,7 +1253,7 @@ impl RailWorld {
             }
         }
         for i in 0..n_runners {
-            self.try_spawn_train_for_runner(game, buildings, i, tick);
+            self.try_spawn_train_for_runner(game, buildings, i, tick, &ready_factories_by_owner, &trade_stations_by_root);
         }
         self.tick_trains(game);
     }
@@ -1313,8 +1334,9 @@ mod railway_tests {
         let seed = g.seed;
         g.rail.on_structure_ready(map_ref, seed, &both, &both[0]);
         g.rail.on_structure_ready(map_ref, seed, &both, &both[1]);
-        run_rail_simulation(&mut g, &both);
-        run_rail_simulation(&mut g, &both);
+        let mut scratch = RailPathScratch::default();
+        run_rail_simulation(&mut g, &both, &mut scratch);
+        run_rail_simulation(&mut g, &both, &mut scratch);
         assert_eq!(g.rail.stations.len(), 2);
         assert!(!g.rail.railroads.is_empty());
     }
@@ -1354,9 +1376,10 @@ mod railway_tests {
             b.rail.on_structure_ready(m, s, &bs, &bs[0]);
             b.rail.on_structure_ready(m, s, &bs, &bs[1]);
         }
+        let mut scratch = RailPathScratch::default();
         for _ in 0..8 {
-            run_rail_simulation(&mut a, &bs);
-            run_rail_simulation(&mut b, &bs);
+            run_rail_simulation(&mut a, &bs, &mut scratch);
+            run_rail_simulation(&mut b, &bs, &mut scratch);
         }
         assert_eq!(a.rail, b.rail);
     }

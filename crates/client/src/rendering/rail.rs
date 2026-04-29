@@ -33,20 +33,20 @@ pub struct RailTrainVis {
 pub(crate) struct RailNetworkMesh;
 
 #[derive(Default, Clone, Copy)]
-struct TileVertexRange {
+pub(crate) struct TileVertexRange {
     start: usize,
     end: usize,
 }
 
 #[derive(Resource, Default)]
 pub struct RailRenderCache {
-    topo_hash: (u64, usize),
-    mesh_entity: Option<Entity>,
-    mesh_handle: Option<Handle<Mesh>>,
-    tile_ranges: HashMap<u32, Vec<TileVertexRange>>,
-    tiles: Vec<u32>,
-    tile_owner_cache: HashMap<u32, [u8; 4]>,
-    next_check: usize,
+    pub(crate) topo_hash: (u64, usize),
+    pub(crate) mesh_entity: Option<Entity>,
+    pub(crate) mesh_handle: Option<Handle<Mesh>>,
+    pub(crate) tile_ranges: HashMap<u32, Vec<TileVertexRange>>,
+    pub(crate) tiles: Vec<u32>,
+    pub(crate) tile_owner_cache: HashMap<u32, [u8; 4]>,
+    pub(crate) next_check: usize,
 }
 
 #[derive(Resource, Default)]

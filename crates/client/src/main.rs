@@ -226,7 +226,7 @@ fn main() {
             .add_systems(OnEnter(AppState::LobbyBrowser), setup_lobby_browser.run_if(|cli: Res<Cli>| !cli.bot))
             .add_systems(OnExit(AppState::LobbyBrowser), system_cleanup_lobby_browser.run_if(|cli: Res<Cli>| !cli.bot))
             .add_systems(OnEnter(AppState::InGame), leaderboard::setup_leaderboard.run_if(|cli: Res<Cli>| !cli.bot))
-            .add_systems(OnExit(AppState::InGame), system_cleanup_ingame_entities.run_if(|cli: Res<Cli>| !cli.bot))
+            .add_systems(OnExit(AppState::InGame), (system_cleanup_ingame_entities, system_cleanup_rail_resources).run_if(|cli: Res<Cli>| !cli.bot))
             .add_systems(Update, (
                 system_handle_join_clicks,
                 system_handle_cancel_join,
