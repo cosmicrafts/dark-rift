@@ -63,11 +63,17 @@ pub fn valid_land_structure_indices(
 
     let cx_i = cx as i64;
     let cy_i = cy as i64;
-    let h = map.height;
-    let area = (w * h) as usize;
-    let mut visited = vec![false; area];
+
+    // A 32x32 grid handles dx/dy up to +/- 15 (radius 15) without bounds panics
+    let mut visited = [false; 32 * 32];
+    let local_idx = |nx: i64, ny: i64| -> usize {
+        let lx = (nx - cx_i + 15) as usize;
+        let ly = (ny - cy_i + 15) as usize;
+        ly * 32 + lx
+    };
+
     let mut queue: Vec<u32> = Vec::new();
-    visited[click_idx as usize] = true;
+    visited[local_idx(cx_i, cy_i)] = true;
     queue.push(click_idx);
 
     let mut out: Vec<u32> = Vec::new();
@@ -101,20 +107,21 @@ pub fn valid_land_structure_indices(
         }
 
         map.for_each_neighbor(x, y, |nx, ny| {
-            let nidx = xy_idx(nx, ny, w) as usize;
-            if visited[nidx] {
-                return;
-            }
             let nxi = nx as i64;
             let nyi = ny as i64;
             if euclid_sq(nxi, nyi, cx_i, cy_i) >= STRUCTURE_SEARCH_RADIUS_SQ {
                 return;
             }
+            let l_idx = local_idx(nxi, nyi);
+            if visited[l_idx] {
+                return;
+            }
             if map.owner_id(nx, ny) != owner_id {
                 return;
             }
-            visited[nidx] = true;
-            queue.push(nidx as u32);
+            visited[l_idx] = true;
+            let nidx = xy_idx(nx, ny, w) as u32;
+            queue.push(nidx);
         });
     }
 
