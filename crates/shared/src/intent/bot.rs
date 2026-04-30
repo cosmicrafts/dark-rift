@@ -57,6 +57,8 @@ pub fn system_bot_think(
 
     let mut schedule: Vec<(u16, u64, u64)> = Vec::new();
     let mut any_structures = false;
+    let total_bots = game.players.iter().filter(|p| !p.is_human() && p.alive).count() as u64;
+    let mut bot_index = 0u64;
     for p in game.players.iter() {
         if p.is_human() || !p.alive {
             continue;
@@ -68,7 +70,9 @@ pub fn system_bot_think(
         let interval = sched_rng
             .next_int(attack_interval_base as i32, (attack_interval_base as i32 * 2).max(1))
             .max(1) as u64;
-        let offset = sched_rng.next_int(0, interval as i32) as u64;
+        // Uniform distribution: space out bots evenly across their interval to prevent spikes
+        let offset = (bot_index * interval) / total_bots.max(1);
+        bot_index += 1;
         schedule.push((bot_id, interval, offset));
         
         let phase = tick % interval;
