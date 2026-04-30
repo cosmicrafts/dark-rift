@@ -11,18 +11,25 @@ pub fn advance_building_construction_tick(
         return;
     }
 
-    let all_buildings: Vec<Building> = q.iter().map(|(_, b)| *b).collect();
+    let mut scratch: Vec<(Entity, u64)> = Vec::new();
+    for (e, b) in q.iter() {
+        if b.under_construction {
+            scratch.push((e, b.id));
+        }
+    }
+    if scratch.is_empty() {
+        return;
+    }
 
-    let mut scratch: Vec<(Entity, u64)> = q.iter().map(|(e, b)| (e, b.id)).collect();
     scratch.sort_by_key(|&(_, id)| id);
+
+    let mut any_ready = false;
+    let mut ready_buildings = Vec::new();
 
     for (entity, _) in scratch {
         let Ok((_, mut b)) = q.get_mut(entity) else {
             continue;
         };
-        if !b.under_construction {
-            continue;
-        }
         if b.ticks_until_complete > 0 {
             b.ticks_until_complete -= 1;
         }
@@ -33,12 +40,17 @@ pub fn advance_building_construction_tick(
                 tile_idx: b.tile_idx,
                 kind: b.kind,
             });
-            let bcopy = *b;
-            let map_ref = &game.map;
-            let world_seed = game.seed;
-            game
-                .rail
-                .on_structure_ready(map_ref, world_seed, &all_buildings, &bcopy);
+            any_ready = true;
+            ready_buildings.push(*b);
+        }
+    }
+
+    if any_ready {
+        let all_buildings: Vec<Building> = q.iter().map(|(_, b)| *b).collect();
+        let map_ref = &game.map;
+        let world_seed = game.seed;
+        for bcopy in ready_buildings {
+            game.rail.on_structure_ready(map_ref, world_seed, &all_buildings, &bcopy);
         }
     }
 }

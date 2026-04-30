@@ -145,6 +145,7 @@ fn main() {
         .init_resource::<CameraDragState>()
         .init_resource::<PinchState>()
         .init_resource::<TouchGestureState>()
+        .init_resource::<DesktopCameraPanSmooth>()
         .init_resource::<FreshlyPaintedTiles>()
             .init_resource::<AttackRatio>()
             .init_resource::<OutgoingAttackRowMap>()
@@ -332,6 +333,8 @@ fn main() {
             system_apply_responsive_hud_layout
                 .run_if(resource_changed::<UiShellState>.or(resource_changed::<CombatDockUiScale>).or(resource_changed::<ClientSettings>)),
             system_apply_responsive_hud_icons_and_hotkeys
+                .run_if(resource_changed::<UiShellState>.or(resource_changed::<CombatDockUiScale>).or(resource_changed::<ClientSettings>)),
+            system_apply_action_dock_layout
                 .run_if(resource_changed::<UiShellState>.or(resource_changed::<CombatDockUiScale>).or(resource_changed::<ClientSettings>)),
             system_sync_bottom_combat_hud,
             system_sync_bottom_troops_bar,

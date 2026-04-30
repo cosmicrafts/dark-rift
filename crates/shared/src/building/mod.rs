@@ -38,7 +38,7 @@ mod tests {
     #[test]
     fn valid_land_center_click() {
         let (map, owner) = tiny_owned_map();
-        let existing: Vec<(u32, u32)> = Vec::new();
+        let existing = BuildingGrid::default();
         let v = valid_land_structure_indices(&map, owner, 2, &existing);
         assert!(v.contains(&2));
     }
@@ -55,7 +55,17 @@ mod tests {
         }
         let click = 16u32;
         // Structure one tile away from click: click tile is excluded (too close).
-        let existing = vec![(15u32, 0u32)];
+        let mut existing = BuildingGrid::default();
+        let fake_b = Building {
+            id: 1,
+            owner_id: owner,
+            tile_idx: 15,
+            kind: BuildingKind::City,
+            level: 1,
+            under_construction: false,
+            ticks_until_complete: 0,
+        };
+        existing.rebuild(std::iter::once(&fake_b), w, 1, 32, None);
         let v = valid_land_structure_indices(&m, owner, click, &existing);
         assert!(!v.contains(&15));
         assert!(!v.is_empty());
@@ -64,7 +74,8 @@ mod tests {
     #[test]
     fn port_picks_shore_in_valid_set() {
         let (map, owner) = tiny_owned_map();
-        let valid = valid_land_structure_indices(&map, owner, 2, &[]);
+        let existing = BuildingGrid::default();
+        let valid = valid_land_structure_indices(&map, owner, 2, &existing);
         let p = resolve_port_spawn_tile(&map, owner, 2, &valid);
         assert!(p.is_some());
         let (x, y) = idx_xy(p.unwrap(), map.width);

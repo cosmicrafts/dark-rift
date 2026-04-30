@@ -69,7 +69,7 @@ pub fn system_sync_structure_ghost(
     }
 
     let snapshot: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
-    let positions = existing_structure_positions_with_width(snapshot.iter(), w, None);
+    let positions = existing_structure_positions_with_width(snapshot.iter(), w, mh, None);
     let cost = structure_build_cost_gold(kind, pid, &snapshot);
     let afford = player.gold >= cost && cost.is_finite();
 

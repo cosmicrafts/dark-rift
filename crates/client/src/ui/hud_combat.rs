@@ -6,7 +6,7 @@ use lightyear::prelude::*;
 use crate::ui::theme::*;
 use crate::ui::shell::{UiBreakpoint, UiShellState};
 use crate::ui::write_guard::{approx_eq_f32, assign_if_ne, set_text_font_size_if_changed};
-use crate::{ATTACK_RATIO_KEYSTEP, AppState, JoinedLobby, PlayerLabel, OutgoingRowsContainer, home_button_size_for_breakpoint, home_button_width_for_breakpoint};
+use crate::{ActionDockPointerSink, ATTACK_RATIO_KEYSTEP, AppState, JoinedLobby, PlayerLabel, OutgoingRowsContainer, home_button_size_for_breakpoint, home_button_width_for_breakpoint};
 use bevy::ui::RelativeCursorPosition;
 
 #[derive(Component)]
@@ -92,6 +92,13 @@ pub fn system_apply_responsive_hud_layout(
             if root_node.padding != UiRect::ZERO {
                 root_node.padding = UiRect::ZERO;
             }
+            assign_if_ne(&mut root_node.width, Val::Percent(100.0));
+            if root_node.max_width != Val::Percent(100.0) {
+                root_node.max_width = Val::Percent(100.0);
+            }
+            if root_node.align_items != AlignItems::Center {
+                root_node.align_items = AlignItems::Center;
+            }
             let c = Color::srgba(0.0, 0.0, 0.0, 0.55);
             if root_bg.0 != c {
                 root_bg.0 = c;
@@ -103,6 +110,11 @@ pub fn system_apply_responsive_hud_layout(
             ));
             if root_node.padding != pad {
                 root_node.padding = pad;
+            }
+            assign_if_ne(&mut root_node.width, Val::Auto);
+            assign_if_ne(&mut root_node.max_width, Val::Percent(100.0));
+            if root_node.align_items != AlignItems::FlexStart {
+                root_node.align_items = AlignItems::FlexStart;
             }
             if root_bg.0 != Color::NONE {
                 root_bg.0 = Color::NONE;
@@ -134,6 +146,16 @@ pub fn system_apply_responsive_hud_layout(
                 220.0 * crate::clamp_ui_scale(settings.config.ui.combat_hud_scale)
             }),
         );
+        if outgoing_node.flex_direction != FlexDirection::ColumnReverse {
+            outgoing_node.flex_direction = FlexDirection::ColumnReverse;
+        }
+        if compact {
+            if outgoing_node.align_items != AlignItems::Center {
+                outgoing_node.align_items = AlignItems::Center;
+            }
+        } else if outgoing_node.align_items != AlignItems::FlexStart {
+            outgoing_node.align_items = AlignItems::FlexStart;
+        }
     }
 
     {
@@ -261,6 +283,10 @@ pub fn system_apply_responsive_hud_layout(
                 if node.padding != pad_ax {
                     node.padding = pad_ax;
                 }
+                if node.align_self != AlignSelf::Auto {
+                    node.align_self = AlignSelf::Auto;
+                }
+                assign_if_ne(&mut node.min_width, Val::Auto);
             } else {
                 let panel_c = Color::srgba(0.1, 0.1, 0.15, 0.85);
                 if bg.0 != panel_c {
@@ -270,12 +296,14 @@ pub fn system_apply_responsive_hud_layout(
                 if node.border_radius != br {
                     node.border_radius = br;
                 }
-                assign_if_ne(
-                    &mut node.max_width,
-                    Val::Px(800.0 * settings.config.ui.combat_hud_scale),
-                );
-                assign_if_ne(&mut node.width, Val::Percent(96.0));
-                let pad_all = UiRect::all(Val::Px(12.0 * settings.config.ui.combat_hud_scale));
+                let s = crate::clamp_ui_scale(settings.config.ui.combat_hud_scale);
+                assign_if_ne(&mut node.width, Val::Auto);
+                assign_if_ne(&mut node.max_width, Val::Px(560.0 * s));
+                assign_if_ne(&mut node.min_width, Val::Px(300.0 * s));
+                if node.align_self != AlignSelf::FlexStart {
+                    node.align_self = AlignSelf::FlexStart;
+                }
+                let pad_all = UiRect::all(Val::Px(12.0 * s));
                 if node.padding != pad_all {
                     node.padding = pad_all;
                 }
@@ -345,6 +373,49 @@ pub fn system_apply_responsive_hud_icons_and_hotkeys(
         if *vis != hk_vis {
             *vis = hk_vis;
         }
+    }
+}
+
+/// Mobile: build grid + HOME in one bottom row (centered). Desktop / iPad: HOME above the grid, both aligned to the bottom-right (`ColumnReverse` because DOM order is grid then HOME).
+pub fn system_apply_action_dock_layout(
+    ui_shell: Res<UiShellState>,
+    mut q: Query<&mut Node, With<ActionDockPointerSink>>,
+) {
+    let compact = matches!(ui_shell.breakpoint, UiBreakpoint::Compact);
+    let Ok(mut node) = q.single_mut() else {
+        return;
+    };
+    let gap = crate::ui::theme::SPACE_2;
+    if compact {
+        if node.flex_direction != FlexDirection::Row {
+            node.flex_direction = FlexDirection::Row;
+        }
+        if node.flex_wrap != FlexWrap::Wrap {
+            node.flex_wrap = FlexWrap::Wrap;
+        }
+        if node.justify_content != JustifyContent::Center {
+            node.justify_content = JustifyContent::Center;
+        }
+        if node.align_items != AlignItems::FlexEnd {
+            node.align_items = AlignItems::FlexEnd;
+        }
+        assign_if_ne(&mut node.column_gap, Val::Px(gap));
+        assign_if_ne(&mut node.row_gap, Val::Px(gap));
+    } else {
+        if node.flex_direction != FlexDirection::ColumnReverse {
+            node.flex_direction = FlexDirection::ColumnReverse;
+        }
+        if node.flex_wrap != FlexWrap::NoWrap {
+            node.flex_wrap = FlexWrap::NoWrap;
+        }
+        if node.justify_content != JustifyContent::FlexEnd {
+            node.justify_content = JustifyContent::FlexEnd;
+        }
+        if node.align_items != AlignItems::FlexEnd {
+            node.align_items = AlignItems::FlexEnd;
+        }
+        assign_if_ne(&mut node.column_gap, Val::Px(0.0));
+        assign_if_ne(&mut node.row_gap, Val::Px(gap));
     }
 }
 
@@ -483,17 +554,9 @@ pub fn system_sync_bottom_combat_hud(
         if let Ok((mut t, mut t_color)) = q_troops.single_mut() {
             let s = format!("{} / {}", fmt(player.troops), fmt(player.max_troops));
             if **t != s { **t = s; }
-
-            let ratio = player.troops / player.max_troops.max(1.0);
-            let color = if ratio < 0.45 {
-                Color::srgb(0.4, 0.9, 0.4) // Green
-            } else if ratio < 0.75 {
-                Color::srgb(0.9, 0.7, 0.1) // Yellow/Orange
-            } else {
-                Color::srgb(0.9, 0.3, 0.3) // Red
-            };
-            if t_color.0 != color {
-                t_color.0 = color;
+            // Bar fill/border still shows capacity; keep label text white for contrast.
+            if t_color.0 != Color::WHITE {
+                t_color.0 = Color::WHITE;
             }
         }
     }

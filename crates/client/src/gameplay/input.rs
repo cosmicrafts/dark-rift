@@ -270,8 +270,12 @@ pub fn player_click(
             let place_release = left_mouse_release || touch_release;
             if place_release {
                 let snapshot: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
-                let positions =
-                    existing_structure_positions_with_width(snapshot.iter(), map_w, None);
+                let positions = existing_structure_positions_with_width(
+                    snapshot.iter(),
+                    map_w,
+                    game.map.height,
+                    None,
+                );
                 if let Some(bid) =
                     find_upgrade_target_id(&game.map, pid, kind, target_tile, &snapshot)
                 {

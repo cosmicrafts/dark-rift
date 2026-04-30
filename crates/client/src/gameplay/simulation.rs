@@ -124,7 +124,7 @@ pub fn start_game_core(
 
 pub fn catchup_fast_forward(world: &mut World) {
     let ready = world.resource::<GameReady>().0;
-    if !ready { return; }
+    if !ready || !world.contains_resource::<GameState>() { return; }
     
     let pending = world.resource::<PendingTicks>().0;
     if pending == 0 { return; }

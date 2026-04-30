@@ -256,7 +256,8 @@ pub fn system_sync_outgoing_attack_rows(
         .iter()
         .filter(|e| e.owner_id == my_id.0 && !e.retreating)
         .collect();
-    outgoing.sort_by_key(|e| e.id);
+    // Newest attacks first (higher id); list is shown top-to-newest via `ColumnReverse` on the container.
+    outgoing.sort_by(|a, b| b.id.cmp(&a.id));
 
     let desired: HashSet<u64> = outgoing.iter().map(|e| e.id).collect();
 
@@ -424,7 +425,7 @@ pub fn system_sync_outgoing_attack_rows(
         .iter()
         .filter(|f| f.owner_id == my_id.0 && !f.retreating)
         .collect();
-    fleets.sort_by_key(|f| f.id);
+    fleets.sort_by(|a, b| b.id.cmp(&a.id));
 
     let desired_f: HashSet<u64> = fleets.iter().map(|f| f.id).collect();
     let stale_f: Vec<u64> = fleet_row_map

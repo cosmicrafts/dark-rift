@@ -2,6 +2,7 @@ use bevy::prelude::*;
 
 use crate::ui::layers::HUD_SHELL;
 use crate::ui::theme::{BUTTON_RADIUS, PANEL_RADIUS, SPACE_2, SPACE_3, SPACE_4};
+use crate::ui::write_guard::assign_if_ne;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UiBreakpoint {
@@ -34,10 +35,14 @@ pub struct UiShellState {
 fn breakpoint_from_window_stabilized(width: f32, height: f32, prev: UiBreakpoint) -> UiBreakpoint {
     let h = height.max(1.0);
     let aspect = width / h;
+    // Portrait, near-square (tablet portrait / iPad-ish), or very narrow: use compact bottom HUD.
+    // Clear landscape: noticeably wider than tall — desktop two-zone bottom layout.
+    let compact_shape = aspect <= 1.06 || width < 560.0;
+    let clear_landscape = width >= 700.0 && aspect >= 1.16;
 
     match prev {
         UiBreakpoint::Compact => {
-            if width >= 640.0 && aspect >= 0.82 {
+            if clear_landscape {
                 if width < 1100.0 {
                     UiBreakpoint::Medium
                 } else {
@@ -48,16 +53,16 @@ fn breakpoint_from_window_stabilized(width: f32, height: f32, prev: UiBreakpoint
             }
         }
         UiBreakpoint::Medium => {
-            if width < 560.0 || aspect < 0.76 {
+            if compact_shape && (width < 600.0 || aspect <= 1.04) {
                 UiBreakpoint::Compact
-            } else if width >= 1120.0 {
+            } else if width >= 1120.0 && aspect >= 1.08 {
                 UiBreakpoint::Wide
             } else {
                 UiBreakpoint::Medium
             }
         }
         UiBreakpoint::Wide => {
-            if width < 560.0 || aspect < 0.76 {
+            if compact_shape && (width < 620.0 || aspect <= 1.04) {
                 UiBreakpoint::Compact
             } else if width < 1080.0 {
                 UiBreakpoint::Medium
@@ -226,26 +231,35 @@ pub fn system_apply_ui_shell_layout(
     {
         let mut bottom_q = regions.p1();
         let Ok(mut bottom) = bottom_q.single_mut() else { return };
-        // Center the bottom combat HUD on all breakpoints.
         let compact = matches!(state.breakpoint, UiBreakpoint::Compact);
-        
-        bottom.left = Val::Px(state.inset_left);
-        bottom.right = Val::Px(state.inset_right);
-        
+
+        assign_if_ne(&mut bottom.left, Val::Px(state.inset_left));
         if compact {
-            // Stack the attack bar vertically ABOVE the action dock on mobile.
-            // Action dock height is its cell size plus padding.
+            // Full width: combat HUD stacks above the bottom action dock.
+            assign_if_ne(&mut bottom.right, Val::Px(state.inset_right));
             let dock_reserve_h = action_dock_grid_layout_sizes(dock_scale.0).0 + 8.0 * dock_scale.0;
-            bottom.bottom = Val::Px(state.inset_bottom + dock_reserve_h);
+            assign_if_ne(
+                &mut bottom.bottom,
+                Val::Px(state.inset_bottom + dock_reserve_h),
+            );
+            if bottom.align_items != AlignItems::Center {
+                bottom.align_items = AlignItems::Center;
+            }
         } else {
-            bottom.bottom = Val::Px(state.inset_bottom);
+            // Leave a horizontal lane for the bottom-right action dock so HUD does not overlap it.
+            let dock_lane = action_dock_content_reserve_width(state.breakpoint, dock_scale.0);
+            assign_if_ne(
+                &mut bottom.right,
+                Val::Px(state.inset_right + dock_lane),
+            );
+            assign_if_ne(&mut bottom.bottom, Val::Px(state.inset_bottom));
+            if bottom.align_items != AlignItems::FlexStart {
+                bottom.align_items = AlignItems::FlexStart;
+            }
         }
-        
+
         bottom.flex_direction = FlexDirection::Column;
         bottom.justify_content = JustifyContent::FlexEnd;
-        bottom.align_items = AlignItems::Center;
-        // Ensure Action Dock draws on top if there is any overlap on narrow desktop windows.
-        // Wait, z-index is set on spawn or through the hierarchy. ActionDockRegion is sibling to BottomSheetRegion.
     }
 
     {
@@ -253,22 +267,31 @@ pub fn system_apply_ui_shell_layout(
         let Ok(mut dock) = dock_q.single_mut() else { return };
         let compact = matches!(state.breakpoint, UiBreakpoint::Compact);
         if compact {
-            // Full-width bottom strip on mobile
-            dock.left = Val::Px(state.inset_left);
-            dock.right = Val::Px(state.inset_right);
-            dock.bottom = Val::Px(state.inset_bottom);
+            assign_if_ne(&mut dock.left, Val::Px(state.inset_left));
+            assign_if_ne(&mut dock.right, Val::Px(state.inset_right));
+            assign_if_ne(&mut dock.bottom, Val::Px(state.inset_bottom));
             dock.flex_direction = FlexDirection::Row;
-            dock.justify_content = JustifyContent::Center;
-            dock.align_items = AlignItems::FlexEnd;
-            dock.column_gap = Val::Px(SPACE_2);
+            if dock.justify_content != JustifyContent::Center {
+                dock.justify_content = JustifyContent::Center;
+            }
+            if dock.align_items != AlignItems::FlexEnd {
+                dock.align_items = AlignItems::FlexEnd;
+            }
+            assign_if_ne(&mut dock.column_gap, Val::Px(SPACE_2));
+            assign_if_ne(&mut dock.row_gap, Val::Px(0.0));
         } else {
-            dock.left = Val::Auto;
-            dock.right = Val::Px(state.inset_right);
-            dock.bottom = Val::Px(state.inset_bottom);
+            assign_if_ne(&mut dock.left, Val::Auto);
+            assign_if_ne(&mut dock.right, Val::Px(state.inset_right));
+            assign_if_ne(&mut dock.bottom, Val::Px(state.inset_bottom));
             dock.flex_direction = FlexDirection::Row;
-            dock.justify_content = JustifyContent::FlexEnd;
-            dock.align_items = AlignItems::FlexEnd;
-            dock.column_gap = Val::Px(SPACE_2);
+            if dock.justify_content != JustifyContent::FlexEnd {
+                dock.justify_content = JustifyContent::FlexEnd;
+            }
+            if dock.align_items != AlignItems::FlexEnd {
+                dock.align_items = AlignItems::FlexEnd;
+            }
+            assign_if_ne(&mut dock.column_gap, Val::Px(SPACE_2));
+            assign_if_ne(&mut dock.row_gap, Val::Px(SPACE_2));
         }
     }
 }

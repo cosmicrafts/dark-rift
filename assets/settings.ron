@@ -5,8 +5,8 @@
         enable_territory_expansion_animations: true,
         enable_floating_labels: true,
         border: (
-            band: 0.01,
-            tint: 0.05,
+            band: 48.0,
+            tint: 0.25,
         ),
     ),
     ui: (

@@ -44,9 +44,11 @@ pub fn spawn_action_dock(
             vis,
             Node {
                 flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
                 justify_content: JustifyContent::FlexEnd,
                 align_items: AlignItems::FlexEnd,
                 column_gap: Val::Px(SPACE_2),
+                row_gap: Val::Px(SPACE_2),
                 ..default()
             },
             TextFont {
@@ -225,8 +227,9 @@ pub fn spawn_bottom_combat_hud(
             vis,
             Node {
                 position_type: PositionType::Relative,
-                width: Val::Percent(100.0),
-                align_items: AlignItems::Center,
+                width: Val::Auto,
+                max_width: Val::Percent(100.0),
+                align_items: AlignItems::FlexStart,
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(12.0 * s),
                 padding: UiRect::bottom(Val::Px(16.0 * s)),
@@ -244,8 +247,10 @@ pub fn spawn_bottom_combat_hud(
                 crate::ui::hud_combat::BottomHudPanel,
                 Node {
                     flex_shrink: 0.0,
-                    width: Val::Percent(96.0),
-                    max_width: Val::Px(800.0 * s),
+                    width: Val::Auto,
+                    min_width: Val::Px(300.0 * s),
+                    max_width: Val::Px(560.0 * s),
+                    align_self: AlignSelf::FlexStart,
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::Stretch,
                     row_gap: Val::Px(8.0 * s),
@@ -449,7 +454,8 @@ pub fn spawn_bottom_combat_hud(
                     left: Val::Px(0.0),
                     right: Val::Px(0.0),
                     margin: UiRect::bottom(Val::Px(8.0 * s)),
-                    flex_direction: FlexDirection::Column,
+                    // DOM order is oldest→newest; reverse column so the latest outgoing row is on top.
+                    flex_direction: FlexDirection::ColumnReverse,
                     align_items: AlignItems::Center,
                     row_gap: Val::Px(8.0 * s),
                     max_height: Val::Px(220.0 * s),

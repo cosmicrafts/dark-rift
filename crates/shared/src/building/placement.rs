@@ -1,6 +1,6 @@
 use crate::map::{GameMap, TerrainType};
 use crate::game::BuildingKind;
-use super::core::Building;
+use super::core::{Building, BuildingGrid};
 /// OpenFront `structureMinDist()` / search radius for land valid tiles.
 pub const STRUCTURE_MIN_DIST: i32 = 15;
 const STRUCTURE_MIN_DIST_SQ: i64 = (STRUCTURE_MIN_DIST as i64) * (STRUCTURE_MIN_DIST as i64);
@@ -50,7 +50,7 @@ pub fn valid_land_structure_indices(
     map: &GameMap,
     owner_id: u16,
     click_idx: u32,
-    existing: &[(u32, u32)],
+    existing: &BuildingGrid,
 ) -> Vec<u32> {
     let w = map.width;
     let (cx, cy) = idx_xy(click_idx, w);
@@ -96,7 +96,7 @@ pub fn valid_land_structure_indices(
         }
 
         let mut too_close = false;
-        for &(bx, by) in existing {
+        for &(bx, by) in existing.iter_in_range(x, y, STRUCTURE_MIN_DIST as u32) {
             if euclid_sq(xi, yi, bx as i64, by as i64) < STRUCTURE_MIN_DIST_SQ {
                 too_close = true;
                 break;
@@ -190,7 +190,7 @@ pub fn resolve_structure_spawn_tile(
     owner_id: u16,
     kind: BuildingKind,
     click_idx: u32,
-    existing: &[(u32, u32)],
+    existing: &BuildingGrid,
 ) -> Option<u32> {
     let w = map.width;
     let h = map.height;
@@ -214,10 +214,10 @@ pub fn resolve_structure_spawn_tile(
 pub fn existing_structure_positions_with_width<'a>(
     buildings: impl Iterator<Item = &'a Building>,
     map_width: u32,
+    map_height: u32,
     exclude_id: Option<u64>,
-) -> Vec<(u32, u32)> {
-    buildings
-        .filter(|b| exclude_id.map(|id| b.id != id).unwrap_or(true))
-        .map(|b| idx_xy(b.tile_idx, map_width))
-        .collect()
+) -> BuildingGrid {
+    let mut grid = BuildingGrid::default();
+    grid.rebuild(buildings, map_width, map_height, 32, exclude_id);
+    grid
 }

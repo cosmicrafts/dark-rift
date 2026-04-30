@@ -19,7 +19,12 @@ pub fn player_has_valid_placement_sampled(
     if area == 0 {
         return false;
     }
-    let positions = existing_structure_positions_with_width(buildings.iter(), w, None);
+    let positions = existing_structure_positions_with_width(
+        buildings.iter(),
+        w,
+        map.height,
+        None,
+    );
     let n = area.min(max_samples.max(1));
     let divisor = n.max(1);
     for k in 0..n {

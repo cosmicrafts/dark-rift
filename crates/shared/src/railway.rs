@@ -914,12 +914,31 @@ impl RailWorld {
 
     pub fn bootstrap_factory_neighbors(&mut self, game: &mut GameState, buildings: &[Building]) {
         let pending = std::mem::take(&mut self.pending_factory_neighbor_factories);
+        if pending.is_empty() {
+            return;
+        }
+        
+        let mut grid = crate::building::core::BuildingGrid::default();
+        grid.rebuild(buildings.iter(), game.map.width, game.map.height, 32, None);
+
         for fid in pending {
             let Some(fb) = buildings.iter().find(|b| b.id == fid && b.kind == BuildingKind::Factory && !b.under_construction) else {
                 continue;
             };
             let (fx, fy) = idx_xy(fb.tile_idx, game.map.width);
-            for ob in buildings.iter().filter(|b| !b.under_construction) {
+            
+            // Search only in local area using BuildingGrid
+            for &(ox, oy) in grid.iter_in_range(fx, fy, TRAIN_STATION_MAX_RANGE as u32) {
+                let d = manhattan(fx as i32, fy as i32, ox as i32, oy as i32);
+                if d > TRAIN_STATION_MAX_RANGE {
+                    continue;
+                }
+                
+                let o_idx = oy * game.map.width + ox;
+                let Some(ob) = buildings.iter().find(|b| b.tile_idx == o_idx && !b.under_construction) else {
+                    continue;
+                };
+                
                 if ob.id == fid {
                     continue;
                 }
@@ -927,11 +946,6 @@ impl RailWorld {
                     ob.kind,
                     BuildingKind::City | BuildingKind::Port | BuildingKind::Factory
                 ) {
-                    continue;
-                }
-                let (ox, oy) = idx_xy(ob.tile_idx, game.map.width);
-                let d = manhattan(fx as i32, fy as i32, ox as i32, oy as i32);
-                if d > TRAIN_STATION_MAX_RANGE {
                     continue;
                 }
                 if self.station_index_by_building.contains_key(&ob.id) {

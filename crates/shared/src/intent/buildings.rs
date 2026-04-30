@@ -31,7 +31,7 @@ pub fn apply_build_structure_intent(
         return;
     }
     let snapshot = snapshot_buildings(q_building);
-    let positions = existing_structure_positions_with_width(snapshot.iter(), w, None);
+    let positions = existing_structure_positions_with_width(snapshot.iter(), w, game.map.height, None);
     let Some(spawn_idx) =
         resolve_structure_spawn_tile(&game.map, player_id, kind, target_tile, &positions)
     else {
