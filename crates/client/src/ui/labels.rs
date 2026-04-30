@@ -3,6 +3,7 @@ use dark_rift_shared::game::GameState;
 use crate::{
     BuildingMapBadgeRoot, ClientSettings, InGameEntity, TILE_SIZE, player_label_scale, Building,
 };
+use crate::ui::write_guard::set_text_font_size_if_changed;
 
 #[derive(Component)]
 pub struct PlayerLabel(pub u16);
@@ -28,11 +29,14 @@ pub fn system_sync_building_map_labels(
             (false, lvl) if lvl > 1 => lvl.to_string(),
             _ => String::new(),
         };
-        *vis = if line.is_empty() {
+        let next_vis = if line.is_empty() {
             Visibility::Hidden
         } else {
             Visibility::Visible
         };
+        if *vis != next_vis {
+            *vis = next_vis;
+        }
         for child in children.iter() {
             if let Ok(mut text) = q_text.get_mut(child) {
                 if text.0 != line {
@@ -112,7 +116,9 @@ pub fn system_sync_player_labels(
         mut cache,
     ) in q_labels.iter_mut()
     {
-        *text_color = TextColor(Color::BLACK);
+        if text_color.0 != Color::BLACK {
+            text_color.0 = Color::BLACK;
+        }
         let Some(player) = game.player(label.0) else { continue };
 
         let new_text = format!("{}\n[{:.0}]", player.name, player.troops);
@@ -142,7 +148,7 @@ pub fn system_sync_player_labels(
             let font_px = (base_font * mul).round().max(1.0);
             if cache.0 != font_px {
                 cache.0 = font_px;
-                p_font.font_size = font_px;
+                set_text_font_size_if_changed(&mut p_font, font_px);
             }
         }
     }

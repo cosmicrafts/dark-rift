@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use dark_rift_shared::game::GameState;
 use crate::{ClientSettings, MyPlayerId, clamp_ui_scale, panel_radius_for_breakpoint};
 use crate::ui::anim::{ease_in_out_cubic, ease_out_cubic, lerp_f};
+use crate::ui::write_guard::{approx_eq_f32, set_display_if_changed, set_text_font_size_if_changed};
 use crate::ui::theme::*;
 use crate::hud_combat::{CancelFleetButton, CancelAttackButton};
 use crate::hud_trunc_name;
@@ -71,7 +72,9 @@ pub fn system_update_event_feed(
     for (entity, mut line, mut color) in q_lines.iter_mut() {
         line.timer.tick(time.delta());
         let alpha = line.timer.fraction_remaining();
-        color.0.set_alpha(alpha);
+        if !approx_eq_f32(color.0.alpha(), alpha) {
+            color.0 = color.0.with_alpha(alpha);
+        }
         if alpha <= 0.0 {
             commands.entity(entity).despawn();
         }
@@ -132,11 +135,12 @@ pub fn system_update_event_feed(
 
 fn sync_outgoing_slot_visibility(slot: Entity, children_q: &Query<&Children>, slot_node: &mut Node) {
     let n = children_q.get(slot).map(|c| c.len()).unwrap_or(0);
-    slot_node.display = if n > 0 {
+    let next = if n > 0 {
         Display::Flex
     } else {
         Display::None
     };
+    set_display_if_changed(slot_node, next);
 }
 
 fn start_row_exit(commands: &mut Commands, row_e: Entity) {
@@ -293,13 +297,13 @@ pub fn system_sync_outgoing_attack_rows(
                 if **t1 != to_text {
                     **t1 = to_text;
                 }
-                tf1.font_size = row_font;
+                set_text_font_size_if_changed(&mut tf1, row_font);
             }
             if let Ok((mut t2, mut tf2)) = q_attack_line.get_mut(text_e2) {
                 if **t2 != count_text {
                     **t2 = count_text;
                 }
-                tf2.font_size = row_font;
+                set_text_font_size_if_changed(&mut tf2, row_font);
             }
         } else {
             let font = settings.font.clone();
@@ -460,13 +464,13 @@ pub fn system_sync_outgoing_attack_rows(
                 if **t1 != to_text {
                     **t1 = to_text;
                 }
-                tf1.font_size = row_font;
+                set_text_font_size_if_changed(&mut tf1, row_font);
             }
             if let Ok((mut t2, mut tf2)) = q_fleet_line.get_mut(text_e2) {
                 if **t2 != count_text {
                     **t2 = count_text;
                 }
-                tf2.font_size = row_font;
+                set_text_font_size_if_changed(&mut tf2, row_font);
             }
         } else {
             let font = settings.font.clone();

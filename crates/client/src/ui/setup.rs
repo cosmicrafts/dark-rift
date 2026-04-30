@@ -1,4 +1,5 @@
 use crate::Cli;
+use crate::ui::write_guard::assign_if_ne;
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use instant::Instant;
 use crate::ClientSettings;
@@ -542,16 +543,17 @@ pub fn system_update_perf_overlay(
 
     if refresh_fps {
         throttle.last_fps_refresh = Some(now);
-        overlay.fps_value = diagnostics
+        let next = diagnostics
             .get(&FrameTimeDiagnosticsPlugin::FPS)
             .and_then(|v| v.value())
             .map(|f| format!("{f:.1}"))
             .unwrap_or_else(|| "—".to_string());
+        assign_if_ne(&mut overlay.fps_value, next);
     }
 
     if refresh_net {
         throttle.last_net_refresh = Some(now);
-        overlay.ping_value = if cli.replay.is_some() {
+        let next = if cli.replay.is_some() {
             "Offline".to_string()
         } else if net.handshake_ms.is_none() && net.connect_started.is_some() {
             "Connecting…".to_string()
@@ -561,6 +563,7 @@ pub fn system_update_perf_overlay(
         } else {
             "…".to_string()
         };
+        assign_if_ne(&mut overlay.ping_value, next);
     }
 
     if !(refresh_fps || refresh_net) {

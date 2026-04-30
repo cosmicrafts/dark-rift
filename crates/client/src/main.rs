@@ -158,7 +158,8 @@ fn main() {
         .init_resource::<BuildStructureMode>()
         .init_resource::<StructureGhostParts>()
         .init_resource::<dark_rift_shared::execution::rail::RailPathScratchResource>()
-        .init_resource::<BuildableHudState>();
+        .init_resource::<BuildableHudState>()
+        .init_resource::<BuildableHudDirty>();
 
         // Insert ClientSettings BEFORE app.run() so it exists when OnEnter(LobbyBrowser) fires.
         // Font handle is Handle::default() here; init_client_font patches it in Startup.
@@ -223,7 +224,16 @@ fn main() {
                     .chain()
                     .run_if(|cli: Res<Cli>| !cli.bot),
             )
-            .add_systems(OnEnter(AppState::LobbyBrowser), setup_lobby_browser.run_if(|cli: Res<Cli>| !cli.bot))
+            .add_systems(
+                OnEnter(AppState::LobbyBrowser),
+                (
+                    setup_lobby_browser,
+                    lobby_browser::system_apply_lobby_layout_responsive,
+                    lobby_browser::system_apply_lobby_controls_responsive,
+                )
+                    .chain()
+                    .run_if(|cli: Res<Cli>| !cli.bot),
+            )
             .add_systems(OnExit(AppState::LobbyBrowser), system_cleanup_lobby_browser.run_if(|cli: Res<Cli>| !cli.bot))
             .add_systems(OnEnter(AppState::InGame), leaderboard::setup_leaderboard.run_if(|cli: Res<Cli>| !cli.bot))
             .add_systems(OnExit(AppState::InGame), (system_cleanup_ingame_entities, system_cleanup_rail_resources).run_if(|cli: Res<Cli>| !cli.bot))
@@ -237,16 +247,35 @@ fn main() {
                 lobby_browser::system_nickname_keyboard_when_focused,
                 lobby_browser::system_nickname_cursor_blink,
                 lobby_browser::system_nickname_autosave_tick,
-                system_lobby_main_menu_anim,
                 system_update_lobby_browser,
             ).run_if(|state: Res<State<AppState>>, cli: Res<Cli>| *state.get() == AppState::LobbyBrowser && !cli.bot))
+            .add_systems(
+                Update,
+                system_lobby_main_menu_anim
+                    .run_if(|state: Res<State<AppState>>, cli: Res<Cli>| {
+                        *state.get() == AppState::LobbyBrowser && !cli.bot
+                    })
+                    .run_if(|anim: Option<Res<LobbyMainMenuAnim>>| {
+                        if let Some(a) = anim {
+                            !a.is_idle() || a.play_main_menu_intro_after_cancel
+                        } else {
+                            false
+                        }
+                    }),
+            )
             .add_systems(
                 Update,
                 (
                     lobby_browser::system_apply_lobby_layout_responsive,
                     lobby_browser::system_apply_lobby_controls_responsive,
                 )
-                    .run_if(|state: Res<State<AppState>>, cli: Res<Cli>| *state.get() == AppState::LobbyBrowser && !cli.bot)
+                    .run_if(|state: Res<State<AppState>>, cli: Res<Cli>| {
+                        *state.get() == AppState::LobbyBrowser && !cli.bot
+                    })
+                    .run_if(
+                        resource_changed::<UiShellState>
+                            .or(resource_changed::<ClientSettings>),
+                    )
                     .before(system_lobby_main_menu_anim),
             )
             .add_systems(Update, (
@@ -294,7 +323,12 @@ fn main() {
         app.add_systems(Update, (
             system_dump_desync_tracker,
             system_home_button,
-            update_hud,
+            update_hud
+                .run_if(
+                    resource_changed::<OverlayDiagnostics>
+                        .or(resource_changed::<HighestReceivedTurn>)
+                        .or(resource_changed::<BuildStructureMode>),
+                ),
             system_apply_responsive_hud_layout
                 .run_if(resource_changed::<UiShellState>.or(resource_changed::<CombatDockUiScale>).or(resource_changed::<ClientSettings>)),
             system_apply_responsive_hud_icons_and_hotkeys

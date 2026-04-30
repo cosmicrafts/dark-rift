@@ -1,10 +1,12 @@
 pub mod anim;
+pub mod write_guard;
 pub mod shell;
 pub mod theme;
 pub mod layers;
 pub mod lobby_browser;
 pub mod leaderboard;
 
+pub use write_guard::*;
 pub use shell::*;
 pub use theme::*;
 pub use layers::*;

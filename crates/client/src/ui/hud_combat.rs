@@ -5,6 +5,7 @@ use crate::{ClientSettings, MyPlayerId, clamp_ui_scale};
 use lightyear::prelude::*;
 use crate::ui::theme::*;
 use crate::ui::shell::{UiBreakpoint, UiShellState};
+use crate::ui::write_guard::{approx_eq_f32, assign_if_ne, set_text_font_size_if_changed};
 use crate::{ATTACK_RATIO_KEYSTEP, AppState, JoinedLobby, PlayerLabel, OutgoingRowsContainer, home_button_size_for_breakpoint, home_button_width_for_breakpoint};
 use bevy::ui::RelativeCursorPosition;
 
@@ -87,13 +88,25 @@ pub fn system_apply_responsive_hud_layout(
             return;
         };
         if compact {
-            root_node.row_gap = Val::Px(0.0);
-            root_node.padding = UiRect::ZERO;
-            root_bg.0 = Color::srgba(0.0, 0.0, 0.0, 0.55);
+            assign_if_ne(&mut root_node.row_gap, Val::Px(0.0));
+            if root_node.padding != UiRect::ZERO {
+                root_node.padding = UiRect::ZERO;
+            }
+            let c = Color::srgba(0.0, 0.0, 0.0, 0.55);
+            if root_bg.0 != c {
+                root_bg.0 = c;
+            }
         } else {
-            root_node.row_gap = Val::Px(6.0);
-            root_node.padding = UiRect::bottom(Val::Px(16.0 * crate::clamp_ui_scale(settings.config.ui.combat_hud_scale)));
-            root_bg.0 = Color::NONE;
+            assign_if_ne(&mut root_node.row_gap, Val::Px(6.0));
+            let pad = UiRect::bottom(Val::Px(
+                16.0 * crate::clamp_ui_scale(settings.config.ui.combat_hud_scale),
+            ));
+            if root_node.padding != pad {
+                root_node.padding = pad;
+            }
+            if root_bg.0 != Color::NONE {
+                root_bg.0 = Color::NONE;
+            }
         }
     }
 
@@ -102,7 +115,10 @@ pub fn system_apply_responsive_hud_layout(
         let Ok(mut track_node) = track_q.single_mut() else {
             return;
         };
-        track_node.height = Val::Px(if compact { 18.0 } else { 12.0 });
+        assign_if_ne(
+            &mut track_node.height,
+            Val::Px(if compact { 18.0 } else { 12.0 }),
+        );
     }
 
     {
@@ -110,11 +126,14 @@ pub fn system_apply_responsive_hud_layout(
         let Ok(mut outgoing_node) = outgoing_q.single_mut() else {
             return;
         };
-        outgoing_node.max_height = Val::Px(if compact {
-            140.0
-        } else {
-            220.0 * crate::clamp_ui_scale(settings.config.ui.combat_hud_scale)
-        });
+        assign_if_ne(
+            &mut outgoing_node.max_height,
+            Val::Px(if compact {
+                140.0
+            } else {
+                220.0 * crate::clamp_ui_scale(settings.config.ui.combat_hud_scale)
+            }),
+        );
     }
 
     {
@@ -123,14 +142,23 @@ pub fn system_apply_responsive_hud_layout(
             if compact {
                 // Match the smaller compact cell size
                 let cell = 38.0;
-                home_node.width = Val::Px(cell);
-                home_node.height = Val::Px(cell);
-                home_node.border_radius = BorderRadius::all(Val::Px(4.0));
+                assign_if_ne(&mut home_node.width, Val::Px(cell));
+                assign_if_ne(&mut home_node.height, Val::Px(cell));
+                let br = BorderRadius::all(Val::Px(4.0));
+                if home_node.border_radius != br {
+                    home_node.border_radius = br;
+                }
             } else {
                 let size = home_button_size_for_breakpoint(ui_shell.breakpoint);
-                home_node.width = Val::Px(home_button_width_for_breakpoint(ui_shell.breakpoint));
-                home_node.height = Val::Px(size);
-                home_node.border_radius = BorderRadius::all(Val::Px(12.0));
+                assign_if_ne(
+                    &mut home_node.width,
+                    Val::Px(home_button_width_for_breakpoint(ui_shell.breakpoint)),
+                );
+                assign_if_ne(&mut home_node.height, Val::Px(size));
+                let br = BorderRadius::all(Val::Px(12.0));
+                if home_node.border_radius != br {
+                    home_node.border_radius = br;
+                }
             }
         }
     }
@@ -138,9 +166,15 @@ pub fn system_apply_responsive_hud_layout(
         let mut exit_q = nodes.p4();
         if let Ok(mut exit_node) = exit_q.single_mut() {
             let size = home_button_size_for_breakpoint(ui_shell.breakpoint);
-            exit_node.width = Val::Px(home_button_width_for_breakpoint(ui_shell.breakpoint));
-            exit_node.height = Val::Px(size);
-            exit_node.border_radius = BorderRadius::all(Val::Px(if compact { 10.0 } else { 12.0 }));
+            assign_if_ne(
+                &mut exit_node.width,
+                Val::Px(home_button_width_for_breakpoint(ui_shell.breakpoint)),
+            );
+            assign_if_ne(&mut exit_node.height, Val::Px(size));
+            let br = BorderRadius::all(Val::Px(if compact { 10.0 } else { 12.0 }));
+            if exit_node.border_radius != br {
+                exit_node.border_radius = br;
+            }
         }
     }
     
@@ -149,26 +183,59 @@ pub fn system_apply_responsive_hud_layout(
         if let Ok((mut bg, mut border, mut node)) = build_q.single_mut() {
             if compact {
                 // Transparent — unified background on BottomHudRoot
-                bg.0 = Color::NONE;
-                *border = BorderColor::all(Color::NONE);
-                node.flex_wrap = FlexWrap::NoWrap;
-                node.max_width = Val::Percent(100.0);
-                node.width = Val::Percent(100.0);
-                node.border_radius = BorderRadius::ZERO;
-                node.padding = UiRect::axes(Val::Px(4.0), Val::Px(6.0));
-                node.column_gap = Val::Px(2.0);
-                node.justify_content = JustifyContent::SpaceEvenly;
+                if bg.0 != Color::NONE {
+                    bg.0 = Color::NONE;
+                }
+                let bnone = BorderColor::all(Color::NONE);
+                if *border != bnone {
+                    *border = bnone;
+                }
+                if node.flex_wrap != FlexWrap::NoWrap {
+                    node.flex_wrap = FlexWrap::NoWrap;
+                }
+                assign_if_ne(&mut node.max_width, Val::Percent(100.0));
+                assign_if_ne(&mut node.width, Val::Percent(100.0));
+                if node.border_radius != BorderRadius::ZERO {
+                    node.border_radius = BorderRadius::ZERO;
+                }
+                let pad = UiRect::axes(Val::Px(4.0), Val::Px(6.0));
+                if node.padding != pad {
+                    node.padding = pad;
+                }
+                assign_if_ne(&mut node.column_gap, Val::Px(2.0));
+                if node.justify_content != JustifyContent::SpaceEvenly {
+                    node.justify_content = JustifyContent::SpaceEvenly;
+                }
             } else {
-                bg.0 = Color::srgba(0.04, 0.05, 0.08, 0.92);
-                *border = BorderColor::all(panel_border());
-                node.flex_wrap = FlexWrap::Wrap;
-                node.border_radius = BorderRadius::all(Val::Px(6.0 * settings.config.ui.combat_hud_scale));
+                let panel_c = Color::srgba(0.04, 0.05, 0.08, 0.92);
+                if bg.0 != panel_c {
+                    bg.0 = panel_c;
+                }
+                let pb = BorderColor::all(panel_border());
+                if *border != pb {
+                    *border = pb;
+                }
+                if node.flex_wrap != FlexWrap::Wrap {
+                    node.flex_wrap = FlexWrap::Wrap;
+                }
+                let br = BorderRadius::all(Val::Px(6.0 * settings.config.ui.combat_hud_scale));
+                if node.border_radius != br {
+                    node.border_radius = br;
+                }
                 let s = crate::clamp_ui_scale(settings.config.ui.combat_hud_scale);
-                node.padding = UiRect::all(Val::Px(8.0 * s));
-                node.column_gap = Val::Px(4.0 * s);
-                node.justify_content = JustifyContent::Center;
+                let pad_all = UiRect::all(Val::Px(8.0 * s));
+                if node.padding != pad_all {
+                    node.padding = pad_all;
+                }
+                assign_if_ne(&mut node.column_gap, Val::Px(4.0 * s));
+                if node.justify_content != JustifyContent::Center {
+                    node.justify_content = JustifyContent::Center;
+                }
                 let (cell, gap, pad) = crate::ui::shell::action_dock_grid_layout_sizes(s);
-                node.max_width = Val::Px(3.0_f32.mul_add(cell, 2.0 * gap) + pad * 2.0 + 4.0); // 3 cols
+                assign_if_ne(
+                    &mut node.max_width,
+                    Val::Px(3.0_f32.mul_add(cell, 2.0 * gap) + pad * 2.0 + 4.0),
+                ); // 3 cols
             }
         }
     }
@@ -178,18 +245,40 @@ pub fn system_apply_responsive_hud_layout(
         if let Ok((mut bg, mut border, mut node)) = panel_q.single_mut() {
             if compact {
                 // Transparent — the shared BottomHudRoot bg covers everything
-                bg.0 = Color::NONE;
-                *border = BorderColor::all(Color::NONE);
-                node.border_radius = BorderRadius::ZERO;
-                node.max_width = Val::Percent(100.0);
-                node.width = Val::Percent(100.0);
-                node.padding = UiRect::axes(Val::Px(4.0), Val::Px(6.0));
+                if bg.0 != Color::NONE {
+                    bg.0 = Color::NONE;
+                }
+                let bnone = BorderColor::all(Color::NONE);
+                if *border != bnone {
+                    *border = bnone;
+                }
+                if node.border_radius != BorderRadius::ZERO {
+                    node.border_radius = BorderRadius::ZERO;
+                }
+                assign_if_ne(&mut node.max_width, Val::Percent(100.0));
+                assign_if_ne(&mut node.width, Val::Percent(100.0));
+                let pad_ax = UiRect::axes(Val::Px(4.0), Val::Px(6.0));
+                if node.padding != pad_ax {
+                    node.padding = pad_ax;
+                }
             } else {
-                bg.0 = Color::srgba(0.1, 0.1, 0.15, 0.85);
-                node.border_radius = BorderRadius::all(Val::Px(12.0 * settings.config.ui.combat_hud_scale));
-                node.max_width = Val::Px(800.0 * settings.config.ui.combat_hud_scale);
-                node.width = Val::Percent(96.0);
-                node.padding = UiRect::all(Val::Px(12.0 * settings.config.ui.combat_hud_scale));
+                let panel_c = Color::srgba(0.1, 0.1, 0.15, 0.85);
+                if bg.0 != panel_c {
+                    bg.0 = panel_c;
+                }
+                let br = BorderRadius::all(Val::Px(12.0 * settings.config.ui.combat_hud_scale));
+                if node.border_radius != br {
+                    node.border_radius = br;
+                }
+                assign_if_ne(
+                    &mut node.max_width,
+                    Val::Px(800.0 * settings.config.ui.combat_hud_scale),
+                );
+                assign_if_ne(&mut node.width, Val::Percent(96.0));
+                let pad_all = UiRect::all(Val::Px(12.0 * settings.config.ui.combat_hud_scale));
+                if node.padding != pad_all {
+                    node.padding = pad_all;
+                }
             }
         }
     }
@@ -202,17 +291,27 @@ pub fn system_apply_responsive_hud_layout(
         
         for mut btn in build_btns.iter_mut() {
             if compact {
-                btn.width = Val::Px(compact_cell);
-                btn.height = Val::Px(compact_cell);
-                btn.justify_content = JustifyContent::Center;
-                btn.align_items = AlignItems::Center;
-                btn.padding = UiRect::ZERO;
-                btn.row_gap = Val::Px(0.0);
+                assign_if_ne(&mut btn.width, Val::Px(compact_cell));
+                assign_if_ne(&mut btn.height, Val::Px(compact_cell));
+                if btn.justify_content != JustifyContent::Center {
+                    btn.justify_content = JustifyContent::Center;
+                }
+                if btn.align_items != AlignItems::Center {
+                    btn.align_items = AlignItems::Center;
+                }
+                if btn.padding != UiRect::ZERO {
+                    btn.padding = UiRect::ZERO;
+                }
+                assign_if_ne(&mut btn.row_gap, Val::Px(0.0));
             } else {
-                btn.width = Val::Px(normal_cell);
-                btn.height = Val::Px(normal_cell);
-                btn.justify_content = JustifyContent::FlexStart;
-                btn.align_items = AlignItems::Stretch;
+                assign_if_ne(&mut btn.width, Val::Px(normal_cell));
+                assign_if_ne(&mut btn.height, Val::Px(normal_cell));
+                if btn.justify_content != JustifyContent::FlexStart {
+                    btn.justify_content = JustifyContent::FlexStart;
+                }
+                if btn.align_items != AlignItems::Stretch {
+                    btn.align_items = AlignItems::Stretch;
+                }
             }
         }
     }
@@ -231,12 +330,21 @@ pub fn system_apply_responsive_hud_icons_and_hotkeys(
         crate::ui::shell::action_dock_grid_layout_sizes(s).0 * 0.55
     };
     for (mut node, mut vis) in q_icons.iter_mut() {
-        node.width = Val::Px(icon_size);
-        node.height = Val::Px(icon_size);
-        *vis = Visibility::Visible;
+        assign_if_ne(&mut node.width, Val::Px(icon_size));
+        assign_if_ne(&mut node.height, Val::Px(icon_size));
+        if *vis != Visibility::Visible {
+            *vis = Visibility::Visible;
+        }
     }
+    let hk_vis = if compact {
+        Visibility::Hidden
+    } else {
+        Visibility::Visible
+    };
     for mut vis in q_hotkeys.iter_mut() {
-        *vis = if compact { Visibility::Hidden } else { Visibility::Visible };
+        if *vis != hk_vis {
+            *vis = hk_vis;
+        }
     }
 }
 
@@ -324,22 +432,36 @@ pub fn system_sync_bottom_combat_hud(
 
     let s = clamp_ui_scale(settings.config.ui.combat_hud_scale);
     let compact = settings.config.ui.combat_hud_scale < 1.0;
-    readout_font.font_size = if compact { 13.0 * s } else { 18.0 * s };
-    readout_node.width = Val::Px(if compact { 90.0 * s } else { 110.0 * s });
+    let readout_fs = if compact { 13.0 * s } else { 18.0 * s };
+    set_text_font_size_if_changed(&mut readout_font, readout_fs);
+    assign_if_ne(
+        &mut readout_node.width,
+        Val::Px(if compact { 90.0 * s } else { 110.0 * s }),
+    );
     if let Ok(mut n) = q_track.single_mut() {
-        n.height = Val::Px(32.0 * s);
+        assign_if_ne(&mut n.height, Val::Px(32.0 * s));
     }
     if let Ok(mut n) = q_bar_shell.single_mut() {
-        n.height = Val::Px(16.0 * s);
-        n.border_radius = BorderRadius::all(Val::Px(8.0 * s));
+        assign_if_ne(&mut n.height, Val::Px(16.0 * s));
+        let br = BorderRadius::all(Val::Px(8.0 * s));
+        if n.border_radius != br {
+            n.border_radius = br;
+        }
     }
 
     let r = attack_ratio.0.clamp(0.01, 1.0);
+    let pct = r * 100.0;
     if let Ok(mut fill) = q_fill.single_mut() {
-        fill.width = Val::Percent(r * 100.0);
+        let w = Val::Percent(pct);
+        if fill.width != w {
+            fill.width = w;
+        }
     }
     if let Ok(mut handle) = q_handle.single_mut() {
-        handle.left = Val::Percent(r * 100.0);
+        let left = Val::Percent(pct);
+        if handle.left != left {
+            handle.left = left;
+        }
     }
 
     // Economy Sync
@@ -603,17 +725,29 @@ pub fn system_sync_bottom_troops_bar(
     };
 
     if let Ok(mut bc) = q_shell.single_mut() {
-        if bc.top != color { *bc = BorderColor::all(color); }
+        if bc.top != color {
+            *bc = BorderColor::all(color);
+        }
     }
 
     if let Ok((mut fill_node, mut bg)) = q_fill.single_mut() {
-        // Instant snap for the actual fill
-        fill_node.width = Val::Percent(target_percent * 100.0);
-        if bg.0 != color { bg.0 = color; }
+        let fill_pct = target_percent * 100.0;
+        let fill_w = Val::Percent(fill_pct);
+        if fill_node.width != fill_w {
+            fill_node.width = fill_w;
+        }
+        if bg.0 != color {
+            bg.0 = color;
+        }
     }
 
+    let dmg_converged = approx_eq_f32(*display_troops, target_percent);
     if let Ok(mut dmg_node) = q_damage.single_mut() {
-        // Slow lerp for the damage background
-        dmg_node.width = Val::Percent(*display_troops * 100.0);
+        if !dmg_converged {
+            let w = Val::Percent(*display_troops * 100.0);
+            if dmg_node.width != w {
+                dmg_node.width = w;
+            }
+        }
     }
 }

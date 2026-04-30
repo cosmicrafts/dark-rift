@@ -90,7 +90,7 @@ pub fn system_spawn_fleet_visuals(
         if fleet.owner_id != pid {
             continue;
         }
-        commands.entity(fleet_e).insert(FleetClientVisuals);
+        commands.entity(fleet_e).try_insert(FleetClientVisuals);
         let boat_mat =
             materials.add(ColorMaterial::from_color(Color::srgba(0.12, 0.82, 1.0, 0.9)));
         let wake_mat =

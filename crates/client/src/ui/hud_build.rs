@@ -11,6 +11,10 @@ pub struct BuildableHudState {
     entries: Vec<BuildableEntry>,
 }
 
+/// Set by [`system_refresh_buildable_hud`] when buildable entries change; consumed by apply.
+#[derive(Resource, Default)]
+pub struct BuildableHudDirty(pub bool);
+
 #[derive(Component)]
 pub struct BuildPillRow;
 
@@ -47,13 +51,16 @@ pub fn system_build_structure_hotkeys(
             break;
         }
     }
-    overlay.build_hint = match mode.0 {
+    let next_hint = match mode.0 {
         None => String::new(),
         Some(k) => format!(
             "{} · 1–6 · Esc · click own tile (pays gold)",
             k.as_str()
         ),
     };
+    if overlay.build_hint != next_hint {
+        overlay.build_hint = next_hint;
+    }
 }
 
 pub fn system_refresh_buildable_hud(
@@ -63,6 +70,7 @@ pub fn system_refresh_buildable_hud(
     mut removed: RemovedComponents<Building>,
     added: Query<(), Added<Building>>,
     mut state: ResMut<BuildableHudState>,
+    mut dirty: ResMut<BuildableHudDirty>,
     mut last_gold: Local<Option<f64>>,
 ) {
     let Some(game) = game_opt.as_deref() else {
@@ -83,12 +91,14 @@ pub fn system_refresh_buildable_hud(
         state.entries = compute_buildables_for_player(&game.map, pid, p.gold, &buildings)
             .into_iter()
             .collect();
+        dirty.0 = true;
         *last_gold = Some(p.gold);
         return;
     }
 
     if gold_changed && state.entries.len() == BuildingKind::ALL.len() {
         patch_buildable_entries_gold_and_counts(&mut state.entries, pid, p.gold, &buildings);
+        dirty.0 = true;
         *last_gold = Some(p.gold);
     }
 }
@@ -96,6 +106,8 @@ pub fn system_refresh_buildable_hud(
 pub fn system_apply_buildable_hud(
     state: Res<BuildableHudState>,
     mode: Res<BuildStructureMode>,
+    mut dirty: ResMut<BuildableHudDirty>,
+    q_ix: Query<(), (With<BuildPillButton>, Changed<Interaction>, With<Button>)>,
     mut q_btn: Query<
         (
             &BuildPillButton,
@@ -110,6 +122,12 @@ pub fn system_apply_buildable_hud(
     if state.entries.len() != BuildingKind::ALL.len() {
         return;
     }
+    let labels_need = dirty.0;
+    let pills_need = dirty.0 || mode.is_changed() || q_ix.iter().next().is_some();
+    if !labels_need && !pills_need {
+        return;
+    }
+    if labels_need {
     for (label, mut text) in q_label.iter_mut() {
         let Some(entry) = state.entries.iter().find(|e| e.kind == label.kind) else {
             continue;
@@ -129,6 +147,8 @@ pub fn system_apply_buildable_hud(
             **text = s;
         }
     }
+    }
+    if pills_need {
     for (btn, interaction, mut bg, mut border) in q_btn.iter_mut() {
         let Some(entry) = state.entries.iter().find(|e| e.kind == btn.0) else {
             continue;
@@ -161,6 +181,10 @@ pub fn system_apply_buildable_hud(
             *border = target_border;
         }
     }
+    }
+    if dirty.0 {
+        dirty.0 = false;
+    }
 }
 
 pub fn system_buildpill_interactions(
@@ -171,7 +195,10 @@ pub fn system_buildpill_interactions(
     for (ix, btn) in &q {
         if *ix == Interaction::Pressed {
             mode.0 = Some(btn.0);
-            overlay.build_hint = format!("Place {} — click own tile (gold) · Esc", btn.0.as_str());
+            let h = format!("Place {} — click own tile (gold) · Esc", btn.0.as_str());
+            if overlay.build_hint != h {
+                overlay.build_hint = h;
+            }
         }
     }
 }

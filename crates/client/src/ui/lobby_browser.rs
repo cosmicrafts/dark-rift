@@ -7,6 +7,7 @@ use dark_rift_shared::player::PlayerType;
 use dark_rift_shared::protocol::*;
 use crate::settings::{save_client_settings_config, ProfileConfig};
 use crate::ui::anim::{ease_in_out_cubic, ease_out_cubic, lerp_f, smoothstep};
+use crate::ui::write_guard::{assign_if_ne, set_text_font_size_if_changed};
 use crate::ui::shell::{touch_target_for_breakpoint, UiBreakpoint, UiShellState};
 use crate::ui::layers::LOBBY_BROWSER;
 use crate::{ClientSettings, Cli};
@@ -778,61 +779,90 @@ pub fn system_apply_lobby_layout_responsive(
         lobby_responsive_metrics(ui_shell.breakpoint, ui_shell.inset_left);
 
     if let Ok(mut root) = q.nodes.p0().single_mut() {
-        root.padding = UiRect::all(Val::Px(outer_pad));
+        let pad = UiRect::all(Val::Px(outer_pad));
+        if root.padding != pad {
+            root.padding = pad;
+        }
     }
     if let Ok(mut chrome) = q.nodes.p1().single_mut() {
-        chrome.row_gap = Val::Px(section_gap);
+        assign_if_ne(&mut chrome.row_gap, Val::Px(section_gap));
     }
     if let Ok(mut header) = q.nodes.p2().single_mut() {
-        header.flex_direction = if matches!(ui_shell.breakpoint, UiBreakpoint::Compact) {
+        let fd = if matches!(ui_shell.breakpoint, UiBreakpoint::Compact) {
             FlexDirection::Column
         } else {
             FlexDirection::Row
         };
-        header.align_items = if matches!(ui_shell.breakpoint, UiBreakpoint::Compact) {
+        if header.flex_direction != fd {
+            header.flex_direction = fd;
+        }
+        let ai = if matches!(ui_shell.breakpoint, UiBreakpoint::Compact) {
             AlignItems::FlexStart
         } else {
             AlignItems::FlexEnd
         };
-        header.justify_content = JustifyContent::SpaceBetween;
-        header.row_gap = Val::Px(header_row_gap);
+        if header.align_items != ai {
+            header.align_items = ai;
+        }
+        if header.justify_content != JustifyContent::SpaceBetween {
+            header.justify_content = JustifyContent::SpaceBetween;
+        }
+        assign_if_ne(&mut header.row_gap, Val::Px(header_row_gap));
     }
     if let Ok(mut body) = q.nodes.p3().single_mut() {
         let compact = matches!(ui_shell.breakpoint, UiBreakpoint::Compact);
-        body.flex_direction = if compact {
+        let fd = if compact {
             FlexDirection::Column
         } else {
             FlexDirection::Row
         };
-        body.row_gap = Val::Px(section_gap);
-        body.column_gap = Val::Px(section_gap);
+        if body.flex_direction != fd {
+            body.flex_direction = fd;
+        }
+        assign_if_ne(&mut body.row_gap, Val::Px(section_gap));
+        assign_if_ne(&mut body.column_gap, Val::Px(section_gap));
     }
     if let Ok(mut left) = q.nodes.p4().single_mut() {
-        left.width = if matches!(ui_shell.breakpoint, UiBreakpoint::Compact) {
+        let w = if matches!(ui_shell.breakpoint, UiBreakpoint::Compact) {
             Val::Percent(100.0)
         } else {
             Val::Percent(60.0)
         };
-        left.min_width = Val::Px(0.0);
-        left.row_gap = Val::Px(section_gap - 2.0);
+        assign_if_ne(&mut left.width, w);
+        assign_if_ne(&mut left.min_width, Val::Px(0.0));
+        assign_if_ne(&mut left.row_gap, Val::Px(section_gap - 2.0));
     }
     if let Ok(mut right) = q.nodes.p5().single_mut() {
         let compact = matches!(ui_shell.breakpoint, UiBreakpoint::Compact);
-        right.width = if compact {
+        let w = if compact {
             Val::Percent(100.0)
         } else {
             Val::Percent(34.0)
         };
-        right.min_width = if compact { Val::Px(0.0) } else { Val::Px(280.0) };
-        right.max_width = if compact { Val::Percent(100.0) } else { Val::Px(420.0) };
-        right.row_gap = Val::Px(section_gap - 4.0);
+        assign_if_ne(&mut right.width, w);
+        let mw = if compact {
+            Val::Px(0.0)
+        } else {
+            Val::Px(280.0)
+        };
+        assign_if_ne(&mut right.min_width, mw);
+        let xw = if compact {
+            Val::Percent(100.0)
+        } else {
+            Val::Px(420.0)
+        };
+        assign_if_ne(&mut right.max_width, xw);
+        assign_if_ne(&mut right.row_gap, Val::Px(section_gap - 4.0));
     }
     if let Ok(mut cards) = q.nodes.p6().single_mut() {
-        cards.row_gap = Val::Px(section_gap - 2.0);
-        cards.min_height = Val::Px(card_min_height + 100.0);
+        assign_if_ne(&mut cards.row_gap, Val::Px(section_gap - 2.0));
+        assign_if_ne(&mut cards.min_height, Val::Px(card_min_height + 100.0));
     }
     if let Ok(mut waiting) = q.nodes.p7().single_mut() {
-        waiting.padding = UiRect::all(Val::Px(outer_pad));
+        let pad = UiRect::all(Val::Px(outer_pad));
+        if waiting.padding != pad {
+            waiting.padding = pad;
+        }
     }
 }
 
@@ -845,28 +875,41 @@ pub fn system_apply_lobby_controls_responsive(
     let (_, touch_h) = touch_target_for_breakpoint(ui_shell.breakpoint);
 
     if let Ok(mut waiting_content) = q.nodes.p0().single_mut() {
-        waiting_content.max_width = if waiting_max_width.is_infinite() {
+        let mw = if waiting_max_width.is_infinite() {
             Val::Percent(100.0)
         } else {
             Val::Px(waiting_max_width)
         };
-        waiting_content.row_gap = Val::Px(section_gap);
+        assign_if_ne(&mut waiting_content.max_width, mw);
+        assign_if_ne(&mut waiting_content.row_gap, Val::Px(section_gap));
     }
     if let Ok(mut nick) = q.nodes.p1().single_mut() {
-        nick.min_height = Val::Px((touch_h + 22.0).max(52.0) as f32);
-        nick.padding = UiRect::axes(Val::Px(16.0), Val::Px(12.0));
+        assign_if_ne(
+            &mut nick.min_height,
+            Val::Px((touch_h + 22.0).max(52.0) as f32),
+        );
+        let np = UiRect::axes(Val::Px(16.0), Val::Px(12.0));
+        if nick.padding != np {
+            nick.padding = np;
+        }
     }
     if let Ok(mut solo) = q.nodes.p2().single_mut() {
-        solo.min_height = Val::Px(action_min_height);
+        assign_if_ne(&mut solo.min_height, Val::Px(action_min_height));
     }
     for mut stub in &mut q.nodes.p3() {
-        stub.min_height = Val::Px((action_min_height - 10.0).max(60.0));
+        assign_if_ne(
+            &mut stub.min_height,
+            Val::Px((action_min_height - 10.0).max(60.0)),
+        );
     }
     for mut cancel in &mut q.nodes.p4() {
-        cancel.min_height = Val::Px((touch_h + 24.0).max(54.0) as f32);
+        assign_if_ne(
+            &mut cancel.min_height,
+            Val::Px((touch_h + 24.0).max(54.0) as f32),
+        );
     }
     for mut card in &mut q.nodes.p5() {
-        card.min_height = Val::Px(card_min_height);
+        assign_if_ne(&mut card.min_height, Val::Px(card_min_height));
     }
 
     let (title_fs, version_fs, section_fs, body_fs, nickname_fs, solo_primary_fs, solo_secondary_fs, stub_fs) =
@@ -876,7 +919,7 @@ pub fn system_apply_lobby_controls_responsive(
             UiBreakpoint::Wide => (56.0, 18.0, 16.0, 17.0, 19.0, 28.0, 16.0, 19.0),
         };
     for (mut text_font, role) in &mut q.fonts.p0() {
-        text_font.font_size = match role.0 {
+        let fs = match role.0 {
             LobbyMenuTextRole::TitleMain => title_fs,
             LobbyMenuTextRole::Version => version_fs,
             LobbyMenuTextRole::SectionLabel => section_fs,
@@ -886,20 +929,23 @@ pub fn system_apply_lobby_controls_responsive(
             LobbyMenuTextRole::SoloSecondary => solo_secondary_fs,
             LobbyMenuTextRole::StubRanked | LobbyMenuTextRole::StubSecondary => stub_fs,
         };
+        set_text_font_size_if_changed(&mut text_font, fs);
     }
     if let Ok(mut status_font) = q.fonts.p1().single_mut() {
-        status_font.font_size = match ui_shell.breakpoint {
+        let fs = match ui_shell.breakpoint {
             UiBreakpoint::Compact => 28.0,
             UiBreakpoint::Medium => 34.0,
             UiBreakpoint::Wide => 40.0,
         };
+        set_text_font_size_if_changed(&mut status_font, fs);
     }
     if let Ok(mut players_font) = q.fonts.p2().single_mut() {
-        players_font.font_size = match ui_shell.breakpoint {
+        let fs = match ui_shell.breakpoint {
             UiBreakpoint::Compact => 18.0,
             UiBreakpoint::Medium => 19.0,
             UiBreakpoint::Wide => 20.0,
         };
+        set_text_font_size_if_changed(&mut players_font, fs);
     }
 }
 
@@ -1042,20 +1088,29 @@ pub fn system_nickname_cursor_blink(
     mut text_q: Query<(&mut Text, &mut TextColor), With<NicknameFieldText>>,
 ) {
     if let Ok((mut text, mut color)) = text_q.single_mut() {
-        if focus.is_focused {
-            let blink = (time.elapsed_secs() * 2.0).fract() > 0.5;
+        let base = base_text_color(LobbyMenuTextRole::NicknameField);
+        let (desired_text, desired_color) = if focus.is_focused {
             if focus.select_all {
-                // Highlight color when selected all
-                color.0 = Color::srgb(0.4, 0.9, 1.0);
-                text.0 = settings.config.profile.nickname.clone();
+                (
+                    settings.config.profile.nickname.clone(),
+                    Color::srgb(0.4, 0.9, 1.0),
+                )
             } else {
-                color.0 = base_text_color(LobbyMenuTextRole::NicknameField);
+                let blink = (time.elapsed_secs() * 2.0).fract() > 0.5;
                 let cursor = if blink { "|" } else { " " };
-                text.0 = format!("{}{}", settings.config.profile.nickname, cursor);
+                (
+                    format!("{}{}", settings.config.profile.nickname, cursor),
+                    base,
+                )
             }
         } else {
-            color.0 = base_text_color(LobbyMenuTextRole::NicknameField);
-            text.0 = settings.config.profile.nickname.clone();
+            (settings.config.profile.nickname.clone(), base)
+        };
+        if **text != desired_text {
+            **text = desired_text;
+        }
+        if color.0 != desired_color {
+            color.0 = desired_color;
         }
     }
 }

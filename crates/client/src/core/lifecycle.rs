@@ -189,6 +189,7 @@ pub fn system_cleanup_ingame_entities(
     mut build_mode: ResMut<BuildStructureMode>,
     mut ghost_parts: ResMut<StructureGhostParts>,
     mut build_hud: ResMut<BuildableHudState>,
+    mut build_hud_dirty: ResMut<crate::ui::hud_build::BuildableHudDirty>,
     q_ingame: Query<Entity, With<InGameEntity>>,
     q_execs: Query<Entity, With<AttackExecution>>,
     q_buildings: Query<Entity, With<Building>>,
@@ -204,6 +205,7 @@ pub fn system_cleanup_ingame_entities(
     build_mode.0 = None;
     *ghost_parts = StructureGhostParts::default();
     *build_hud = BuildableHudState::default();
+    *build_hud_dirty = crate::ui::hud_build::BuildableHudDirty::default();
 
     for e in q_ingame.iter() {
         commands.entity(e).despawn();
