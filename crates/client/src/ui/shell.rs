@@ -7,8 +7,7 @@ use crate::ui::write_guard::assign_if_ne;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UiBreakpoint {
     Compact,
-    Medium,
-    Wide,
+    Desktop,
 }
 
 /// HUD scale used for the bottom-right build grid + HOME dock (matches `combat_hud_scale` at game start).
@@ -35,39 +34,25 @@ pub struct UiShellState {
 fn breakpoint_from_window_stabilized(width: f32, height: f32, prev: UiBreakpoint) -> UiBreakpoint {
     let h = height.max(1.0);
     let aspect = width / h;
-    // Portrait, near-square (tablet portrait / iPad-ish), or very narrow: use compact bottom HUD.
-    // Clear landscape: noticeably wider than tall — desktop two-zone bottom layout.
-    let compact_shape = aspect <= 1.06 || width < 560.0;
-    let clear_landscape = width >= 700.0 && aspect >= 1.16;
+    // Keep this as a strict 2-mode model:
+    // - Compact: phone / portrait / narrow
+    // - Desktop: landscape / wider tablet / desktop
+    let compact_enter = aspect <= 1.02 || width < 760.0;
+    let desktop_enter = aspect >= 1.10 && width >= 820.0;
 
     match prev {
         UiBreakpoint::Compact => {
-            if clear_landscape {
-                if width < 1100.0 {
-                    UiBreakpoint::Medium
-                } else {
-                    UiBreakpoint::Wide
-                }
+            if desktop_enter {
+                UiBreakpoint::Desktop
             } else {
                 UiBreakpoint::Compact
             }
         }
-        UiBreakpoint::Medium => {
-            if compact_shape && (width < 600.0 || aspect <= 1.04) {
+        UiBreakpoint::Desktop => {
+            if compact_enter {
                 UiBreakpoint::Compact
-            } else if width >= 1120.0 && aspect >= 1.08 {
-                UiBreakpoint::Wide
             } else {
-                UiBreakpoint::Medium
-            }
-        }
-        UiBreakpoint::Wide => {
-            if compact_shape && (width < 620.0 || aspect <= 1.04) {
-                UiBreakpoint::Compact
-            } else if width < 1080.0 {
-                UiBreakpoint::Medium
-            } else {
-                UiBreakpoint::Wide
+                UiBreakpoint::Desktop
             }
         }
     }
@@ -76,7 +61,7 @@ fn breakpoint_from_window_stabilized(width: f32, height: f32, prev: UiBreakpoint
 impl Default for UiShellState {
     fn default() -> Self {
         Self {
-            breakpoint: UiBreakpoint::Wide,
+            breakpoint: UiBreakpoint::Desktop,
             inset_top: SPACE_3,
             inset_right: SPACE_3,
             inset_bottom: SPACE_3,
@@ -177,8 +162,7 @@ pub fn system_update_ui_shell_state(
 
     let inset = match breakpoint {
         UiBreakpoint::Compact => SPACE_2,
-        UiBreakpoint::Medium => SPACE_3,
-        UiBreakpoint::Wide => SPACE_4,
+        UiBreakpoint::Desktop => SPACE_4,
     };
 
     let new_state = UiShellState {
@@ -328,22 +312,20 @@ pub fn home_button_width_for_breakpoint(bp: UiBreakpoint) -> f32 {
 pub fn home_button_size_for_breakpoint(bp: UiBreakpoint) -> f32 {
     match bp {
         UiBreakpoint::Compact => 44.0,
-        UiBreakpoint::Medium => 52.0,
-        UiBreakpoint::Wide => 60.0,
+        UiBreakpoint::Desktop => 56.0,
     }
 }
 
 pub fn touch_target_for_breakpoint(bp: UiBreakpoint) -> (f32, f32) {
     match bp {
         UiBreakpoint::Compact => (44.0, 40.0),
-        UiBreakpoint::Medium => (40.0, 34.0),
-        UiBreakpoint::Wide => (32.0, 28.0),
+        UiBreakpoint::Desktop => (34.0, 30.0),
     }
 }
 
 pub fn panel_radius_for_breakpoint(bp: UiBreakpoint) -> f32 {
     match bp {
         UiBreakpoint::Compact => BUTTON_RADIUS,
-        UiBreakpoint::Medium | UiBreakpoint::Wide => PANEL_RADIUS,
+        UiBreakpoint::Desktop => PANEL_RADIUS,
     }
 }

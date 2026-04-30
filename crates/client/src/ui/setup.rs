@@ -303,7 +303,7 @@ pub fn spawn_bottom_combat_hud(
                             ZIndex(0),
                         ));
 
-                        // Actual fill layer (snaps instantly)
+                        // Actual fill layer (visual interpolation follows current troops state)
                         bar.spawn((
                             crate::ui::hud_combat::TroopsBarFill,
                             Node {

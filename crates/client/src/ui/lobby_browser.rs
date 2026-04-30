@@ -766,8 +766,7 @@ fn spawn_stub_button(parent: &mut ChildSpawnerCommands<'_>, font: &Handle<Font>,
 fn lobby_responsive_metrics(breakpoint: UiBreakpoint, inset_left: f32) -> (f32, f32, f32, f32, f32, f32) {
     match breakpoint {
         UiBreakpoint::Compact => (inset_left.max(14.0), 16.0, 12.0, 64.0, 172.0, f32::INFINITY),
-        UiBreakpoint::Medium => (inset_left.max(18.0), 20.0, 14.0, 76.0, 188.0, 760.0),
-        UiBreakpoint::Wide => (inset_left.max(24.0), 24.0, 16.0, 88.0, 212.0, 820.0),
+        UiBreakpoint::Desktop => (inset_left.max(24.0), 24.0, 16.0, 88.0, 212.0, 820.0),
     }
 }
 
@@ -915,8 +914,7 @@ pub fn system_apply_lobby_controls_responsive(
     let (title_fs, version_fs, section_fs, body_fs, nickname_fs, solo_primary_fs, solo_secondary_fs, stub_fs) =
         match ui_shell.breakpoint {
             UiBreakpoint::Compact => (40.0, 16.0, 14.0, 15.0, 18.0, 24.0, 15.0, 17.0),
-            UiBreakpoint::Medium => (48.0, 18.0, 15.0, 16.0, 18.0, 26.0, 16.0, 18.0),
-            UiBreakpoint::Wide => (56.0, 18.0, 16.0, 17.0, 19.0, 28.0, 16.0, 19.0),
+            UiBreakpoint::Desktop => (56.0, 18.0, 16.0, 17.0, 19.0, 28.0, 16.0, 19.0),
         };
     for (mut text_font, role) in &mut q.fonts.p0() {
         let fs = match role.0 {
@@ -934,16 +932,14 @@ pub fn system_apply_lobby_controls_responsive(
     if let Ok(mut status_font) = q.fonts.p1().single_mut() {
         let fs = match ui_shell.breakpoint {
             UiBreakpoint::Compact => 28.0,
-            UiBreakpoint::Medium => 34.0,
-            UiBreakpoint::Wide => 40.0,
+            UiBreakpoint::Desktop => 40.0,
         };
         set_text_font_size_if_changed(&mut status_font, fs);
     }
     if let Ok(mut players_font) = q.fonts.p2().single_mut() {
         let fs = match ui_shell.breakpoint {
             UiBreakpoint::Compact => 18.0,
-            UiBreakpoint::Medium => 19.0,
-            UiBreakpoint::Wide => 20.0,
+            UiBreakpoint::Desktop => 20.0,
         };
         set_text_font_size_if_changed(&mut players_font, fs);
     }

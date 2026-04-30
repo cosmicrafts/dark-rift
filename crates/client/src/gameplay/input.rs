@@ -4,7 +4,6 @@ use dark_rift_shared::game::GameState;
 
 use dark_rift_shared::building::{
     find_upgrade_target_id, resolve_structure_spawn_tile, structure_build_cost_gold,
-    existing_structure_positions_with_width, Building,
 };
 use dark_rift_shared::protocol::{ClientGameplayMessage, GameplayIntent, AttackIntent};
 use lightyear::prelude::MessageSender;
@@ -200,7 +199,6 @@ pub fn player_click(
     mut senders: Query<&mut MessageSender<ClientGameplayMessage>>,
     local_buf: Option<ResMut<LocalIntentBuffer>>,
     build_mode: Res<BuildStructureMode>,
-    q_building: Query<(Entity, &Building)>,
     mut ctx: ClickCtx,
 ) {
     // We trigger ONLY on release to support dragging.
@@ -269,17 +267,12 @@ pub fn player_click(
         if let Some(kind) = build_mode.0 {
             let place_release = left_mouse_release || touch_release;
             if place_release {
-                let snapshot: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
-                let positions = existing_structure_positions_with_width(
-                    snapshot.iter(),
-                    map_w,
-                    game.map.height,
-                    None,
-                );
+                let mut positions = dark_rift_shared::building::BuildingGrid::default();
+                positions.rebuild(game.buildings.iter(), map_w, game.map.height, 32, None);
                 if let Some(bid) =
-                    find_upgrade_target_id(&game.map, pid, kind, target_tile, &snapshot)
+                    find_upgrade_target_id(&game.map, pid, kind, target_tile, &game.buildings)
                 {
-                    let cost = structure_build_cost_gold(kind, pid, &snapshot);
+                    let cost = structure_build_cost_gold(kind, pid, &game.buildings);
                     if player.gold >= cost && cost.is_finite() {
                         send_gameplay_intent(
                             GameplayIntent::UpgradeStructure { building_id: bid },
@@ -293,7 +286,7 @@ pub fn player_click(
                 if resolve_structure_spawn_tile(&game.map, pid, kind, target_tile, &positions)
                     .is_some()
                 {
-                    let cost = structure_build_cost_gold(kind, pid, &snapshot);
+                    let cost = structure_build_cost_gold(kind, pid, &game.buildings);
                     if player.gold >= cost && cost.is_finite() {
                         send_gameplay_intent(
                             GameplayIntent::BuildStructure {

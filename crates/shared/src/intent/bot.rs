@@ -44,7 +44,6 @@ pub fn system_bot_think(
     mut game: ResMut<GameState>,
     mut q_exec: Query<(Entity, &mut AttackExecution)>,
     mut q_fleet: Query<(Entity, &mut WarpFleet)>,
-    mut q_building: Query<(Entity, &mut Building)>,
     mut path_scratch: ResMut<crate::pathfinding::WaterPathfinderScratch>,
     water_components: Res<WaterComponents>,
     config_opt: Option<Res<crate::game_config::GameConfig>>,
@@ -95,7 +94,7 @@ pub fn system_bot_think(
     let mut buildings_snapshot: Vec<Building> = Vec::new();
     let mut structure_grid = BuildingGrid::default();
     if any_structures {
-        buildings_snapshot = q_building.iter().map(|(_, b)| *b).collect();
+        buildings_snapshot = game.buildings.clone();
         buildings_snapshot.sort_unstable_by_key(|b| b.id);
         structure_grid = existing_structure_positions_with_width(
             buildings_snapshot.iter(),
@@ -258,7 +257,6 @@ pub fn system_bot_think(
             &mut game,
             &mut q_exec,
             &mut q_fleet,
-            &mut q_building,
             &stamped,
             intent_index as u32,
             &mut *path_scratch,
@@ -316,11 +314,9 @@ mod building_intent_tests {
             Query<(Entity, &mut Building)>,
         )>::new(&mut world);
         {
-            let (mut commands, mut game, mut q_building) = state.get_mut(&mut world);
+            let (mut commands, mut game) = state.get_mut(&mut world);
             apply_build_structure_intent(
-                &mut commands,
                 &mut game,
-                &mut q_building,
                 1,
                 BuildingKind::City,
                 2,
@@ -382,11 +378,9 @@ mod building_intent_tests {
             Query<(Entity, &mut Building)>,
         )>::new(&mut world);
         {
-            let (mut commands, mut game, mut q_building) = state.get_mut(&mut world);
+            let (mut commands, mut game) = state.get_mut(&mut world);
             apply_build_structure_intent(
-                &mut commands,
                 &mut game,
-                &mut q_building,
                 1,
                 BuildingKind::City,
                 5,
@@ -425,8 +419,8 @@ mod building_intent_tests {
 
         let mut state = SystemState::<(ResMut<GameState>, Query<(Entity, &mut Building)>)>::new(&mut world);
         {
-            let (mut game, mut q_building) = state.get_mut(&mut world);
-            apply_upgrade_structure_intent(&mut game, &mut q_building, 1, 9);
+            let mut game = state.get_mut(&mut world);
+            apply_upgrade_structure_intent(&mut game, 1, 9);
         }
         state.apply(&mut world);
         world.flush();
@@ -450,11 +444,9 @@ mod building_intent_tests {
             Query<(Entity, &mut Building)>,
         )>::new(&mut world);
         {
-            let (mut commands, mut game, mut q_building) = state.get_mut(&mut world);
+            let (mut commands, mut game) = state.get_mut(&mut world);
             apply_build_structure_intent(
-                &mut commands,
                 &mut game,
-                &mut q_building,
                 1,
                 BuildingKind::MissileSilo,
                 2,
@@ -526,11 +518,9 @@ mod building_intent_tests {
 
         let game = app.world().resource::<GameState>();
         let map_state = game.map.state.clone();
-        let _ = game;
 
-        let mut q_buildings = app.world_mut().query::<&Building>();
-        let mut buildings: Vec<(u16, u8, u32)> = q_buildings
-            .iter(app.world())
+        let mut buildings: Vec<(u16, u8, u32)> = game.buildings
+            .iter()
             .map(|b| (b.owner_id, bot_kind_code(b.kind), b.tile_idx))
             .collect();
         buildings.sort_unstable();
@@ -584,7 +574,6 @@ mod building_intent_tests {
             ResMut<GameState>,
             Query<(Entity, &mut AttackExecution)>,
             Query<(Entity, &mut WarpFleet)>,
-            Query<(Entity, &mut Building)>,
             ResMut<crate::pathfinding::WaterPathfinderScratch>,
             Res<WaterComponents>,
         )>::new(&mut world);
@@ -594,7 +583,6 @@ mod building_intent_tests {
                 mut game,
                 mut q_exec,
                 mut q_fleet,
-                mut q_building,
                 mut scratch,
                 water,
             ) = state.get_mut(&mut world);
@@ -603,7 +591,6 @@ mod building_intent_tests {
                 &mut game,
                 &mut q_exec,
                 &mut q_fleet,
-                &mut q_building,
                 &StampedIntent {
                     player_id: 1,
                     intent: GameplayIntent::Attack(AttackIntent { target_owner: 0, troops: Some(800.0) }),
@@ -617,7 +604,6 @@ mod building_intent_tests {
                 &mut game,
                 &mut q_exec,
                 &mut q_fleet,
-                &mut q_building,
                 &StampedIntent {
                     player_id: 1,
                     intent: GameplayIntent::Attack(AttackIntent { target_owner: 0, troops: Some(700.0) }),

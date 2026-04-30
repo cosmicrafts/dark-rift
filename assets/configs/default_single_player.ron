@@ -1,6 +1,6 @@
 (
     max_players: 1,
-    bot_count: 7,
+    bot_count: 900,
     map_name: "world",
     map_width: 2000,
     map_height: 1000,

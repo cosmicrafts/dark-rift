@@ -1,10 +1,11 @@
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 use crate::game::BuildingKind;
 use crate::config;
 use super::placement::{idx_xy, manhattan};
 /// Build and upgrade costs use **gold**; see `structure_build_cost_gold`.
 
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct Building {
     pub id: u64,
     pub owner_id: u16,

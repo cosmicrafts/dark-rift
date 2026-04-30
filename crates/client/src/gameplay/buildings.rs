@@ -1,6 +1,17 @@
 use bevy::prelude::*;
+use std::collections::{HashMap, HashSet};
 use dark_rift_shared::game::{GameState, BuildingKind};
 use crate::*;
+
+#[derive(Resource, Default)]
+pub struct BuildingVisualCache {
+    pub active: HashMap<u64, Entity>,
+}
+
+#[derive(Component)]
+pub struct BuildingMapVisualRoot {
+    pub building_id: u64,
+}
 
 pub fn building_kind_icon_path(kind: BuildingKind) -> &'static str {
     match kind {
@@ -22,7 +33,6 @@ pub fn system_sync_structure_ghost(
     meshes: Option<Res<StructureMarkerMeshes>>,
     mut ghost_parts: ResMut<StructureGhostParts>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    q_building: Query<(Entity, &Building)>,
 ) {
     let despawn_all = |commands: &mut Commands, parts: &mut StructureGhostParts| {
         if let Some(e) = parts.marker.take() {
@@ -68,9 +78,9 @@ pub fn system_sync_structure_ghost(
         return;
     }
 
-    let snapshot: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
-    let positions = existing_structure_positions_with_width(snapshot.iter(), w, mh, None);
-    let cost = structure_build_cost_gold(kind, pid, &snapshot);
+    let mut positions = dark_rift_shared::building::BuildingGrid::default();
+    positions.rebuild(game.buildings.iter(), w, mh, 32, None);
+    let cost = dark_rift_shared::building::structure_build_cost_gold(kind, pid, &game.buildings);
     let afford = player.gold >= cost && cost.is_finite();
 
     enum GhostKind {
@@ -80,9 +90,9 @@ pub fn system_sync_structure_ghost(
     }
 
     let (tile_idx, ghost_kind, ok_afford) =
-        if let Some(bid) = find_upgrade_target_id(&game.map, pid, kind, click_idx, &snapshot) {
+        if let Some(bid) = dark_rift_shared::building::find_upgrade_target_id(&game.map, pid, kind, click_idx, &game.buildings) {
             let mut ti = None;
-            for b in &snapshot {
+            for b in &game.buildings {
                 if b.id == bid {
                     ti = Some(b.tile_idx);
                     break;
@@ -192,7 +202,8 @@ pub fn system_attach_building_visuals(
     settings: Res<ClientSettings>,
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    q_new: Query<(Entity, &Building), Without<BuildingVisualDone>>,
+    mut cache: Local<BuildingVisualCache>,
+    q_camera: Query<(&Transform, &Projection), With<Camera2d>>,
 ) {
     let Some(game) = game_opt.as_deref() else {
         return;
@@ -202,27 +213,54 @@ pub fn system_attach_building_visuals(
     };
     let mw = game.map.width;
     let mh = game.map.height;
-    let pending: Vec<(Entity, Building)> = q_new.iter().map(|(e, b)| (e, *b)).collect();
+    let Some((cam_tf, proj)) = q_camera.iter().next() else {
+        return;
+    };
+    let Projection::Orthographic(ortho) = proj else {
+        return;
+    };
+    
+    // Calculate visible frustum bounds with some padding
+    let cam_pos = cam_tf.translation;
+    let padding = TILE_SIZE * 6.0;
+    let min_x = cam_pos.x + ortho.area.min.x - padding;
+    let max_x = cam_pos.x + ortho.area.max.x + padding;
+    let min_y = cam_pos.y + ortho.area.min.y - padding;
+    let max_y = cam_pos.y + ortho.area.max.y + padding;
+    let mut visible_ids = HashSet::new();
 
-    let plate_fill_mat = materials.add(ColorMaterial::from_color(Color::srgba(
-        0.10, 0.12, 0.16, 0.88,
-    )));
-    let plate_border_mat = materials.add(ColorMaterial::from_color(Color::srgba(
-        0.95, 0.95, 0.95, 0.85,
-    )));
-    let badge_bg_mat = materials.add(ColorMaterial::from_color(Color::srgba(
-        0.06, 0.07, 0.10, 0.92,
-    )));
-
-    for (e, b) in pending {
+    for b in &game.buildings {
         let pos = tile_idx_to_world(b.tile_idx, mw, mh);
-        commands.entity(e).insert((
-            BuildingVisualDone,
-            BuildingMapVisualRoot,
+        
+        if pos.x < min_x || pos.x > max_x || pos.y < min_y || pos.y > max_y {
+            continue;
+        }
+        visible_ids.insert(b.id);
+        
+        if cache.active.contains_key(&b.id) {
+            continue; // Already spawned
+        }
+        
+        // Spawn visual
+        let e = commands.spawn((
+            BuildingMapVisualRoot { building_id: b.id },
             Transform::from_xyz(pos.x, pos.y, 268.0),
             GlobalTransform::default(),
             Visibility::default(),
-        ));
+        )).id();
+        
+        cache.active.insert(b.id, e);
+        
+        let plate_fill_mat = materials.add(ColorMaterial::from_color(Color::srgba(
+            0.10, 0.12, 0.16, 0.88,
+        )));
+        let plate_border_mat = materials.add(ColorMaterial::from_color(Color::srgba(
+            0.95, 0.95, 0.95, 0.85,
+        )));
+        let badge_bg_mat = materials.add(ColorMaterial::from_color(Color::srgba(
+            0.06, 0.07, 0.10, 0.92,
+        )));
+        
         let font = settings.font.clone();
         commands.entity(e).with_children(|ch| {
             ch.spawn((
@@ -253,7 +291,7 @@ pub fn system_attach_building_visuals(
                 Visibility::default(),
             ));
             ch.spawn((
-                BuildingMapBadgeRoot(e),
+                BuildingMapBadgeRoot(b.id),
                 Visibility::Hidden,
                 Transform::from_xyz(0.0, TILE_SIZE * 0.42, 2.0),
                 GlobalTransform::default(),

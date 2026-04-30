@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use crate::building::{Building, DefenseGrid};
+use crate::building::DefenseGrid;
 use crate::game::{GameEvent, GamePhase, GameState};
 use crate::map::TerrainType;
 use crate::pathfinding::WaterPathfinderScratch;
@@ -14,9 +14,7 @@ pub fn system_attack_execution(
     mut commands: Commands,
     game_opt: Option<ResMut<GameState>>,
     mut query: Query<(Entity, &mut AttackExecution)>,
-    q_building: Query<&Building>,
     mut scratch_ordered: Local<Vec<(Entity, u64)>>,
-    mut buildings_scratch: Local<Vec<Building>>,
     mut defense_grid: Local<DefenseGrid>,
 ) {
     let Some(mut game) = game_opt else { return };
@@ -24,10 +22,6 @@ pub fn system_attack_execution(
         return;
     }
 
-    buildings_scratch.clear();
-    buildings_scratch.extend(q_building.iter().copied());
-    buildings_scratch.sort_by_key(|b| b.id); // Poka-Yoke: MUST be strictly sorted for determinism
-    let buildings = buildings_scratch.as_slice();
     let map_w = game.map.width;
 
     let tick_now = game.tick;
@@ -41,7 +35,7 @@ pub fn system_attack_execution(
         let Ok((_, mut execution)) = query.get_mut(entity) else { continue };
 
         // Pre-filter defense posts into a spatial grid to crush the O(N^2) scan down to O(1)
-        defense_grid.rebuild(buildings, map_w, game.map.height, 16, execution.target_owner);
+        defense_grid.rebuild(&game.buildings, map_w, game.map.height, 16, execution.target_owner);
 
         if execution.retreating {
             let refund = execution.troops.max(0.0);

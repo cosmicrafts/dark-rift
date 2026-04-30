@@ -30,7 +30,7 @@
     ),
     gameplay: (
         max_players: 12,
-        bot_count: 10,
+        bot_count: 400,
         bot: (
             attack_interval_base: 250,
             trigger_ratio: 0.6,

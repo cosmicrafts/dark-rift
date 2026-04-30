@@ -1,12 +1,10 @@
 use bevy::prelude::*;
-use crate::building::{aggregate_buildings_per_player, Building};
+use crate::building::aggregate_buildings_per_player;
 use crate::game::{GamePhase, GameState};
 
 // System analogous to PlayerExecution.tick() in OpenFront
 pub fn system_player_income(
     game_opt: Option<ResMut<GameState>>,
-    q_building: Query<&Building>,
-    mut buildings_scratch: Local<Vec<Building>>,
 ) {
     let Some(mut game) = game_opt else { return };
     if game.phase != GamePhase::Playing {
@@ -14,9 +12,7 @@ pub fn system_player_income(
     }
 
     let max_pid = game.players.iter().map(|p| p.id as usize).max().unwrap_or(0);
-    buildings_scratch.clear();
-    buildings_scratch.extend(q_building.iter().copied());
-    let aggs = aggregate_buildings_per_player(buildings_scratch.iter().copied(), max_pid);
+    let aggs = aggregate_buildings_per_player(game.buildings.iter().copied(), max_pid);
 
     let config = game.config.clone();
     let GameState { map: _, players, .. } = &mut *game;

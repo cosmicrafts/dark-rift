@@ -29,7 +29,7 @@ impl Default for OverlayDiagnostics { fn default() -> Self { Self { status_line:
 }
 #[derive(Resource, Default)] pub struct StructureGhostParts { pub marker: Option<Entity>, pub range: Option<Entity> }
 #[derive(Component)] pub struct BuildingVisualDone;
-#[derive(Component)] pub struct BuildingMapVisualRoot;
+
 #[derive(Component)] pub struct StructureGhostRoot;
 #[derive(Resource, Default)] pub struct BuildStructureMode(pub Option<BuildingKind>);
 #[derive(Resource, Default)] pub struct FreshlyPaintedTiles { pub tiles: HashMap<(u32, u32), f32> }
@@ -43,7 +43,7 @@ impl Default for OverlayDiagnostics { fn default() -> Self { Self { status_line:
 #[derive(Component)] pub struct GoBackButton;
 #[derive(Resource)] pub struct ShaderMapData { pub board_data: Handle<Image>, pub player_colors: Handle<Image>, pub colors_dirty: bool }
 /// Parent of the level badge mesh + text; holds the building [`Entity`] for sync.
-#[derive(Component)] pub struct BuildingMapBadgeRoot(pub Entity);
+#[derive(Component)] pub struct BuildingMapBadgeRoot(pub u64);
 #[derive(Component)] pub struct EventFeedLine { pub timer: Timer }
 #[inline] pub fn tile_idx_to_world(idx: u32, map_width: u32, map_height: u32) -> Vec2 { let x = (idx % map_width) as f32; let y = (idx / map_width) as f32; Vec2::new((x + 0.5) * crate::TILE_SIZE, (map_height as f32 - y - 0.5) * crate::TILE_SIZE) }
 #[inline] pub fn clamp_ui_scale(s: f32) -> f32 { s.clamp(0.25, 8.0) }

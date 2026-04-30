@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use dark_rift_shared::game::GameState;
 use dark_rift_shared::game::BuildingKind;
 use dark_rift_shared::building::{BuildableEntry, compute_buildables_for_player, patch_buildable_entries_gold_and_counts};
-use crate::{MyPlayerId, OverlayDiagnostics, Building};
+use crate::{MyPlayerId, OverlayDiagnostics};
 use crate::core::BuildStructureMode;
 use crate::ui::theme::*;
 
@@ -66,12 +66,10 @@ pub fn system_build_structure_hotkeys(
 pub fn system_refresh_buildable_hud(
     game_opt: Option<Res<GameState>>,
     my_id: Res<MyPlayerId>,
-    q_building: Query<&Building>,
-    mut removed: RemovedComponents<Building>,
-    added: Query<(), Added<Building>>,
     mut state: ResMut<BuildableHudState>,
     mut dirty: ResMut<BuildableHudDirty>,
     mut last_gold: Local<Option<f64>>,
+    mut last_buildings_len: Local<Option<usize>>,
 ) {
     let Some(game) = game_opt.as_deref() else {
         return;
@@ -83,21 +81,23 @@ pub fn system_refresh_buildable_hud(
     let Some(p) = game.player(pid) else {
         return;
     };
-    let buildings_changed = removed.read().count() > 0 || added.iter().next().is_some();
+    
+    let current_len = game.buildings.len();
+    let buildings_changed = last_buildings_len.map_or(true, |l| l != current_len);
     let gold_changed = last_gold.map(|g| (p.gold - g).abs() > 0.5).unwrap_or(true);
-    let buildings: Vec<Building> = q_building.iter().copied().collect();
 
     if buildings_changed || state.entries.len() != BuildingKind::ALL.len() {
-        state.entries = compute_buildables_for_player(&game.map, pid, p.gold, &buildings)
+        state.entries = compute_buildables_for_player(&game.map, pid, p.gold, &game.buildings)
             .into_iter()
             .collect();
         dirty.0 = true;
         *last_gold = Some(p.gold);
+        *last_buildings_len = Some(current_len);
         return;
     }
 
     if gold_changed && state.entries.len() == BuildingKind::ALL.len() {
-        patch_buildable_entries_gold_and_counts(&mut state.entries, pid, p.gold, &buildings);
+        patch_buildable_entries_gold_and_counts(&mut state.entries, pid, p.gold, &game.buildings);
         dirty.0 = true;
         *last_gold = Some(p.gold);
     }

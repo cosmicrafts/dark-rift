@@ -145,7 +145,6 @@ pub fn pop_turn(
     mut queue: ResMut<TurnQueue>,
     mut q_exec: Query<(Entity, &mut AttackExecution)>,
     mut q_fleet: Query<(Entity, &mut WarpFleet)>,
-    mut q_building: Query<(Entity, &mut Building)>,
     mut path_scratch: ResMut<WaterPathfinderScratch>,
     water_components: Res<WaterComponents>,
     mut desync_tracker: ResMut<DesyncTracker>,
@@ -157,7 +156,6 @@ pub fn pop_turn(
                 &mut *game,
                 &mut q_exec,
                 &mut q_fleet,
-                &mut q_building,
                 stamped,
                 i as u32,
                 &mut *path_scratch,
@@ -167,7 +165,7 @@ pub fn pop_turn(
 
         let checksum = dark_rift_shared::checksum::compute_state_hash(
             &game,
-            q_building.iter().map(|(_, b)| b as &Building),
+            game.buildings.iter(),
             q_fleet.iter().map(|(_, f)| f as &WarpFleet),
             q_exec.iter().map(|(_, e)| e as &AttackExecution),
         );

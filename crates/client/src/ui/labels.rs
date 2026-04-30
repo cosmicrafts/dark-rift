@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use dark_rift_shared::game::GameState;
 use crate::{
-    BuildingMapBadgeRoot, ClientSettings, InGameEntity, TILE_SIZE, player_label_scale, Building,
+    BuildingMapBadgeRoot, ClientSettings, InGameEntity, TILE_SIZE, player_label_scale,
 };
 use crate::ui::write_guard::set_text_font_size_if_changed;
 
@@ -13,15 +13,14 @@ pub struct PlayerLabelRenderCache(pub f32);
 
 pub fn system_sync_building_map_labels(
     game_opt: Option<Res<GameState>>,
-    q_b: Query<&Building>,
     mut q_badge: Query<(&BuildingMapBadgeRoot, &mut Visibility, &Children)>,
     mut q_text: Query<&mut Text2d>,
 ) {
-    if game_opt.is_none() {
+    let Some(game) = game_opt.as_deref() else {
         return;
-    }
+    };
     for (marker, mut vis, children) in q_badge.iter_mut() {
-        let Ok(b) = q_b.get(marker.0) else {
+        let Some(b) = game.buildings.iter().find(|b| b.id == marker.0) else {
             continue;
         };
         let line = match (b.under_construction, b.level) {

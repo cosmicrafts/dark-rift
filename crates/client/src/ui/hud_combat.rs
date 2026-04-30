@@ -24,6 +24,19 @@ pub struct TroopsBarFill;
 #[derive(Component)]
 pub struct TroopsBarDamage;
 
+#[inline]
+fn whitened_tint(base: Color) -> Color {
+    let base = base.to_srgba();
+    let keep = 0.2;
+    let white = 1.0 - keep;
+    Color::srgba(
+        base.red * keep + white,
+        base.green * keep + white,
+        base.blue * keep + white,
+        0.9,
+    )
+}
+
 #[derive(Component)]
 pub struct BottomHudGold;
 
@@ -89,6 +102,13 @@ pub fn system_apply_responsive_hud_layout(
         };
         if compact {
             assign_if_ne(&mut root_node.row_gap, Val::Px(0.0));
+            assign_if_ne(&mut root_node.column_gap, Val::Px(0.0));
+            if root_node.flex_direction != FlexDirection::Column {
+                root_node.flex_direction = FlexDirection::Column;
+            }
+            if root_node.justify_content != JustifyContent::FlexEnd {
+                root_node.justify_content = JustifyContent::FlexEnd;
+            }
             if root_node.padding != UiRect::ZERO {
                 root_node.padding = UiRect::ZERO;
             }
@@ -105,13 +125,20 @@ pub fn system_apply_responsive_hud_layout(
             }
         } else {
             assign_if_ne(&mut root_node.row_gap, Val::Px(6.0));
+            assign_if_ne(&mut root_node.column_gap, Val::Px(10.0));
+            if root_node.flex_direction != FlexDirection::Row {
+                root_node.flex_direction = FlexDirection::Row;
+            }
+            if root_node.justify_content != JustifyContent::SpaceBetween {
+                root_node.justify_content = JustifyContent::SpaceBetween;
+            }
             let pad = UiRect::bottom(Val::Px(
                 16.0 * crate::clamp_ui_scale(settings.config.ui.combat_hud_scale),
             ));
             if root_node.padding != pad {
                 root_node.padding = pad;
             }
-            assign_if_ne(&mut root_node.width, Val::Auto);
+            assign_if_ne(&mut root_node.width, Val::Percent(100.0));
             assign_if_ne(&mut root_node.max_width, Val::Percent(100.0));
             if root_node.align_items != AlignItems::FlexStart {
                 root_node.align_items = AlignItems::FlexStart;
@@ -150,11 +177,39 @@ pub fn system_apply_responsive_hud_layout(
             outgoing_node.flex_direction = FlexDirection::ColumnReverse;
         }
         if compact {
+            assign_if_ne(&mut outgoing_node.position_type, PositionType::Absolute);
+            assign_if_ne(&mut outgoing_node.bottom, Val::Percent(100.0));
+            assign_if_ne(&mut outgoing_node.left, Val::Px(0.0));
+            assign_if_ne(&mut outgoing_node.right, Val::Px(0.0));
+            if outgoing_node.margin != UiRect::bottom(Val::Px(8.0)) {
+                outgoing_node.margin = UiRect::bottom(Val::Px(8.0));
+            }
+            assign_if_ne(&mut outgoing_node.width, Val::Auto);
+            assign_if_ne(&mut outgoing_node.min_width, Val::Auto);
+            assign_if_ne(&mut outgoing_node.max_width, Val::Auto);
+            if outgoing_node.flex_grow != 0.0 {
+                outgoing_node.flex_grow = 0.0;
+            }
             if outgoing_node.align_items != AlignItems::Center {
                 outgoing_node.align_items = AlignItems::Center;
             }
-        } else if outgoing_node.align_items != AlignItems::FlexStart {
-            outgoing_node.align_items = AlignItems::FlexStart;
+        } else {
+            assign_if_ne(&mut outgoing_node.position_type, PositionType::Relative);
+            assign_if_ne(&mut outgoing_node.bottom, Val::Auto);
+            assign_if_ne(&mut outgoing_node.left, Val::Auto);
+            assign_if_ne(&mut outgoing_node.right, Val::Auto);
+            if outgoing_node.margin != UiRect::ZERO {
+                outgoing_node.margin = UiRect::ZERO;
+            }
+            assign_if_ne(&mut outgoing_node.width, Val::Percent(32.0));
+            assign_if_ne(&mut outgoing_node.min_width, Val::Px(220.0));
+            assign_if_ne(&mut outgoing_node.max_width, Val::Px(360.0));
+            if outgoing_node.flex_grow != 1.0 {
+                outgoing_node.flex_grow = 1.0;
+            }
+            if outgoing_node.align_items != AlignItems::Stretch {
+                outgoing_node.align_items = AlignItems::Stretch;
+            }
         }
     }
 
@@ -761,7 +816,10 @@ pub fn system_sync_bottom_troops_bar(
     mut display_troops: Local<f32>,
     mut q_shell: Query<&mut BorderColor, With<TroopsBarShell>>,
     mut q_fill: Query<(&mut Node, &mut BackgroundColor), With<TroopsBarFill>>,
-    mut q_damage: Query<&mut Node, (With<TroopsBarDamage>, Without<TroopsBarFill>)>,
+    mut q_damage: Query<
+        (&mut Node, &mut BackgroundColor),
+        (With<TroopsBarDamage>, Without<TroopsBarFill>),
+    >,
 ) {
     let Some(game) = game_opt.as_deref() else { return };
     if my_id.0 == 0 { return; }
@@ -794,7 +852,7 @@ pub fn system_sync_bottom_troops_bar(
     }
 
     if let Ok((mut fill_node, mut bg)) = q_fill.single_mut() {
-        let fill_pct = target_percent * 100.0;
+        let fill_pct = *display_troops * 100.0;
         let fill_w = Val::Percent(fill_pct);
         if fill_node.width != fill_w {
             fill_node.width = fill_w;
@@ -805,12 +863,16 @@ pub fn system_sync_bottom_troops_bar(
     }
 
     let dmg_converged = approx_eq_f32(*display_troops, target_percent);
-    if let Ok(mut dmg_node) = q_damage.single_mut() {
+    let dmg_color = whitened_tint(color);
+    if let Ok((mut dmg_node, mut dmg_bg)) = q_damage.single_mut() {
         if !dmg_converged {
             let w = Val::Percent(*display_troops * 100.0);
             if dmg_node.width != w {
                 dmg_node.width = w;
             }
+        }
+        if dmg_bg.0 != dmg_color {
+            dmg_bg.0 = dmg_color;
         }
     }
 }
