@@ -83,7 +83,15 @@ pub fn start_game_core(
                 cam.translation = Vec3::new(cx, cy, 999.0);
             }
             if let Some(images_res) = params.images.as_mut() {
-                let grid = spawn_shader_map(commands, &game, images_res, params.materials.as_mut().unwrap(), params.meshes.as_mut().unwrap(), true);
+                let grid = spawn_shader_map(
+                    commands,
+                    &game,
+                    images_res,
+                    params.materials.as_mut().unwrap(),
+                    params.meshes.as_mut().unwrap(),
+                    true,
+                    &params.settings.config.visuals.border,
+                );
                 commands.insert_resource(grid);
             }
 

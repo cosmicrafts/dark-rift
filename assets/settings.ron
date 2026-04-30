@@ -4,6 +4,10 @@
         enable_hdr_bloom: true,
         enable_territory_expansion_animations: true,
         enable_floating_labels: true,
+        border: (
+            band: 0.01,
+            tint: 0.05,
+        ),
     ),
     ui: (
         font_path: "",

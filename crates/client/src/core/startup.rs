@@ -127,7 +127,15 @@ pub fn setup_offline(
         game.spawn_player(player, info.spawn_x, info.spawn_y);
     }
 
-    let grid = spawn_shader_map(&mut commands, &game, &mut images, &mut materials, &mut meshes, false);
+    let grid = spawn_shader_map(
+        &mut commands,
+        &game,
+        &mut images,
+        &mut materials,
+        &mut meshes,
+        false,
+        &settings.config.visuals.border,
+    );
     commands.insert_resource(grid);
 
     commands.insert_resource(WaterComponents::compute(&game.map));

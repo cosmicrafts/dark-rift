@@ -5,8 +5,8 @@
 //!
 //! Bindings:
 //!   0 — board_data:    packed u16 owner IDs (2 per u32) — written on tile capture
-//!   1 — border_color:  uniform RGBA border darkening multiplier
-//!   2 — border_thickness: uniform f32
+//!   1 — border_color:  RGB unused; A = territory tint in border (mix black + tint * base); ~0.1
+//!   2 — border_thickness: x = neighbor offset (1 tile); y = edge band width in tile UV (e.g. 0.08)
 //!   3 — texture_size:  uniform vec2 (map_w, map_h)
 //!   4 — player_colors: packed f32×4 per player ID
 //!   5 — map_terrain:   packed MapTile u8s (4 per u32) — written once at game start

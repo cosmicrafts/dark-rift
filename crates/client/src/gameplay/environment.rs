@@ -98,6 +98,7 @@ pub fn spawn_shader_map(
     materials: &mut Assets<crate::rendering::BorderMaterial>,
     meshes: &mut Assets<Mesh>,
     in_game: bool,
+    border_cfg: &crate::settings::BorderVisualSettings,
 ) -> ShaderMapData {
     let width = game.map.width;
     let height = game.map.height;
@@ -159,8 +160,10 @@ pub fn spawn_shader_map(
     let material = crate::rendering::BorderMaterial {
         board_data: board_handle.clone(),
         uniforms: crate::rendering::BorderUniforms {
-            border_color: LinearRgba::new(0.45, 0.45, 0.45, 1.0),
-            border_thickness: Vec4::new(1.0, 0.0, 0.0, 0.0),
+            // Alpha = territory tint mixed into the otherwise-black border (RGB unused).
+            border_color: LinearRgba::new(0.0, 0.0, 0.0, border_cfg.tint.clamp(0.0, 1.0)),
+            // X = neighbor sample offset in tiles; Y = edge band width as fraction of one tile.
+            border_thickness: Vec4::new(1.0, border_cfg.band.clamp(0.001, 0.49), 0.0, 0.0),
             texture_size: Vec4::new(width as f32, height as f32, 0.0, 0.0),
             time: Vec4::new(0.0, 0.0, 0.0, 0.0),
             enable_water_animation: UVec4::new(1, 0, 0, 0),
