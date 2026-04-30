@@ -51,6 +51,7 @@ impl Default for BotProfile {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, bevy::prelude::Resource)]
+#[serde(default)]
 pub struct GameConfig {
     pub max_players: u32,
     pub bot_count: u32,

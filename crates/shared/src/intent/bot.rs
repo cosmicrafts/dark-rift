@@ -104,9 +104,9 @@ pub fn system_bot_think(
         let one_third = (offset + interval / 3) % interval;
         let two_thirds = (offset + (interval * 2) / 3) % interval;
         let do_attack = phase == offset;
-        let do_structures = do_attack || phase == one_third || phase == two_thirds;
+        let _do_structures = do_attack || phase == one_third || phase == two_thirds;
 
-        if false /* do_structures */ {
+        if false /* _do_structures */ {
             // TODO(Debug): Bot building logic disabled completely
             let Some(player) = game.player(bot_id) else {
                 continue;

@@ -20,13 +20,52 @@ impl Default for CombatDockUiScale {
     }
 }
 
-#[derive(Resource, Clone, Copy, Debug)]
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct UiShellState {
     pub breakpoint: UiBreakpoint,
     pub inset_top: f32,
     pub inset_right: f32,
     pub inset_bottom: f32,
     pub inset_left: f32,
+}
+
+/// Stable breakpoint across frames: desktop window metrics jitter sub‑pixels; WASM canvas is steadier.
+/// Without hysteresis, `aspect < 0.80` / `width < 600` flip flop → whole HUD relayout every frame.
+fn breakpoint_from_window_stabilized(width: f32, height: f32, prev: UiBreakpoint) -> UiBreakpoint {
+    let h = height.max(1.0);
+    let aspect = width / h;
+
+    match prev {
+        UiBreakpoint::Compact => {
+            if width >= 640.0 && aspect >= 0.82 {
+                if width < 1100.0 {
+                    UiBreakpoint::Medium
+                } else {
+                    UiBreakpoint::Wide
+                }
+            } else {
+                UiBreakpoint::Compact
+            }
+        }
+        UiBreakpoint::Medium => {
+            if width < 560.0 || aspect < 0.76 {
+                UiBreakpoint::Compact
+            } else if width >= 1120.0 {
+                UiBreakpoint::Wide
+            } else {
+                UiBreakpoint::Medium
+            }
+        }
+        UiBreakpoint::Wide => {
+            if width < 560.0 || aspect < 0.76 {
+                UiBreakpoint::Compact
+            } else if width < 1080.0 {
+                UiBreakpoint::Medium
+            } else {
+                UiBreakpoint::Wide
+            }
+        }
+    }
 }
 
 impl Default for UiShellState {
@@ -125,17 +164,11 @@ pub fn system_update_ui_shell_state(
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
 ) {
     let Ok(window) = windows.single() else { return };
-    let width = window.width();
-    let height = window.height();
-    let aspect = if height > 0.0 { width / height } else { 1.0 };
+    // Whole-pixel quantization kills winit sub-pixel oscillation on resize/DPI that triggers breakpoint churn.
+    let width = window.width().round();
+    let height = window.height().round().max(1.0);
 
-    let breakpoint = if width < 600.0 || aspect < 0.80 {
-        UiBreakpoint::Compact
-    } else if width < 1100.0 {
-        UiBreakpoint::Medium
-    } else {
-        UiBreakpoint::Wide
-    };
+    let breakpoint = breakpoint_from_window_stabilized(width, height, state.breakpoint);
 
     let inset = match breakpoint {
         UiBreakpoint::Compact => SPACE_2,
@@ -143,7 +176,7 @@ pub fn system_update_ui_shell_state(
         UiBreakpoint::Wide => SPACE_4,
     };
 
-    *state = UiShellState {
+    let new_state = UiShellState {
         breakpoint,
         inset_top: inset,
         inset_right: inset,
@@ -151,11 +184,20 @@ pub fn system_update_ui_shell_state(
         inset_left: inset,
     };
 
+    // Critical: assigning `ResMut` every frame marks the resource **changed** even when values match,
+    // which forces layout systems to dirty the entire HUD every tick on native.
+    if *state != new_state {
+        *state = new_state;
+    }
+
     if let Some(s) = settings {
-        dock_scale.0 = crate::clamp_ui_scale(match breakpoint {
+        let new_scale = crate::clamp_ui_scale(match breakpoint {
             UiBreakpoint::Compact => s.config.ui.mobile_hud_scale,
             _ => s.config.ui.combat_hud_scale,
         });
+        if (dock_scale.0 - new_scale).abs() > 1e-4 {
+            dock_scale.0 = new_scale;
+        }
     }
 }
 

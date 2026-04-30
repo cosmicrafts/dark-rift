@@ -223,6 +223,7 @@ pub fn spawn_bottom_combat_hud(
             RelativeCursorPosition::default(),
             vis,
             Node {
+                position_type: PositionType::Relative,
                 width: Val::Percent(100.0),
                 align_items: AlignItems::Center,
                 flex_direction: FlexDirection::Column,
@@ -239,26 +240,9 @@ pub fn spawn_bottom_combat_hud(
         ))
         .with_children(|root| {
             root.spawn((
-                OutgoingRowsContainer,
-                Node {
-                    width: Val::Percent(96.0),
-                    min_width: Val::Px(280.0 * s),
-                    max_width: Val::Px(800.0 * s),
-                    flex_direction: FlexDirection::Row,
-                    flex_wrap: FlexWrap::Wrap,
-                    align_content: AlignContent::FlexStart,
-                    row_gap: Val::Px(8.0 * s),
-                    column_gap: Val::Px(8.0 * s),
-                    max_height: Val::Px(280.0 * s),
-                    overflow: Overflow::scroll_y(),
-                    ..default()
-                },
-                bevy::ui::ScrollPosition::default(),
-            ));
-
-            root.spawn((
                 crate::ui::hud_combat::BottomHudPanel,
                 Node {
+                    flex_shrink: 0.0,
                     width: Val::Percent(96.0),
                     max_width: Val::Px(800.0 * s),
                     flex_direction: FlexDirection::Column,
@@ -455,6 +439,25 @@ pub fn spawn_bottom_combat_hud(
                     });
                 });
             });
+
+            root.spawn((
+                OutgoingRowsContainer,
+                Node {
+                    position_type: PositionType::Absolute,
+                    bottom: Val::Percent(100.0),
+                    left: Val::Px(0.0),
+                    right: Val::Px(0.0),
+                    margin: UiRect::bottom(Val::Px(8.0 * s)),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    row_gap: Val::Px(8.0 * s),
+                    max_height: Val::Px(220.0 * s),
+                    overflow: Overflow::scroll_y(),
+                    display: Display::None,
+                    ..default()
+                },
+                bevy::ui::ScrollPosition::default(),
+            ));
         });
 }
 

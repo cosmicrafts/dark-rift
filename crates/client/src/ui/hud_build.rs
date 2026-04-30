@@ -135,18 +135,30 @@ pub fn system_apply_buildable_hud(
         };
         let disabled = !entry.can_build && !entry.can_upgrade;
         let sel = mode.0 == Some(btn.0);
-        if disabled {
-            *bg = Color::srgba(0.1, 0.11, 0.13, 0.38).into();
-            *border = BorderColor::all(Color::srgba(0.3, 0.32, 0.36, 0.35));
+        let (target_bg, target_border) = if disabled {
+            (
+                Color::srgba(0.1, 0.11, 0.13, 0.38).into(),
+                BorderColor::all(Color::srgba(0.3, 0.32, 0.36, 0.35)),
+            )
         } else if sel {
-            *bg = accent_primary().with_alpha(0.42).into();
-            *border = BorderColor::all(accent_primary());
+            (
+                accent_primary().with_alpha(0.42).into(),
+                BorderColor::all(accent_primary()),
+            )
         } else if *interaction == Interaction::Hovered {
-            *bg = panel_bg().with_alpha(0.92).into();
-            *border = BorderColor::all(panel_border());
+            (
+                panel_bg().with_alpha(0.92).into(),
+                BorderColor::all(panel_border()),
+            )
         } else {
-            *bg = panel_bg().into();
-            *border = BorderColor::all(panel_border());
+            (panel_bg().into(), BorderColor::all(panel_border()))
+        };
+        // Avoid writing identical colors every frame — native UI relayouts on any Node/BackgroundColor touch.
+        if bg.0 != target_bg {
+            bg.0 = target_bg;
+        }
+        if *border != target_border {
+            *border = target_border;
         }
     }
 }

@@ -211,22 +211,3 @@ pub fn system_single_player_tick(
         }
     }
 }
-
-pub fn system_mock_single_player_start(
-    mock:      Option<ResMut<MockSinglePlayerStart>>,
-    mut cam_q:     Query<&mut Transform, With<Camera2d>>,
-    mut commands:  Commands,
-    mut params:    StartGameParams,
-) {
-    if let Some(m) = mock {
-        commands.insert_resource(SinglePlayerState {
-            timer: Timer::from_seconds(0.040, TimerMode::Repeating),
-            current_turn: 0,
-        });
-        commands.insert_resource(LocalIntentBuffer::default());
-        start_game_core(
-            m.0.clone(), &mut cam_q, &mut commands, &mut params
-        );
-        commands.remove_resource::<MockSinglePlayerStart>();
-    }
-}

@@ -1,7 +1,9 @@
 use bevy::prelude::*;
+use bevy::ui::{UiTransform, Val2};
 use std::collections::HashMap;
 use dark_rift_shared::game::GameState;
 use crate::{ClientSettings, MyPlayerId, clamp_ui_scale, panel_radius_for_breakpoint};
+use crate::ui::anim::{ease_in_out_cubic, ease_out_cubic, lerp_f};
 use crate::ui::theme::*;
 use crate::hud_combat::{CancelFleetButton, CancelAttackButton};
 use crate::hud_trunc_name;
@@ -11,6 +13,9 @@ use dark_rift_shared::execution::AttackExecution;
 use dark_rift_shared::game::GameEvent;
 use crate::EventFeedLine;
 use crate::ui::shell::{touch_target_for_breakpoint, UiShellState};
+
+const ROW_ENTER_DURATION: f32 = 0.22;
+const ROW_EXIT_DURATION: f32 = 0.18;
 
 #[derive(Component)]
 pub struct EventFeedContainer;
@@ -35,6 +40,21 @@ pub struct OutgoingFleetLineText;
 
 #[derive(Resource, Default)]
 pub struct OutgoingFleetRowMap(pub HashMap<u64, (Entity, Entity, Entity)>);
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RowAnimPhase {
+    Entering,
+    Exiting,
+}
+
+/// Intro / outro motion for attack and fleet rows. Removed after enter completes (steady state).
+#[derive(Component)]
+pub struct RowAnim {
+    pub phase: RowAnimPhase,
+    pub t: f32,
+    pub exit_bg: Option<Color>,
+    pub exit_border: Option<Color>,
+}
 
 pub fn system_update_event_feed(
     mut commands: Commands,
@@ -67,7 +87,7 @@ pub fn system_update_event_feed(
     let current_len = game.events.len();
     if *last_event_idx < current_len {
         let s = clamp_ui_scale(settings.config.ui.combat_hud_scale);
-        
+
         for i in *last_event_idx..current_len {
             let ev = &game.events[i];
             let msg = match ev {
@@ -110,10 +130,88 @@ pub fn system_update_event_feed(
     }
 }
 
+fn sync_outgoing_slot_visibility(slot: Entity, children_q: &Query<&Children>, slot_node: &mut Node) {
+    let n = children_q.get(slot).map(|c| c.len()).unwrap_or(0);
+    slot_node.display = if n > 0 {
+        Display::Flex
+    } else {
+        Display::None
+    };
+}
+
+fn start_row_exit(commands: &mut Commands, row_e: Entity) {
+    commands.entity(row_e).insert(RowAnim {
+        phase: RowAnimPhase::Exiting,
+        t: 0.0,
+        exit_bg: None,
+        exit_border: None,
+    });
+}
+
+/// Lobby-style motion for outgoing attack/fleet rows (translate + scale + fade on exit).
+pub fn system_animate_outgoing_rows(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut q: Query<
+        (
+            Entity,
+            &mut UiTransform,
+            &mut RowAnim,
+            &mut BackgroundColor,
+            &mut BorderColor,
+        ),
+        Or<(With<OutgoingAttackRowRoot>, With<OutgoingFleetRowRoot>)>,
+    >,
+) {
+    if q.is_empty() {
+        return;
+    }
+    let dt = time.delta_secs();
+
+    for (entity, mut tr, mut anim, mut bg, mut border) in q.iter_mut() {
+        match anim.phase {
+            RowAnimPhase::Entering => {
+                anim.t += dt;
+                let u = (anim.t / ROW_ENTER_DURATION).min(1.0);
+                let e = ease_out_cubic(u);
+                tr.translation = Val2::px(0.0, lerp_f(24.0, 0.0, e));
+                tr.scale = Vec2::splat(lerp_f(0.85, 1.0, e));
+                if u >= 1.0 {
+                    *tr = UiTransform::default();
+                    commands.entity(entity).remove::<RowAnim>();
+                }
+            }
+            RowAnimPhase::Exiting => {
+                if anim.exit_bg.is_none() {
+                    anim.exit_bg = Some(bg.0);
+                    anim.exit_border = Some(border.top);
+                }
+                anim.t += dt;
+                let u = (anim.t / ROW_EXIT_DURATION).min(1.0);
+                let e = ease_in_out_cubic(u);
+                let alpha_mul = lerp_f(1.0, 0.0, e);
+                tr.translation = Val2::px(0.0, lerp_f(0.0, 14.0, e));
+                tr.scale = Vec2::splat(lerp_f(1.0, 0.9, e));
+                if let Some(base) = anim.exit_bg {
+                    bg.0 = base.with_alpha(base.alpha() * alpha_mul);
+                }
+                if let Some(base_b) = anim.exit_border {
+                    let c = base_b.with_alpha(base_b.alpha() * alpha_mul);
+                    *border = BorderColor::all(c);
+                }
+                if u >= 1.0 {
+                    commands.entity(entity).despawn();
+                }
+            }
+        }
+    }
+}
+
 pub fn system_sync_outgoing_attack_rows(
     mut commands: Commands,
     game_opt: Option<Res<GameState>>,
-    slot_q: Query<Entity, With<OutgoingRowsContainer>>,
+    mut slot_q: Query<(Entity, &mut Node), With<OutgoingRowsContainer>>,
+    children_q: Query<&Children>,
     q_exec: Query<&AttackExecution>,
     q_fleet: Query<&WarpFleet>,
     my_id: Res<MyPlayerId>,
@@ -124,7 +222,7 @@ pub fn system_sync_outgoing_attack_rows(
     mut q_attack_line: Query<(&mut Text, &mut TextFont), (With<OutgoingAttackLineText>, Without<OutgoingFleetLineText>)>,
     mut q_fleet_line: Query<(&mut Text, &mut TextFont), (With<OutgoingFleetLineText>, Without<OutgoingAttackLineText>)>,
 ) {
-    let Ok(slot) = slot_q.single() else {
+    let Ok((slot, mut slot_node)) = slot_q.single_mut() else {
         return;
     };
 
@@ -135,6 +233,7 @@ pub fn system_sync_outgoing_attack_rows(
         for (_, (row_e, _, _)) in fleet_row_map.0.drain() {
             commands.entity(row_e).despawn();
         }
+        sync_outgoing_slot_visibility(slot, &children_q, &mut slot_node);
         return;
     }
     let Some(game) = game_opt else {
@@ -165,7 +264,7 @@ pub fn system_sync_outgoing_attack_rows(
         .collect();
     for id in stale {
         if let Some((row_e, _, _)) = row_map.0.remove(&id) {
-            commands.entity(row_e).despawn();
+            start_row_exit(&mut commands, row_e);
         }
     }
 
@@ -185,7 +284,7 @@ pub fn system_sync_outgoing_attack_rows(
                 format!("{:.0}", v)
             }
         };
-        
+
         let to_text = format!("To: {}", who);
         let count_text = fmt_num(exec.troops.max(0.0));
 
@@ -205,10 +304,19 @@ pub fn system_sync_outgoing_attack_rows(
         } else {
             let font = settings.font.clone();
             let exec_id = exec.id;
+            let mut tr = UiTransform::from_translation(Val2::px(0.0, 24.0));
+            tr.scale = Vec2::splat(0.85);
             let row_e = commands
                 .spawn((
                     ChildOf(slot),
                     OutgoingAttackRowRoot,
+                    tr,
+                    RowAnim {
+                        phase: RowAnimPhase::Entering,
+                        t: 0.0,
+                        exit_bg: None,
+                        exit_border: None,
+                    },
                     Node {
                         width: Val::Percent(100.0),
                         height: Val::Px(if matches!(ui_shell.breakpoint, crate::ui::shell::UiBreakpoint::Compact) { 34.0 * s } else { 44.0 * s }),
@@ -219,6 +327,7 @@ pub fn system_sync_outgoing_attack_rows(
                         border: UiRect::all(Val::Px(1.0 * s)),
                         border_radius: BorderRadius::all(Val::Px(row_radius)),
                         column_gap: Val::Px(6.0 * s),
+                        flex_shrink: 0.0,
                         ..default()
                     },
                     BackgroundColor(panel_bg()),
@@ -303,6 +412,7 @@ pub fn system_sync_outgoing_attack_rows(
         for (_, (row_e, _, _)) in fleet_row_map.0.drain() {
             commands.entity(row_e).despawn();
         }
+        sync_outgoing_slot_visibility(slot, &children_q, &mut slot_node);
         return;
     }
 
@@ -321,7 +431,7 @@ pub fn system_sync_outgoing_attack_rows(
         .collect();
     for id in stale_f {
         if let Some((row_e, _, _)) = fleet_row_map.0.remove(&id) {
-            commands.entity(row_e).despawn();
+            start_row_exit(&mut commands, row_e);
         }
     }
 
@@ -361,10 +471,19 @@ pub fn system_sync_outgoing_attack_rows(
         } else {
             let font = settings.font.clone();
             let fleet_id = fleet.id;
+            let mut tr = UiTransform::from_translation(Val2::px(0.0, 24.0));
+            tr.scale = Vec2::splat(0.85);
             let row_e = commands
                 .spawn((
                     ChildOf(slot),
                     OutgoingFleetRowRoot,
+                    tr,
+                    RowAnim {
+                        phase: RowAnimPhase::Entering,
+                        t: 0.0,
+                        exit_bg: None,
+                        exit_border: None,
+                    },
                     Node {
                         width: Val::Percent(100.0),
                         height: Val::Px(44.0 * s),
@@ -375,6 +494,7 @@ pub fn system_sync_outgoing_attack_rows(
                         border: UiRect::all(Val::Px(1.0 * s)),
                         border_radius: BorderRadius::all(Val::Px(row_radius)),
                         column_gap: Val::Px(8.0 * s),
+                        flex_shrink: 0.0,
                         ..default()
                     },
                     BackgroundColor(Color::srgba(0.06, 0.1, 0.16, 0.85)),
@@ -453,4 +573,6 @@ pub fn system_sync_outgoing_attack_rows(
             fleet_row_map.0.insert(fleet_id, (row_e, text_e1, text_e2));
         }
     }
+
+    sync_outgoing_slot_visibility(slot, &children_q, &mut slot_node);
 }

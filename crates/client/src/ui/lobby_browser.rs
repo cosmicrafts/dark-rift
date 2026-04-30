@@ -6,6 +6,7 @@ use bevy::ui::{UiTransform, Val2};
 use dark_rift_shared::player::PlayerType;
 use dark_rift_shared::protocol::*;
 use crate::settings::{save_client_settings_config, ProfileConfig};
+use crate::ui::anim::{ease_in_out_cubic, ease_out_cubic, lerp_f, smoothstep};
 use crate::ui::shell::{touch_target_for_breakpoint, UiBreakpoint, UiShellState};
 use crate::ui::layers::LOBBY_BROWSER;
 use crate::{ClientSettings, Cli};
@@ -344,28 +345,6 @@ const MENU_STUB_REENTER_DURATION: f32 = 0.18;
 const INTRO_SLIDE_LEFT_PX: f32 = -110.0;
 const INTRO_SLIDE_RIGHT_PX: f32 = 110.0;
 const INTRO_HEADER_Y_PX: f32 = -48.0;
-
-#[inline]
-fn ease_out_cubic(t: f32) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    1.0 - (1.0 - t).powi(3)
-}
-
-#[inline]
-fn ease_in_out_cubic(t: f32) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    if t < 0.5 {
-        4.0 * t * t * t
-    } else {
-        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
-    }
-}
-
-#[inline]
-fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    let t = ((x - edge0) / (edge1 - edge0).max(1e-6)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
 
 #[inline]
 fn solo_button_border_color() -> Color {
@@ -1584,11 +1563,6 @@ const EXIT_SLIDE_LEFT_PX: f32 = -440.0;
 const EXIT_SLIDE_RIGHT_PX: f32 = 440.0;
 const EXIT_HEADER_Y_PX: f32 = -76.0;
 
-#[inline]
-fn lerp_f(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t
-}
-
 /// Drive intro / exit / stub re-entry motion for the lobby main chrome.
 pub fn system_lobby_main_menu_anim(
     time: Res<Time>,
@@ -1704,7 +1678,7 @@ pub fn system_lobby_main_menu_anim(
             match anim.pending {
                 PendingNavigate::SinglePlayer => {
                     insert_mock_single_player_start(&mut commands, &settings);
-                    next_state.set(crate::AppState::InGame);
+                    next_state.set(crate::AppState::LoadingMap);
                 }
                 PendingNavigate::JoinLobby(id) => {
                     let name = settings.config.display_nickname_for_play();

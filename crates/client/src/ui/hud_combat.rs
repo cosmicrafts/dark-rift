@@ -110,19 +110,11 @@ pub fn system_apply_responsive_hud_layout(
         let Ok(mut outgoing_node) = outgoing_q.single_mut() else {
             return;
         };
-        if compact {
-            outgoing_node.max_height = Val::Px(140.0); // limit height, but show
-            outgoing_node.display = Display::Flex;
-            outgoing_node.width = Val::Percent(100.0);
-            outgoing_node.max_width = Val::Percent(100.0);
-            outgoing_node.min_width = Val::Auto;
-            outgoing_node.padding = UiRect::axes(Val::Px(4.0), Val::Px(4.0));
+        outgoing_node.max_height = Val::Px(if compact {
+            140.0
         } else {
-            outgoing_node.max_height = Val::Px(220.0);
-            outgoing_node.display = Display::Flex;
-            outgoing_node.width = Val::Percent(96.0);
-            outgoing_node.max_width = Val::Px(800.0 * crate::clamp_ui_scale(settings.config.ui.combat_hud_scale));
-        }
+            220.0 * crate::clamp_ui_scale(settings.config.ui.combat_hud_scale)
+        });
     }
 
     {

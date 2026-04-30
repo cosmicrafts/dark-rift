@@ -1,6 +1,7 @@
 //! Dark Rift Client — Networked (Lightyear WebSocket + Netcode)
 
 use bevy::prelude::*;
+use bevy::ecs::schedule::common_conditions::resource_changed;
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy_enoki::prelude::*;
 use lightyear::prelude::client::*;
@@ -103,7 +104,6 @@ fn main() {
            .add_systems(Startup, setup_network)
            .add_systems(Update, (
                handle_server_start,
-               system_mock_single_player_start,
                handle_connection,
            ).chain())
            .add_systems(Update, (
@@ -251,7 +251,6 @@ fn main() {
             )
             .add_systems(Update, (
                 handle_server_start,
-                system_mock_single_player_start,
                 handle_connection,
             ).chain())
             .add_systems(Update, (
@@ -270,7 +269,12 @@ fn main() {
     } // end if !cli.bot
 
     if !cli.bot {
-        app.add_systems(Update, (system_update_ui_shell_state, system_apply_ui_shell_layout, system_update_perf_overlay).run_if(|cli: Res<Cli>| !cli.bot));
+        app.add_systems(Update, (
+            system_update_ui_shell_state,
+            system_apply_ui_shell_layout
+                .run_if(resource_changed::<UiShellState>.or(resource_changed::<CombatDockUiScale>)),
+            system_update_perf_overlay,
+        ).run_if(|cli: Res<Cli>| !cli.bot));
 
         app.add_systems(Update, (
             hover_system,
@@ -291,13 +295,16 @@ fn main() {
             system_dump_desync_tracker,
             system_home_button,
             update_hud,
-            system_apply_responsive_hud_layout,
-            system_apply_responsive_hud_icons_and_hotkeys,
+            system_apply_responsive_hud_layout
+                .run_if(resource_changed::<UiShellState>.or(resource_changed::<CombatDockUiScale>).or(resource_changed::<ClientSettings>)),
+            system_apply_responsive_hud_icons_and_hotkeys
+                .run_if(resource_changed::<UiShellState>.or(resource_changed::<CombatDockUiScale>).or(resource_changed::<ClientSettings>)),
             system_sync_bottom_combat_hud,
             system_sync_bottom_troops_bar,
             system_update_event_feed,
             system_update_scroll_position,
             system_sync_outgoing_attack_rows,
+            system_animate_outgoing_rows.after(system_sync_outgoing_attack_rows),
             system_handle_cancel_click,
             system_handle_recall_fleet_click,
         ).run_if(in_state(AppState::InGame)));
