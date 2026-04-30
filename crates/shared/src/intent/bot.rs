@@ -102,7 +102,8 @@ pub fn system_bot_think(
         let do_attack = phase == offset;
         let do_structures = do_attack || phase == one_third || phase == two_thirds;
 
-        if do_structures {
+        if false /* do_structures */ {
+            // TODO(Debug): Bot building logic disabled completely
             let Some(player) = game.player(bot_id) else {
                 continue;
             };
