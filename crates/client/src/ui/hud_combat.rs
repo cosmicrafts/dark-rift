@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use dark_rift_shared::game::GameState;
+use dark_rift_shared::engine::DarkRiftEngine;
 use dark_rift_shared::protocol::*;
 use crate::{ClientSettings, MyPlayerId, clamp_ui_scale};
 use lightyear::prelude::*;
@@ -107,7 +107,7 @@ pub fn system_apply_responsive_hud_layout(
 }
 
 pub fn system_sync_bottom_combat_hud(
-    game_opt: Option<Res<GameState>>,
+    engine_opt: Option<Res<DarkRiftEngine>>,
     my_id: Res<MyPlayerId>,
     attack_ratio: Res<AttackRatio>,
     settings: Res<ClientSettings>,
@@ -178,7 +178,7 @@ pub fn system_sync_bottom_combat_hud(
         ),
     >,
 ) {
-    let Some(game) = game_opt.as_deref() else { return };
+    let Some(engine) = engine_opt.as_deref() else { return };
 
     let Ok((mut readout, mut readout_font, mut readout_node)) = q_readout.single_mut() else { return };
     
@@ -207,7 +207,7 @@ pub fn system_sync_bottom_combat_hud(
     }
 
     // Economy Sync
-    if let Some(player) = game.player(my_id.0) {
+    if let Some(player) = engine.state.player(my_id.0) {
         let fmt = |v: f64| -> String {
             if v >= 1_000_000.0 {
                 format!("{:.1}M", v / 1_000_000.0)
@@ -232,7 +232,7 @@ pub fn system_sync_bottom_combat_hud(
         }
     }
 
-    let preview_troops = game
+    let preview_troops = engine.state
         .player(my_id.0)
         .map(|p| (p.troops * r as f64).floor().max(0.0))
         .unwrap_or(0.0);

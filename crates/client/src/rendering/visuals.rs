@@ -1,12 +1,12 @@
 use bevy::prelude::*;
 use std::collections::HashSet;
 use bevy_enoki::prelude::*;
-use dark_rift_shared::game::GameState;
-use dark_rift_shared::execution::AttackExecution;
-use dark_rift_shared::warp_fleet::WarpFleet;
+use dark_rift_shared::engine::DarkRiftEngine;
+
 
 use crate::{
     ClientSettings, InGameEntity, MyPlayerId, TILE_SIZE, tile_idx_to_world, clamp_ui_scale,
+    FleetVisual,
 };
 
 #[derive(Resource)]
@@ -37,7 +37,7 @@ pub struct FleetVisualMeshes {
 /// Follows `WarpFleet.current_tile` for the local player.
 #[derive(Component)]
 pub struct FollowFleetBoat {
-    pub fleet: Entity,
+    pub fleet_id: u64,
     pub wake: Entity,
     pub prev_tile: Option<u32>,
 }
@@ -49,12 +49,8 @@ pub struct FollowFleetWake;
 /// Fixed at landing tile until the fleet entity is gone.
 #[derive(Component)]
 pub struct FollowFleetTarget {
-    pub fleet: Entity,
+    pub fleet_id: u64,
 }
-
-/// Client already spawned boat/target meshes for this fleet.
-#[derive(Component)]
-pub struct FleetClientVisuals;
 
 
 #[derive(Resource, Default)]
@@ -63,43 +59,49 @@ pub struct CombatVfxCache(pub Handle<Particle2dEffect>);
 /// An independent entity that tracks an attack and emits Enoki particles
 #[derive(Component)]
 pub struct CombatVfx {
-    pub target_exec: Entity,
+    pub target_exec_id: u64,
 }
 
-pub fn system_spawn_fleet_visuals(
+pub fn system_sync_fleet_visuals(
     mut commands: Commands,
+    engine_opt: Option<Res<DarkRiftEngine>>,
     meshes: Option<Res<FleetVisualMeshes>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     my_id: Res<MyPlayerId>,
-    game_opt: Option<Res<GameState>>,
-    mut q: Query<(Entity, &WarpFleet), (Added<WarpFleet>, Without<FleetClientVisuals>)>,
+    q_existing: Query<(Entity, &FleetVisual)>,
+    mut boat_q: Query<(Entity, &mut FollowFleetBoat, &mut Transform), (Without<FollowFleetWake>, Without<FollowFleetTarget>)>,
+    mut wake_q: Query<(&FollowFleetWake, &mut Transform, &mut Visibility), (Without<FollowFleetBoat>, Without<FollowFleetTarget>)>,
+    mut target_q: Query<(Entity, &FollowFleetTarget, &mut Transform), (Without<FollowFleetBoat>, Without<FollowFleetWake>)>,
 ) {
-    let Some(m) = meshes.as_ref() else {
-        return;
-    };
-    let Some(game) = game_opt.as_deref() else {
-        return;
-    };
+    let Some(engine) = engine_opt.as_deref() else { return; };
+    let Some(m) = meshes.as_ref() else { return; };
     let pid = my_id.0;
-    if pid == 0 {
-        return;
+    if pid == 0 { return; }
+    let mw = engine.state.map.width;
+    let mh = engine.state.map.height;
+
+    let mut current_ids = std::collections::HashSet::new();
+    for f in engine.fleets.iter() {
+        current_ids.insert(f.id);
     }
-    let mw = game.map.width;
-    let mh = game.map.height;
-    for (fleet_e, fleet) in q.iter_mut() {
-        if fleet.owner_id != pid {
-            continue;
+
+    let mut existing_ids = std::collections::HashSet::new();
+    for (e, vis) in &q_existing {
+        if !current_ids.contains(&vis.0) {
+            commands.entity(e).despawn();
+        } else {
+            existing_ids.insert(vis.0);
         }
-        commands.entity(fleet_e).insert(FleetClientVisuals);
-        let boat_mat =
-            materials.add(ColorMaterial::from_color(Color::srgba(0.12, 0.82, 1.0, 0.9)));
-        let wake_mat =
-            materials.add(ColorMaterial::from_color(Color::srgba(0.35, 0.95, 1.0, 0.4)));
-        let ring_mat =
-            materials.add(ColorMaterial::from_color(Color::srgba(1.0, 0.1, 0.06, 0.42)));
-        let p0 = tile_idx_to_world(fleet.current_tile, mw, mh);
-        let wake_e = commands
-            .spawn((
+    }
+
+    for f in engine.fleets.iter() {
+        if !existing_ids.contains(&f.id) && f.owner_id == pid {
+            let boat_mat = materials.add(ColorMaterial::from_color(Color::srgba(0.12, 0.82, 1.0, 0.9)));
+            let wake_mat = materials.add(ColorMaterial::from_color(Color::srgba(0.35, 0.95, 1.0, 0.4)));
+            let ring_mat = materials.add(ColorMaterial::from_color(Color::srgba(1.0, 0.1, 0.06, 0.42)));
+            let p0 = tile_idx_to_world(f.current_tile, mw, mh);
+            
+            let wake_e = commands.spawn((
                 FollowFleetWake,
                 InGameEntity,
                 Mesh2d(m.wake_dot.clone()),
@@ -107,49 +109,44 @@ pub fn system_spawn_fleet_visuals(
                 Transform::from_xyz(p0.x, p0.y, 269.0).with_scale(Vec3::ZERO),
                 GlobalTransform::default(),
                 Visibility::Hidden,
-            ))
-            .id();
-        commands.spawn((
-            FollowFleetBoat {
-                fleet: fleet_e,
-                wake: wake_e,
-                prev_tile: None,
-            },
-            InGameEntity,
-            Mesh2d(m.boat.clone()),
-            MeshMaterial2d(boat_mat),
-            Transform::from_xyz(p0.x, p0.y, 272.0),
-            GlobalTransform::default(),
-            Visibility::default(),
-        ));
-        let pl = tile_idx_to_world(fleet.dst_tile, mw, mh);
-        commands.spawn((
-            FollowFleetTarget { fleet: fleet_e },
-            InGameEntity,
-            Mesh2d(m.target_ring.clone()),
-            MeshMaterial2d(ring_mat),
-            Transform::from_xyz(pl.x, pl.y, 264.0).with_scale(Vec3::splat(1.12)),
-            GlobalTransform::default(),
-            Visibility::default(),
-        ));
+            )).id();
+            
+            let root_e = commands.spawn((
+                FleetVisual(f.id),
+                InGameEntity,
+                Transform::default(),
+                GlobalTransform::default(),
+                Visibility::default(),
+            )).id();
+            
+            commands.entity(root_e).with_children(|ch| {
+                ch.spawn((
+                    FollowFleetBoat {
+                        fleet_id: f.id,
+                        wake: wake_e,
+                        prev_tile: None,
+                    },
+                    Mesh2d(m.boat.clone()),
+                    MeshMaterial2d(boat_mat),
+                    Transform::from_xyz(p0.x, p0.y, 272.0),
+                    GlobalTransform::default(),
+                    Visibility::default(),
+                ));
+                let pl = tile_idx_to_world(f.dst_tile, mw, mh);
+                ch.spawn((
+                    FollowFleetTarget { fleet_id: f.id },
+                    Mesh2d(m.target_ring.clone()),
+                    MeshMaterial2d(ring_mat),
+                    Transform::from_xyz(pl.x, pl.y, 264.0).with_scale(Vec3::splat(1.12)),
+                    GlobalTransform::default(),
+                    Visibility::default(),
+                ));
+            });
+        }
     }
-}
 
-pub fn system_sync_fleet_visuals(
-    mut commands: Commands,
-    game_opt: Option<Res<GameState>>,
-    mut boat_q: Query<(Entity, &mut FollowFleetBoat, &mut Transform), (Without<FollowFleetWake>, Without<FollowFleetTarget>)>,
-    mut wake_q: Query<(&FollowFleetWake, &mut Transform, &mut Visibility), (Without<FollowFleetBoat>, Without<FollowFleetTarget>)>,
-    mut target_q: Query<(Entity, &FollowFleetTarget, &mut Transform), (Without<FollowFleetBoat>, Without<FollowFleetWake>)>,
-    q_fleet: Query<&WarpFleet>,
-) {
-    let Some(game) = game_opt.as_deref() else {
-        return;
-    };
-    let mw = game.map.width;
-    let mh = game.map.height;
     for (e, mut fb, mut tf) in boat_q.iter_mut() {
-        let Ok(f) = q_fleet.get(fb.fleet) else {
+        let Some(f) = engine.fleets.iter().find(|x| x.id == fb.fleet_id) else {
             commands.entity(fb.wake).despawn();
             commands.entity(e).despawn();
             continue;
@@ -170,7 +167,7 @@ pub fn system_sync_fleet_visuals(
         }
     }
     for (e, ft, _tf) in target_q.iter_mut() {
-        if q_fleet.get(ft.fleet).is_err() {
+        if !engine.fleets.iter().any(|x| x.id == ft.fleet_id) {
             commands.entity(e).despawn();
         }
     }
@@ -292,19 +289,19 @@ pub fn spawn_attack_command_ring(
 
 pub fn system_spawn_attack_vfx(
     mut commands: Commands,
-    q_attacks: Query<(Entity, &AttackExecution)>,
+    engine_opt: Option<Res<DarkRiftEngine>>,
     q_vfx: Query<&CombatVfx>,
     vfx_cache: Res<CombatVfxCache>,
-    game: Res<GameState>,
 ) {
+    let Some(engine) = engine_opt else { return; };
     // Track ones that already have VFX
     let mut tracked = HashSet::new();
     for vfx in &q_vfx {
-        tracked.insert(vfx.target_exec);
+        tracked.insert(vfx.target_exec_id);
     }
 
-    for (attack_ent, attack) in &q_attacks {
-        if tracked.contains(&attack_ent) { continue; }
+    for attack in engine.attacks.iter() {
+        if tracked.contains(&attack.id) { continue; }
         if attack.retreating { continue; }
 
         let active_target = match attack.to_conquer.peek() {
@@ -314,13 +311,13 @@ pub fn system_spawn_attack_vfx(
 
         // Determine target world position
         let wx = (active_target.x as f32 + 0.5) * TILE_SIZE;
-        let wy = (game.map.height as f32 - active_target.y as f32 - 0.5) * TILE_SIZE;
+        let wy = (engine.state.map.height as f32 - active_target.y as f32 - 0.5) * TILE_SIZE;
 
         let spawn_pos = Vec2::new(wx, wy);
 
         commands.spawn((
             CombatVfx {
-                target_exec: attack_ent,
+                target_exec_id: attack.id,
             },
             InGameEntity,
             Transform::from_xyz(spawn_pos.x, spawn_pos.y, 110.0),
@@ -335,12 +332,12 @@ pub fn system_spawn_attack_vfx(
 
 pub fn system_sync_attack_vfx_position(
     mut commands: Commands,
-    q_attacks: Query<&AttackExecution>,
+    engine_opt: Option<Res<DarkRiftEngine>>,
     mut q_vfx: Query<(Entity, &CombatVfx, &mut Transform)>,
-    game: Res<GameState>,
 ) {
+    let Some(engine) = engine_opt else { return; };
     for (vfx_ent, vfx, mut target_t) in &mut q_vfx {
-        if let Ok(attack) = q_attacks.get(vfx.target_exec) {
+        if let Some(attack) = engine.attacks.iter().find(|a| a.id == vfx.target_exec_id) {
             // Despawn if attack is retreating or queue is empty
             if attack.retreating || attack.to_conquer.is_empty() {
                 commands.entity(vfx_ent).despawn();
@@ -350,7 +347,7 @@ pub fn system_sync_attack_vfx_position(
             // Sync visual position continuously to current target tile logic
             if let Some(front) = attack.to_conquer.peek() {
                 let wx = (front.x as f32 + 0.5) * TILE_SIZE;
-                let wy = (game.map.height as f32 - front.y as f32 - 0.5) * TILE_SIZE;
+                let wy = (engine.state.map.height as f32 - front.y as f32 - 0.5) * TILE_SIZE;
                 
                 // Exponential decay interpolation for smooth VFX gliding
                 let target_pos = Vec3::new(wx, wy, 110.0);

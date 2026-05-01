@@ -275,7 +275,7 @@ fn manhattan(x1: u32, y1: u32, x2: u32, y2: u32) -> u32 {
 }
 
 /// Shared scratch buffers for water A* + closest-shore BFS (insert as `Resource` on the Bevy app).
-#[derive(Resource, Debug, Default)]
+#[derive(Resource, Default, Clone)]
 pub struct WaterPathfinderScratch {
     pub astar: WaterAStar,
     pub bfs_queue: VecDeque<u32>,

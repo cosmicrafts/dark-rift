@@ -1,10 +1,10 @@
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
-use bevy::prelude::*;
 use crate::game::GameState;
 use crate::map::TerrainType;
 use bevy_prng::WyRand;
 use crate::rng::NextIntExt;
+use crate::engine::DarkRiftEngine;
 
 pub mod income;
 pub mod combat;
@@ -15,10 +15,6 @@ pub use combat::*;
 /// Fraction of refunded troops lost when retreating from an attack on another player (OpenFront parity).
 pub const RETREAT_PENALTY_VS_PLAYER: f64 = 0.25;
 
-#[derive(Component)]
-pub struct PlayerExecutionTag {
-    pub player_id: u16,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrioritizedTile {
@@ -57,7 +53,7 @@ impl PartialOrd for PrioritizedTile {
     }
 }
 
-#[derive(Component)]
+#[derive(Clone)]
 pub struct AttackExecution {
     pub id: u64,
     pub owner_id: u16,
@@ -96,9 +92,10 @@ pub fn fractional_extra_tiles_milli(max_tiles_f64: f64, roll_milli: u32) -> u32 
     }
 }
 
-pub fn system_game_tick(game_opt: Option<ResMut<GameState>>) {
-    let Some(mut game) = game_opt else { return };
-    game.tick();
+impl DarkRiftEngine {
+    pub fn execute_tick(&mut self) {
+        self.state.tick();
+    }
 }
 
 pub fn refund_fleet_troops_to_player(game: &mut GameState, owner_id: u16, troops: f64) {

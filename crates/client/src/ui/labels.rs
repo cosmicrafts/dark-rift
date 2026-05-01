@@ -1,6 +1,6 @@
 use bevy::prelude::*;
-use dark_rift_shared::game::GameState;
-use crate::{ClientSettings, InGameEntity, TILE_SIZE, building_kind_short, player_label_scale, BuildingLabelTarget, Building};
+use dark_rift_shared::engine::DarkRiftEngine;
+use crate::{ClientSettings, InGameEntity, TILE_SIZE, building_kind_short, player_label_scale, BuildingLabelTarget, BuildingVisual};
 
 #[derive(Component)]
 pub struct PlayerLabel(pub u16);
@@ -9,15 +9,18 @@ pub struct PlayerLabel(pub u16);
 pub struct PlayerLabelRenderCache(pub f32);
 
 pub fn system_sync_building_map_labels(
-    game_opt: Option<Res<GameState>>,
-    q_b: Query<&Building>,
+    engine_opt: Option<Res<DarkRiftEngine>>,
+    q_b: Query<&BuildingVisual>,
     mut q_l: Query<(&BuildingLabelTarget, &mut Text2d)>,
 ) {
-    if game_opt.is_none() {
+    let Some(engine) = engine_opt else {
         return;
-    }
+    };
     for (t, mut text) in q_l.iter_mut() {
-        let Ok(b) = q_b.get(t.0) else {
+        let Ok(vis) = q_b.get(t.0) else {
+            continue;
+        };
+        let Some(b) = engine.buildings.iter().find(|b| b.id == vis.0) else {
             continue;
         };
         let pending = if b.under_construction { "…" } else { "" };
@@ -34,7 +37,7 @@ pub fn system_sync_building_map_labels(
 }
 pub fn system_sync_player_labels(
     mut commands: Commands,
-    game_opt: Option<Res<GameState>>,
+    engine_opt: Option<Res<DarkRiftEngine>>,
     ui_opt: Option<Res<ClientSettings>>,
 
     mut q_labels: Query<(
@@ -47,19 +50,19 @@ pub fn system_sync_player_labels(
         &mut PlayerLabelRenderCache,
     )>,
 ) {
-    let Some(game) = game_opt else { return };
+    let Some(engine) = engine_opt else { return };
     let Some(ui) = ui_opt else { return };
 
     // 1. Despawn labels for dead players
     for (entity, _, _, _, _, label, _) in &q_labels {
-        let alive = game.players.iter().any(|p| p.id == label.0 && p.alive);
+        let alive = engine.state.players.iter().any(|p| p.id == label.0 && p.alive);
         if !alive {
             commands.entity(entity).despawn();
         }
     }
 
     // 2. Spawn labels for alive players if they don't exist
-    for player in game.players.iter().filter(|p| p.alive) {
+    for player in engine.state.players.iter().filter(|p| p.alive) {
         let exists = q_labels
             .iter()
             .any(|(_, _, _, _, _, label, _)| label.0 == player.id);
@@ -106,7 +109,7 @@ pub fn system_sync_player_labels(
     ) in q_labels.iter_mut()
     {
         *text_color = TextColor(Color::BLACK);
-        let Some(player) = game.player(label.0) else { continue };
+        let Some(player) = engine.state.player(label.0) else { continue };
 
         let new_text = format!("{}\n[{:.0}]", player.name, player.troops);
         if text.0 != new_text {
@@ -115,7 +118,7 @@ pub fn system_sync_player_labels(
 
         if player.tile_count > 0 {
             let cx = (player.sum_x as f32 / player.tile_count as f32) * TILE_SIZE;
-            let cy = (game.map.height as f32 - 1.0 - (player.sum_y as f32 / player.tile_count as f32)) * TILE_SIZE;
+            let cy = (engine.state.map.height as f32 - 1.0 - (player.sum_y as f32 / player.tile_count as f32)) * TILE_SIZE;
             
             let target = Vec3::new(cx, cy + ui.config.ui.label_offset_y, 150.0);
             

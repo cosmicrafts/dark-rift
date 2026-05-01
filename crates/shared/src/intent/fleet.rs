@@ -1,5 +1,5 @@
-use bevy::prelude::*;
 use crate::game::GameState;
+use crate::engine::DarkRiftEngine;
 use crate::warp_fleet::{WarpFleet};
 use crate::water_components::WaterComponents;
 use crate::pathfinding::WaterPathfinderScratch;
@@ -7,25 +7,21 @@ use crate::warp_fleet::{FleetRoute, resolve_fleet_route};
 use crate::building::Building;
 use crate::config;
 
-pub fn apply_launch_fleet_intent(
-    commands: &mut Commands,
-    game: &mut GameState,
-    path_scratch: &mut WaterPathfinderScratch,
-    water_components: &WaterComponents,
-    _q_fleet: &mut Query<(Entity, &mut WarpFleet)>,
+impl DarkRiftEngine {
+pub(super) fn apply_launch_fleet_intent(
+    &mut self,
     player_id: u16,
     target_tile: u32,
     troops: Option<f64>,
-    _buildings: &[Building],
 ) {
-    let Some(player) = game.player(player_id) else {
+    let Some(player) = self.state.player(player_id) else {
         bevy::log::warn!("apply_launch_fleet_intent: player {} not found", player_id);
         return;
     };
     if !player.alive {
         return;
     }
-    let map_area = game.map.width.saturating_mul(game.map.height);
+    let map_area = self.state.map.width.saturating_mul(self.state.map.height);
     if map_area == 0 || target_tile >= map_area {
         bevy::log::warn!(
             "apply_launch_fleet_intent: out-of-range target_tile={} (player {})",
@@ -34,19 +30,19 @@ pub fn apply_launch_fleet_intent(
         return;
     }
 
-    let target_owner = game.map.owner_id(target_tile % game.map.width, target_tile / game.map.width);
+    let target_owner = self.state.map.owner_id(target_tile % self.state.map.width, target_tile / self.state.map.width);
 
     if target_owner == player_id {
         return;
     }
 
-    let border_tiles = match game.player(player_id) {
+    let border_tiles = match self.state.player(player_id) {
         Some(p) => p.border_tiles.as_slice(),
         None => return,
     };
 
     let target_border: Option<&[u32]> = if target_owner != 0 {
-        match game.player(target_owner) {
+        match self.state.player(target_owner) {
             Some(p) => Some(p.border_tiles.as_slice()),
             None => {
                 bevy::log::warn!(
@@ -61,9 +57,9 @@ pub fn apply_launch_fleet_intent(
     };
 
     let route = match resolve_fleet_route(
-        &game.map,
-        water_components,
-        path_scratch,
+        &self.state.map,
+        &self.water,
+        &mut self.path_scratch,
         player_id,
         target_owner,
         target_tile,
@@ -96,16 +92,16 @@ pub fn apply_launch_fleet_intent(
         path,
     } = route;
 
-    let Some(p) = game.player_mut(player_id) else {
+    let Some(p) = self.state.player_mut(player_id) else {
         return;
     };
     p.troops -= launch;
     p.troops = p.troops.max(0.0);
 
-    let fid = game.next_fleet_id;
-    game.next_fleet_id = game.next_fleet_id.wrapping_add(1).max(1);
+    let fid = self.state.next_fleet_id;
+    self.state.next_fleet_id = self.state.next_fleet_id.wrapping_add(1).max(1);
 
-    commands.spawn(WarpFleet::new(
+    self.fleets.push(WarpFleet::new(
         fid,
         player_id,
         target_owner,
@@ -114,5 +110,6 @@ pub fn apply_launch_fleet_intent(
         landing,
         path,
     ));
+}
 }
 

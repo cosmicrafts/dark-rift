@@ -7,15 +7,8 @@ pub use bot::*;
 pub use combat::*;
 
 
-use bevy::prelude::*;
-
-use crate::building::Building;
-use crate::execution::AttackExecution;
-use crate::game::GameState;
-use crate::pathfinding::WaterPathfinderScratch;
+use crate::engine::DarkRiftEngine;
 use crate::protocol::{GameplayIntent, StampedIntent};
-use crate::warp_fleet::WarpFleet;
-use crate::water_components::WaterComponents;
 
 
 /// Merge two frontiers: same cell keeps the tile with lower `priority` (better for expansion order).
@@ -26,29 +19,25 @@ use crate::water_components::WaterComponents;
 /// `insert_seq` to keep, silently diverging the `BinaryHeap` across clients.
 /// Instead we sort deterministically and `dedup_by_key` — the first entry per key
 /// (lowest priority, then lowest insert_seq, then spatial) survives.
+impl DarkRiftEngine {
+pub fn apply_intents(&mut self, intents: &[StampedIntent]) {
+    for (i, stamped) in intents.iter().enumerate() {
+        self.apply_stamped_intent(stamped, i as u32);
+    }
+}
+
 pub fn apply_stamped_intent(
-    commands: &mut Commands,
-    game: &mut GameState,
-    q_exec: &mut Query<(Entity, &mut AttackExecution)>,
-    q_fleet: &mut Query<(Entity, &mut WarpFleet)>,
-    q_building: &mut Query<(Entity, &mut Building)>,
+    &mut self,
     stamped: &StampedIntent,
     intent_index: u32,
-    path_scratch: &mut WaterPathfinderScratch,
-    water_components: &WaterComponents,
 ) {
     match &stamped.intent {
         GameplayIntent::RecallFleet { fleet_id } => {
             let pid = stamped.player_id;
-            let mut pairs: Vec<(Entity, u64)> = q_fleet.iter().map(|(e, w)| (e, w.id)).collect();
-            pairs.sort_by_key(|&(_, id)| id);
-            for (entity, fid) in pairs {
-                if fid != *fleet_id {
+            for wf in &mut self.fleets {
+                if wf.id != *fleet_id {
                     continue;
                 }
-                let Ok((_, mut wf)) = q_fleet.get_mut(entity) else {
-                    continue;
-                };
                 if wf.owner_id != pid {
                     continue;
                 }
@@ -63,30 +52,16 @@ pub fn apply_stamped_intent(
  target_tile,
  troops,
  } => {
- let mut buildings: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
- buildings.sort_by_key(|b| b.id);
- fleet::apply_launch_fleet_intent(
-                commands,
-                game,
-                path_scratch,
-                water_components,
-                q_fleet,
+ self.apply_launch_fleet_intent(
                 stamped.player_id,
                 *target_tile,
                 *troops,
-                &buildings,
             );
         }
         GameplayIntent::CancelAttack { attack_id } => {
             let pid = stamped.player_id;
-            let mut candidates: Vec<(u64, u64, Entity)> = q_exec
-                .iter()
-                .filter(|(_, ex)| ex.id == *attack_id && ex.owner_id == pid)
-                .map(|(e, ex)| (ex.id, e.to_bits(), e))
-                .collect();
-            candidates.sort_unstable_by_key(|(id, bits, _)| (*id, *bits));
-            for (_, _, e) in candidates {
-                if let Ok((_, mut ex)) = q_exec.get_mut(e) {
+            for ex in &mut self.attacks {
+                if ex.id == *attack_id && ex.owner_id == pid {
                     ex.retreating = true;
                     return;
                 }
@@ -97,21 +72,19 @@ pub fn apply_stamped_intent(
             );
         }
         GameplayIntent::Attack(attack) => {
-            combat::apply_attack_intent(commands, game, q_exec, stamped.player_id, attack, intent_index);
+            self.apply_attack_intent(stamped.player_id, attack, intent_index);
         }
         GameplayIntent::BuildStructure { kind, target_tile } => {
-            buildings::apply_build_structure_intent(
-                commands,
-                game,
-                q_building,
+            self.apply_build_structure_intent(
                 stamped.player_id,
                 *kind,
                 *target_tile,
             );
         }
         GameplayIntent::UpgradeStructure { building_id } => {
-            buildings::apply_upgrade_structure_intent(game, q_building, stamped.player_id, *building_id);
+            self.apply_upgrade_structure_intent(stamped.player_id, *building_id);
         }
     }
+}
 }
 

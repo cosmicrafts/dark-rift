@@ -1,5 +1,7 @@
 use bevy::prelude::*;
-use dark_rift_shared::game::{GameState, BuildingKind};
+use dark_rift_shared::engine::DarkRiftEngine;
+
+use dark_rift_shared::game::BuildingKind;
 use crate::*;
 
 pub fn building_kind_short(kind: BuildingKind) -> &'static str {
@@ -26,14 +28,13 @@ pub fn building_kind_icon_path(kind: BuildingKind) -> &'static str {
 
 pub fn system_sync_structure_ghost(
     mut commands: Commands,
-    game_opt: Option<Res<GameState>>,
+    engine_opt: Option<Res<DarkRiftEngine>>,
     my_id: Res<MyPlayerId>,
     mode: Res<BuildStructureMode>,
     hovered: Res<HoveredTile>,
     meshes: Option<Res<StructureMarkerMeshes>>,
     mut ghost_parts: ResMut<StructureGhostParts>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    q_building: Query<(Entity, &Building)>,
 ) {
     let despawn_all = |commands: &mut Commands, parts: &mut StructureGhostParts| {
         if let Some(e) = parts.marker.take() {
@@ -44,7 +45,7 @@ pub fn system_sync_structure_ghost(
         }
     };
 
-    let Some(game) = game_opt.as_deref() else {
+    let Some(engine) = engine_opt.as_deref() else {
         despawn_all(&mut commands, &mut ghost_parts);
         return;
     };
@@ -66,20 +67,20 @@ pub fn system_sync_structure_ghost(
         despawn_all(&mut commands, &mut ghost_parts);
         return;
     }
-    let Some(player) = game.player(pid) else {
+    let Some(player) = engine.state.player(pid) else {
         despawn_all(&mut commands, &mut ghost_parts);
         return;
     };
 
-    let w = game.map.width;
-    let mh = game.map.height;
+    let w = engine.state.map.width;
+    let mh = engine.state.map.height;
     let click_idx = y * w + x;
-    if game.map.owner_id(x, y) != pid {
+    if engine.state.map.owner_id(x, y) != pid {
         despawn_all(&mut commands, &mut ghost_parts);
         return;
     }
 
-    let snapshot: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
+    let snapshot = engine.buildings.clone();
     let positions = existing_structure_positions_with_width(snapshot.iter(), w, None);
     let cost = structure_build_cost_gold(kind, pid, &snapshot);
     let afford = player.gold >= cost && cost.is_finite();
@@ -91,7 +92,7 @@ pub fn system_sync_structure_ghost(
     }
 
     let (tile_idx, ghost_kind, ok_afford) =
-        if let Some(bid) = find_upgrade_target_id(&game.map, pid, kind, click_idx, &snapshot) {
+        if let Some(bid) = find_upgrade_target_id(&engine.state.map, pid, kind, click_idx, &snapshot) {
             let mut ti = None;
             for b in &snapshot {
                 if b.id == bid {
@@ -105,7 +106,7 @@ pub fn system_sync_structure_ghost(
             };
             (ti, GhostKind::Upgrade, afford)
         } else if let Some(spawn) =
-            resolve_structure_spawn_tile(&game.map, pid, kind, click_idx, &positions)
+            resolve_structure_spawn_tile(&engine.state.map, pid, kind, click_idx, &positions)
         {
             (spawn, GhostKind::Place, afford)
         } else {
@@ -196,26 +197,43 @@ pub fn system_sync_structure_ghost(
     }
 }
 
-pub fn system_attach_building_visuals(
+pub fn system_sync_building_visuals(
     mut commands: Commands,
-    game_opt: Option<Res<GameState>>,
+    engine_opt: Option<Res<DarkRiftEngine>>,
     mesh: Option<Res<StructureMarkerMeshes>>,
     settings: Res<ClientSettings>,
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    q_new: Query<(Entity, &Building), Without<BuildingVisualDone>>,
+    q_existing: Query<(Entity, &BuildingVisual)>,
 ) {
-    let Some(game) = game_opt.as_deref() else {
+    let Some(engine) = engine_opt.as_deref() else {
         return;
     };
     let Some(marker) = mesh.as_ref() else {
         return;
     };
-    let mw = game.map.width;
-    let mh = game.map.height;
-    let pending: Vec<(Entity, Building)> = q_new.iter().map(|(e, b)| (e, *b)).collect();
-    for (e, b) in pending {
-        let rgb = game
+    let mw = engine.state.map.width;
+    let mh = engine.state.map.height;
+
+    let mut current_ids = std::collections::HashSet::new();
+    for b in engine.buildings.iter() {
+        current_ids.insert(b.id);
+    }
+    
+    let mut existing_ids = std::collections::HashSet::new();
+    for (e, vis) in &q_existing {
+        if !current_ids.contains(&vis.0) {
+            commands.entity(e).despawn();
+        } else {
+            existing_ids.insert(vis.0);
+        }
+    }
+
+    for b in engine.buildings.iter() {
+        if existing_ids.contains(&b.id) {
+            continue;
+        }
+        let rgb = engine.state
             .player(b.owner_id)
             .map(|p| p.color)
             .unwrap_or([0.7, 0.7, 0.7]);
@@ -223,13 +241,16 @@ pub fn system_attach_building_visuals(
             rgb[0], rgb[1], rgb[2], 0.88,
         )));
         let pos = tile_idx_to_world(b.tile_idx, mw, mh);
-        commands.entity(e).insert((
-            BuildingVisualDone,
+        
+        let e = commands.spawn((
+            BuildingVisual(b.id),
             BuildingMapVisualRoot,
+            InGameEntity,
             Transform::from_xyz(pos.x, pos.y, 268.0),
             GlobalTransform::default(),
             Visibility::default(),
-        ));
+        )).id();
+        
         let font = settings.font.clone();
         commands.entity(e).with_children(|ch| {
             ch.spawn((

@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use dark_rift_shared::engine::DarkRiftEngine;
 use dark_rift_shared::game::GameState;
 use dark_rift_shared::protocol::*;
 
@@ -87,8 +88,10 @@ pub fn start_game_core(
                 commands.insert_resource(grid);
             }
 
-            commands.insert_resource(WaterComponents::compute(&game.map));
-            commands.insert_resource(game);
+            let water = WaterComponents::compute(&game.map);
+            commands.insert_resource(water.clone());
+            let engine = DarkRiftEngine::new(game, water);
+            commands.insert_resource(engine);
             params.ready.0 = true;
             params.next_state.set(AppState::InGame);
             commands.insert_resource(DesyncTracker::default());
@@ -132,37 +135,20 @@ pub fn catchup_fast_forward(world: &mut World) {
 }
 
 pub fn pop_turn(
-    mut commands: Commands,
-    mut game: ResMut<GameState>,
+    mut engine: ResMut<DarkRiftEngine>,
     mut queue: ResMut<TurnQueue>,
-    mut q_exec: Query<(Entity, &mut AttackExecution)>,
-    mut q_fleet: Query<(Entity, &mut WarpFleet)>,
-    mut q_building: Query<(Entity, &mut Building)>,
-    mut path_scratch: ResMut<WaterPathfinderScratch>,
-    water_components: Res<WaterComponents>,
     mut desync_tracker: ResMut<DesyncTracker>,
 ) {
     if let Some(turn) = queue.0.pop_front() {
-        for (i, stamped) in turn.intents.iter().enumerate() {
-            apply_stamped_intent(
-                &mut commands,
-                &mut *game,
-                &mut q_exec,
-                &mut q_fleet,
-                &mut q_building,
-                stamped,
-                i as u32,
-                &mut *path_scratch,
-                &water_components,
-            );
-        }
-
-        let checksum = dark_rift_shared::checksum::compute_state_hash(
-            &game,
-            q_building.iter().map(|(_, b)| b as &Building),
-            q_fleet.iter().map(|(_, f)| f as &WarpFleet),
-            q_exec.iter().map(|(_, e)| e as &AttackExecution),
-        );
+        engine.apply_intents(&turn.intents);
+        engine.execute_income();
+        engine.execute_bot_think();
+        engine.execute_fleets();
+        engine.execute_combat();
+        engine.execute_construction();
+        engine.execute_tick();
+        
+        let checksum = engine.checksum();
         
         desync_tracker.log.push_back(TurnLogEntry {
             tick: turn.turn_number,

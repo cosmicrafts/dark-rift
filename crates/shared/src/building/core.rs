@@ -1,10 +1,9 @@
-use bevy::prelude::*;
 use crate::game::BuildingKind;
 use crate::config;
 use super::placement::{idx_xy, manhattan};
 /// Build and upgrade costs use **gold**; see `structure_build_cost_gold`.
 
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Building {
     pub id: u64,
     pub owner_id: u16,
@@ -77,7 +76,7 @@ pub fn defense_post_priority_bonus(
 
 /// A spatial grid specifically designed to optimize `defense_post_priority_bonus` from O(N) to O(1).
 /// This should be cached in a `Local` within the combat execution system to avoid allocations.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DefenseGrid {
     pub cells: Vec<Vec<Building>>,
     pub grid_w: u32,

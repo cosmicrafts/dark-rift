@@ -1,3 +1,4 @@
+use crate::engine::DarkRiftEngine;
 use crate::game::GameState;
 use crate::building::Building;
 use crate::warp_fleet::WarpFleet;
@@ -6,6 +7,17 @@ use crate::execution::AttackExecution;
 /// Computes a lightweight, numeric checksum of the game state.
 /// This mimics OpenFront's `hash()` method which simply sums primitive values
 /// (troops, gold, coordinates) to detect desyncs with virtually zero overhead.
+impl DarkRiftEngine {
+    pub fn checksum(&self) -> u64 {
+        compute_state_hash(
+            &self.state,
+            self.buildings.iter(),
+            self.fleets.iter(),
+            self.attacks.iter(),
+        )
+    }
+}
+
 pub fn compute_state_hash<'a>(
     game: &GameState,
     buildings: impl Iterator<Item = &'a Building>,

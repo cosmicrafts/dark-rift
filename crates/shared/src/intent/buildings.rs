@@ -1,22 +1,19 @@
-use bevy::prelude::*;
-use crate::game::{GameState, BuildingKind, GameEvent, GamePhase};
+use crate::game::{BuildingKind, GameEvent, GamePhase};
+use crate::engine::DarkRiftEngine;
 use crate::building::{Building, resolve_structure_spawn_tile, structure_build_cost_gold, existing_structure_positions_with_width, structure_kind_enabled};
-fn snapshot_buildings(q: &mut Query<(Entity, &mut Building)>) -> Vec<Building> {
-    q.iter().map(|(_, b)| *b).collect()
-}
 
-pub fn apply_build_structure_intent(
-    commands: &mut Commands,
-    game: &mut GameState,
-    q_building: &mut Query<(Entity, &mut Building)>,
+
+impl DarkRiftEngine {
+pub(super) fn apply_build_structure_intent(
+    &mut self,
     player_id: u16,
     kind: BuildingKind,
     target_tile: u32,
 ) {
-    if game.phase != GamePhase::Playing {
+    if self.state.phase != GamePhase::Playing {
         return;
     }
-    let Some(player) = game.player(player_id) else {
+    let Some(player) = self.state.player(player_id) else {
         return;
     };
     if !player.alive {
@@ -25,15 +22,15 @@ pub fn apply_build_structure_intent(
     if !structure_kind_enabled(kind) {
         return;
     }
-    let w = game.map.width;
-    let area = w.saturating_mul(game.map.height);
+    let w = self.state.map.width;
+    let area = w.saturating_mul(self.state.map.height);
     if area == 0 || target_tile >= area {
         return;
     }
-    let snapshot = snapshot_buildings(q_building);
-    let positions = existing_structure_positions_with_width(snapshot.iter(), w, None);
+    
+    let positions = existing_structure_positions_with_width(self.buildings.iter(), w, None);
     let Some(spawn_idx) =
-        resolve_structure_spawn_tile(&game.map, player_id, kind, target_tile, &positions)
+        resolve_structure_spawn_tile(&self.state.map, player_id, kind, target_tile, &positions)
     else {
         bevy::log::warn!(
             "apply_build_structure: no valid spawn for {:?} at tile {}",
@@ -42,20 +39,20 @@ pub fn apply_build_structure_intent(
         );
         return;
     };
-    let cost = structure_build_cost_gold(kind, player_id, &snapshot);
-    let Some(player_mut) = game.player_mut(player_id) else {
+    let cost = structure_build_cost_gold(kind, player_id, &self.buildings);
+    let Some(player_mut) = self.state.player_mut(player_id) else {
         return;
     };
     if player_mut.gold < cost || !cost.is_finite() {
         return;
     }
     player_mut.gold = (player_mut.gold - cost).max(0.0);
-    let id = game.next_building_id;
-    game.next_building_id = game.next_building_id.wrapping_add(1).max(1);
+    let id = self.state.next_building_id;
+    self.state.next_building_id = self.state.next_building_id.wrapping_add(1).max(1);
     let dur = kind.construction_duration_ticks();
     let under = dur > 0;
     let ticks = if under { dur } else { 0 };
-    commands.spawn(Building {
+    self.buildings.push(Building {
         id,
         owner_id: player_id,
         tile_idx: spawn_idx,
@@ -64,7 +61,7 @@ pub fn apply_build_structure_intent(
         under_construction: under,
         ticks_until_complete: ticks,
     });
-    game.events.push(GameEvent::StructureSpawned {
+    self.state.events.push(GameEvent::StructureSpawned {
         id,
         owner_id: player_id,
         tile_idx: spawn_idx,
@@ -73,27 +70,24 @@ pub fn apply_build_structure_intent(
     });
 }
 
-pub fn apply_upgrade_structure_intent(
-    game: &mut GameState,
-    q_building: &mut Query<(Entity, &mut Building)>,
+pub(super) fn apply_upgrade_structure_intent(
+    &mut self,
     player_id: u16,
     building_id: u64,
 ) {
-    if game.phase != GamePhase::Playing {
+    if self.state.phase != GamePhase::Playing {
         return;
     }
-    let mut order: Vec<(Entity, u64)> = q_building.iter().map(|(e, b)| (e, b.id)).collect();
-    order.sort_by_key(|&(_, id)| id);
-    let mut found: Option<(Entity, BuildingKind, u32)> = None;
-    for (e, bid) in &order {
-        if *bid != building_id {
+    let mut order: Vec<usize> = (0..self.buildings.len()).collect();
+    order.sort_by_key(|&idx| self.buildings[idx].id);
+    let mut found: Option<(usize, BuildingKind, u32)> = None;
+    for &idx in &order {
+        let b = &self.buildings[idx];
+        if b.id != building_id {
             continue;
         }
-        let Ok((_, b)) = q_building.get(*e) else {
-            continue;
-        };
+        
         if b.owner_id != player_id {
-            bevy::log::warn!("apply_upgrade_structure: wrong owner for {}", building_id);
             return;
         }
         if b.under_construction {
@@ -102,35 +96,35 @@ pub fn apply_upgrade_structure_intent(
         if !b.kind.upgradable() {
             return;
         }
-        found = Some((*e, b.kind, b.tile_idx));
+        found = Some((idx, b.kind, b.tile_idx));
         break;
     }
-    let Some((entity, kind, tile_idx)) = found else {
+    let Some((idx, kind, tile_idx)) = found else {
         bevy::log::warn!("apply_upgrade_structure: id {} not found", building_id);
         return;
     };
     if !structure_kind_enabled(kind) {
         return;
     }
-    let snapshot = snapshot_buildings(q_building);
-    let cost = structure_build_cost_gold(kind, player_id, &snapshot);
-    let Some(player_mut) = game.player_mut(player_id) else {
+    
+    let cost = structure_build_cost_gold(kind, player_id, &self.buildings);
+    let Some(player_mut) = self.state.player_mut(player_id) else {
         return;
     };
     if player_mut.gold < cost || !cost.is_finite() {
         return;
     }
     player_mut.gold = (player_mut.gold - cost).max(0.0);
-    let Ok((_, mut b)) = q_building.get_mut(entity) else {
-        return;
-    };
+    
+    let b = &mut self.buildings[idx];
     b.level = b.level.saturating_add(1);
     let new_level = b.level;
-    game.events.push(GameEvent::StructureUpgraded {
+    self.state.events.push(GameEvent::StructureUpgraded {
         id: building_id,
         tile_idx,
         kind,
         level: new_level,
     });
+}
 }
 

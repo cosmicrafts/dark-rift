@@ -13,8 +13,7 @@ use dark_rift_shared::config;
 use dark_rift_shared::building::*;
 use dark_rift_shared::game::GameEvent;
 use dark_rift_shared::player::Player;
-use dark_rift_shared::execution::*;
-use dark_rift_shared::intent::{apply_stamped_intent, system_bot_think};
+
 use dark_rift_shared::pathfinding::WaterPathfinderScratch;
 use dark_rift_shared::protocol::*;
 use dark_rift_shared::warp_fleet::*;
@@ -322,9 +321,8 @@ fn main() {
         app.add_systems(
             Update,
             (
-                system_spawn_fleet_visuals,
                 system_sync_fleet_visuals,
-                system_attach_building_visuals,
+                system_sync_building_visuals,
                 system_sync_building_visual_lod,
                 system_sync_building_map_labels,
             )
@@ -344,12 +342,6 @@ fn main() {
     let mut sim_schedule = Schedule::new(SimulationSchedule);
     sim_schedule.add_systems((
         pop_turn,
-        system_player_income,
-        system_bot_think,
-        system_warp_fleet_execution,
-        system_attack_execution,
-        system_building_construction,
-        system_game_tick,
         system_headless_bot_engine.run_if(|cli: Res<Cli>| cli.bot),
         decrement_pending,
     ).chain());

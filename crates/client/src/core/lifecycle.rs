@@ -1,6 +1,7 @@
 use bevy::prelude::*;
-use dark_rift_shared::game::GameState;
+use dark_rift_shared::engine::DarkRiftEngine;
 use dark_rift_shared::protocol::*;
+use crate::ClientSettings;
 use lightyear::prelude::*;
 use instant::Instant;
 use crate::*;
@@ -63,18 +64,18 @@ pub fn handle_server_turns(
 
 pub fn system_evaluate_game_over(
     mut commands: Commands,
-    game: Option<Res<GameState>>,
+    engine_opt: Option<Res<DarkRiftEngine>>,
     ready: Res<GameReady>,
     my_id: Res<MyPlayerId>,
     settings: Option<Res<ClientSettings>>,
     panel_q: Query<Entity, With<GameOverPanel>>,
 ) {
-    let Some(game) = game else { return; };
+    let Some(engine) = engine_opt else { return; };
     if !ready.0 { return; }
     if panel_q.iter().next().is_some() { return; }
 
-    let alive_count = game.players.iter().filter(|p| p.alive).count();
-    let am_i_alive = game.player(my_id.0).map(|p| p.alive).unwrap_or(false);
+    let alive_count = engine.state.players.iter().filter(|p| p.alive).count();
+    let am_i_alive = engine.state.player(my_id.0).map(|p| p.alive).unwrap_or(false);
 
     let mut show_panel = false;
     let mut victory = false;
@@ -190,9 +191,6 @@ pub fn system_cleanup_ingame_entities(
     mut ghost_parts: ResMut<StructureGhostParts>,
     mut build_hud: ResMut<BuildableHudState>,
     q_ingame: Query<Entity, With<InGameEntity>>,
-    q_execs: Query<Entity, With<AttackExecution>>,
-    q_buildings: Query<Entity, With<Building>>,
-    q_fleets: Query<Entity, With<dark_rift_shared::warp_fleet::WarpFleet>>,
 ) {
     ready.0 = false;
     queue.0.clear();
@@ -208,16 +206,7 @@ pub fn system_cleanup_ingame_entities(
     for e in q_ingame.iter() {
         commands.entity(e).despawn();
     }
-    for e in q_execs.iter() {
-        commands.entity(e).despawn();
-    }
-    for e in q_buildings.iter() {
-        commands.entity(e).despawn();
-    }
-    for e in q_fleets.iter() {
-        commands.entity(e).despawn();
-    }
-    commands.remove_resource::<GameState>();
+    commands.remove_resource::<DarkRiftEngine>();
     commands.remove_resource::<SinglePlayerState>();
     commands.remove_resource::<LocalIntentBuffer>();
     commands.remove_resource::<crate::ShaderMapData>();

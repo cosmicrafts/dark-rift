@@ -1,13 +1,11 @@
 use bevy::prelude::*;
-use std::collections::HashMap;
-use dark_rift_shared::game::GameState;
+use std::collections::{HashMap, HashSet};
+use dark_rift_shared::engine::DarkRiftEngine;
 use crate::{ClientSettings, MyPlayerId, clamp_ui_scale, panel_radius_for_breakpoint};
 use crate::ui::theme::*;
 use crate::hud_combat::{CancelFleetButton, CancelAttackButton};
 use crate::hud_trunc_name;
-use crate::WarpFleet;
-use std::collections::HashSet;
-use dark_rift_shared::execution::AttackExecution;
+
 use dark_rift_shared::game::GameEvent;
 use crate::EventFeedLine;
 use crate::ui::shell::{touch_target_for_breakpoint, UiShellState};
@@ -39,7 +37,7 @@ pub struct OutgoingFleetRowMap(pub HashMap<u64, (Entity, Entity)>);
 pub fn system_update_event_feed(
     mut commands: Commands,
     time: Res<Time>,
-    game_opt: Option<Res<GameState>>,
+    engine_opt: Option<Res<DarkRiftEngine>>,
     mut last_event_idx: Local<usize>,
     settings: Res<ClientSettings>,
     q_container: Query<Entity, With<EventFeedContainer>>,
@@ -56,22 +54,22 @@ pub fn system_update_event_feed(
         }
     }
 
-    let Some(game) = game_opt else { return };
+    let Some(engine) = engine_opt else { return };
 
     // New events
-    let current_len = game.events.len();
+    let current_len = engine.state.events.len();
     if *last_event_idx < current_len {
         let s = clamp_ui_scale(settings.config.ui.combat_hud_scale);
         
         for i in *last_event_idx..current_len {
-            let ev = &game.events[i];
+            let ev = &engine.state.events[i];
             let msg = match ev {
                 GameEvent::PlayerEliminated { player_id } => {
-                    let name = game.player(*player_id).map(|p| p.name.as_str()).unwrap_or("Unknown");
+                    let name = engine.state.player(*player_id).map(|p| p.name.as_str()).unwrap_or("Unknown");
                     format!("Eliminated: {}", name)
                 }
                 GameEvent::StructureSpawned { owner_id, kind, .. } => {
-                    let name = game.player(*owner_id).map(|p| p.name.as_str()).unwrap_or("Unknown");
+                    let name = engine.state.player(*owner_id).map(|p| p.name.as_str()).unwrap_or("Unknown");
                     format!("Built: {} {}", name, kind.as_str())
                 }
                 GameEvent::StructureUpgraded { kind, level, .. } => {
@@ -107,10 +105,8 @@ pub fn system_update_event_feed(
 
 pub fn system_sync_outgoing_attack_rows(
     mut commands: Commands,
-    game_opt: Option<Res<GameState>>,
+    engine_opt: Option<Res<DarkRiftEngine>>,
     slot_q: Query<Entity, With<OutgoingRowsContainer>>,
-    q_exec: Query<&AttackExecution>,
-    q_fleet: Query<&WarpFleet>,
     my_id: Res<MyPlayerId>,
     settings: Res<ClientSettings>,
     ui_shell: Res<UiShellState>,
@@ -132,7 +128,7 @@ pub fn system_sync_outgoing_attack_rows(
         }
         return;
     }
-    let Some(game) = game_opt else {
+    let Some(engine) = engine_opt else {
         return;
     };
 
@@ -144,7 +140,7 @@ pub fn system_sync_outgoing_attack_rows(
     let cancel_h = th * s;
     let row_radius = panel_radius_for_breakpoint(ui_shell.breakpoint) * s;
 
-    let mut outgoing: Vec<&AttackExecution> = q_exec
+    let mut outgoing: Vec<_> = engine.attacks
         .iter()
         .filter(|e| e.owner_id == my_id.0 && !e.retreating)
         .collect();
@@ -168,7 +164,7 @@ pub fn system_sync_outgoing_attack_rows(
         let who = if exec.target_owner == 0 {
             "Neutral".to_string()
         } else {
-            game
+            engine.state
                 .player(exec.target_owner)
                 .map(|p| hud_trunc_name(&p.name, 14))
                 .unwrap_or_else(|| format!("{}", exec.target_owner))
@@ -278,7 +274,7 @@ pub fn system_sync_outgoing_attack_rows(
         return;
     }
 
-    let mut fleets: Vec<&WarpFleet> = q_fleet
+    let mut fleets: Vec<_> = engine.fleets
         .iter()
         .filter(|f| f.owner_id == my_id.0 && !f.retreating)
         .collect();
@@ -301,7 +297,7 @@ pub fn system_sync_outgoing_attack_rows(
         let who = if fleet.target_owner == 0 {
             "Neutral".to_string()
         } else {
-            game
+            engine.state
                 .player(fleet.target_owner)
                 .map(|p| hud_trunc_name(&p.name, 14))
                 .unwrap_or_else(|| format!("{}", fleet.target_owner))

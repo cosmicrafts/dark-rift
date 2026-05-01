@@ -1,14 +1,8 @@
-use bevy::prelude::*;
-use crate::game::GameState;
-use crate::protocol::*;
-use crate::building::{Building, existing_structure_positions_with_width, structure_kind_enabled, structure_build_cost_gold, resolve_structure_spawn_tile};
-use crate::execution::AttackExecution;
-use crate::rng::{NextIntExt, WyRand, SeedableRng};
-use crate::config;
-use crate::water_components::WaterComponents;
-use crate::intent::apply_stamped_intent;
-use crate::warp_fleet::WarpFleet;
+use crate::engine::DarkRiftEngine;
 use crate::game::BuildingKind;
+use crate::protocol::{GameplayIntent, StampedIntent, AttackIntent};
+use crate::building::{Building, existing_structure_positions_with_width, structure_kind_enabled, structure_build_cost_gold, resolve_structure_spawn_tile};
+use crate::rng::{NextIntExt, WyRand, SeedableRng};
 fn bot_structure_target_count(
     kind: BuildingKind,
     city_equivalent: u32,
@@ -42,22 +36,14 @@ struct BotDecision {
     intent: GameplayIntent,
 }
 
-pub fn system_bot_think(
-    mut commands: Commands,
-    mut game: ResMut<GameState>,
-    mut q_exec: Query<(Entity, &mut AttackExecution)>,
-    mut q_fleet: Query<(Entity, &mut WarpFleet)>,
-    mut q_building: Query<(Entity, &mut Building)>,
-    mut path_scratch: ResMut<crate::pathfinding::WaterPathfinderScratch>,
-    water_components: Res<WaterComponents>,
-    config_opt: Option<Res<crate::game_config::GameConfig>>,
-) {
-    if game.phase != crate::game::GamePhase::Playing {
+impl DarkRiftEngine {
+pub fn execute_bot_think(&mut self) {
+    if self.state.phase != crate::game::GamePhase::Playing {
         return;
     }
 
-    let config = config_opt.map(|c| c.clone()).unwrap_or_default();
-    let tick = game.tick;
+    let config = self.state.config.clone();
+    let tick = self.state.tick;
     let (attack_interval_base, trigger_ratio, reserve_ratio, expand_ratio, random_attack_div) =
         match config.bot_difficulty {
             crate::game_config::BotDifficulty::BrainDead => (500, 0.9, 0.8, 0.12, 8),
@@ -67,13 +53,13 @@ pub fn system_bot_think(
 
     let mut schedule: Vec<(u16, u64, u64)> = Vec::new();
     let mut any_structures = false;
-    for p in game.players.iter() {
+    for p in self.state.players.iter() {
         if p.is_human() || !p.alive {
             continue;
         }
         let bot_id = p.id;
         let mut sched_rng = WyRand::seed_from_u64(
-            game.seed.wrapping_add(bot_id as u64).wrapping_add(attack_interval_base as u64)
+            self.state.seed.wrapping_add(bot_id as u64).wrapping_add(attack_interval_base as u64)
         );
         let interval = sched_rng
             .next_int(attack_interval_base as i32, (attack_interval_base as i32 * 2).max(1))
@@ -98,10 +84,10 @@ pub fn system_bot_think(
     let mut buildings_snapshot: Vec<Building> = Vec::new();
     let mut structure_positions = Vec::new();
     if any_structures {
-        buildings_snapshot = q_building.iter().map(|(_, b)| *b).collect();
+        buildings_snapshot = self.buildings.clone();
         buildings_snapshot.sort_unstable_by_key(|b| b.id);
         structure_positions =
-            existing_structure_positions_with_width(buildings_snapshot.iter(), game.map.width, None);
+            existing_structure_positions_with_width(buildings_snapshot.iter(), self.state.map.width, None);
     }
     let mut decisions: Vec<BotDecision> = Vec::new();
 
@@ -113,7 +99,7 @@ pub fn system_bot_think(
         let do_structures = do_attack || phase == one_third || phase == two_thirds;
 
         if do_structures {
-            let Some(player) = game.player(bot_id) else {
+            let Some(player) = self.state.player(bot_id) else {
                 continue;
             };
             let city_count = buildings_snapshot
@@ -147,8 +133,8 @@ pub fn system_bot_think(
                 }
                 let cost = structure_build_cost_gold(kind, bot_id, &buildings_snapshot);
                 let mut tile_choice: Option<u32> = None;
-                let map_w = game.map.width;
-                let Some(bot_now) = game.player_mut(bot_id) else { continue; };
+                let map_w = self.state.map.width;
+                let Some(bot_now) = self.state.player_mut(bot_id) else { continue; };
                 if bot_now.gold < cost {
                     continue;
                 }
@@ -163,7 +149,7 @@ pub fn system_bot_think(
                     let raw_idx = bot_now.border_tiles[pick];
                     let (bx, by) = (raw_idx % map_w, raw_idx / map_w);
                     let idx = by * map_w + bx;
-                    if resolve_structure_spawn_tile(&game.map, bot_id, kind, idx, &structure_positions).is_some() {
+                    if resolve_structure_spawn_tile(&self.state.map, bot_id, kind, idx, &structure_positions).is_some() {
                         tile_choice = Some(idx);
                     }
                 }
@@ -183,10 +169,10 @@ pub fn system_bot_think(
             continue;
         }
         let (troops, max_troops, border_tiles) = {
-            let Some(player) = game.player(bot_id) else {
+            let Some(player) = self.state.player(bot_id) else {
                 continue;
             };
-            (player.troops, player.max_troops, player.border_coords(game.map.width).collect::<Vec<_>>())
+            (player.troops, player.max_troops, player.border_coords(self.state.map.width).collect::<Vec<_>>())
         };
         if border_tiles.is_empty() {
             continue;
@@ -195,14 +181,14 @@ pub fn system_bot_think(
         let mut player_targets = Vec::new();
         let max_scan = border_tiles.len().min(256);
         let start_idx = {
-             let p_mut = game.player_mut(bot_id).unwrap();
+             let p_mut = self.state.player_mut(bot_id).unwrap();
              p_mut.bot_rng.next_int(0, border_tiles.len() as i32) as usize
         };
         for i in 0..max_scan {
             let b_idx = (start_idx + i) % border_tiles.len();
             let (bx, by) = border_tiles[b_idx];
-            game.map.for_each_neighbor(bx, by, |nx, ny| {
-                let owner = game.map.owner_id(nx, ny);
+            self.state.map.for_each_neighbor(bx, by, |nx, ny| {
+                let owner = self.state.map.owner_id(nx, ny);
                 if owner != bot_id {
                     if owner == 0 {
                         has_neutral = true;
@@ -219,7 +205,7 @@ pub fn system_bot_think(
         } else if player_targets.is_empty() {
             continue;
         } else {
-            let p_mut = game.player_mut(bot_id).unwrap();
+            let p_mut = self.state.player_mut(bot_id).unwrap();
             let t = if p_mut.bot_rng.next_int(0, random_attack_div) == 0 {
                 player_targets[p_mut.bot_rng.next_int(0, player_targets.len() as i32) as usize]
             } else {
@@ -232,7 +218,7 @@ pub fn system_bot_think(
         }
         let reserve = max_troops * if is_neutral { expand_ratio } else { reserve_ratio };
         let p_send = (troops - reserve).max(0.0);
-        if p_send < game.config.attack_cost_neutral {
+        if p_send < self.state.config.attack_cost_neutral {
             continue;
         }
         decisions.push(BotDecision {
@@ -251,18 +237,12 @@ pub fn system_bot_think(
             player_id: d.bot_id,
             intent: d.intent,
         };
-        apply_stamped_intent(
-            &mut commands,
-            &mut game,
-            &mut q_exec,
-            &mut q_fleet,
-            &mut q_building,
+        self.apply_stamped_intent(
             &stamped,
             intent_index as u32,
-            &mut *path_scratch,
-            &water_components,
         );
     }
+}
 }
 
 #[cfg(test)]

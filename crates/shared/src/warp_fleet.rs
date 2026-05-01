@@ -9,7 +9,6 @@
 use std::collections::VecDeque;
 use std::fmt;
 
-use bevy::prelude::Component;
 
 use crate::map::{GameMap, TerrainType};
 use crate::pathfinding::WaterPathfinderScratch;
@@ -543,7 +542,7 @@ pub fn best_shore_spawn_for_transport(
 }
 
 /// Moving fleet over water (1 tile / tick). Mirrors OpenFront `TransportShip` execution state.
-#[derive(Component, Debug)]
+#[derive(Debug, Clone)]
 pub struct WarpFleet {
     pub id: u64,
     pub owner_id: u16,

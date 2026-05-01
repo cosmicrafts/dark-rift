@@ -22,6 +22,9 @@ impl Default for OverlayDiagnostics { fn default() -> Self { Self { status_line:
 #[derive(Resource, Default)] pub struct NetTiming { pub connect_started: Option<Instant>, pub handshake_ms: Option<f32>, pub last_turn_at: Option<Instant>, pub turn_spacing_ema_ms: f32 }
 #[derive(Resource)] pub struct StructureMarkerMeshes { pub place_ring: Handle<Mesh>, pub sam_range: Handle<Mesh>, pub defense_range: Handle<Mesh> }
 #[derive(Resource, Default)] pub struct StructureGhostParts { pub marker: Option<Entity>, pub range: Option<Entity> }
+#[derive(Component)] pub struct BuildingVisual(pub u64);
+#[derive(Component)] pub struct AttackVisual(pub u64);
+#[derive(Component)] pub struct FleetVisual(pub u64);
 #[derive(Component)] pub struct BuildingVisualDone;
 #[derive(Component)] pub struct BuildingMapVisualRoot;
 #[derive(Component)] pub struct StructureGhostRoot;

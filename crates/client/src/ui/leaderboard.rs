@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use dark_rift_shared::game::GameState;
+use dark_rift_shared::engine::DarkRiftEngine;
 use crate::{ClientSettings, Cli};
 use crate::ui::theme::*;
 use crate::InGameEntity;
@@ -145,7 +145,7 @@ pub fn setup_leaderboard(
 }
 
 pub fn system_update_leaderboard(
-    game_opt: Option<Res<GameState>>,
+    engine_opt: Option<Res<DarkRiftEngine>>,
     mut q_rank: Query<(&LbCellRank, &mut Text), (Without<LbCellName>, Without<LbCellOwned>, Without<LbCellGold>, Without<LbCellMax>)>,
     mut q_name: Query<(&LbCellName, &mut Text, &mut TextColor), (Without<LbCellRank>, Without<LbCellOwned>, Without<LbCellGold>, Without<LbCellMax>)>,
     mut q_owned: Query<(&LbCellOwned, &mut Text), (Without<LbCellRank>, Without<LbCellName>, Without<LbCellGold>, Without<LbCellMax>)>,
@@ -154,17 +154,17 @@ pub fn system_update_leaderboard(
     my_id: Option<Res<crate::MyPlayerId>>,
     mut cached_land: Local<Option<f32>>,
 ) {
-    let Some(game) = game_opt else { return };
+    let Some(engine) = engine_opt else { return };
     let my_player_id = my_id.map(|r| r.0).unwrap_or(0);
     
     // Sort players by tile count
-    let mut sorted_players: Vec<_> = game.players.iter().filter(|p| p.alive).collect();
+    let mut sorted_players: Vec<_> = engine.state.players.iter().filter(|p| p.alive).collect();
     sorted_players.sort_by(|a, b| b.tile_count.cmp(&a.tile_count));
     
     let total_land = match *cached_land {
         Some(val) => val,
         None => {
-            let val = game.map.terrain.iter().filter(|t| t.is_land()).count().max(1) as f32;
+            let val = engine.state.map.terrain.iter().filter(|t| t.is_land()).count().max(1) as f32;
             *cached_land = Some(val);
             val
         }

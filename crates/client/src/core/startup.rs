@@ -2,6 +2,7 @@ use crate::ReplayDirector;
 use crate::Cli;
 
 use dark_rift_shared::game::*;
+use dark_rift_shared::engine::DarkRiftEngine;
 use crate::{ClientSettings, TILE_SIZE};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::post_process::bloom::{Bloom, BloomCompositeMode};
@@ -130,8 +131,8 @@ pub fn setup_offline(
     let grid = spawn_shader_map(&mut commands, &game, &mut images, &mut materials, &mut meshes, false);
     commands.insert_resource(grid);
 
-    commands.insert_resource(WaterComponents::compute(&game.map));
-    commands.insert_resource(game);
+    let water = WaterComponents::compute(&game.map);
+    commands.insert_resource(DarkRiftEngine::new(game, water));
     ready.0 = true;
 }
 

@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use dark_rift_shared::engine::DarkRiftEngine;
 use dark_rift_shared::game::GameState;
 
 use crate::*;
@@ -58,37 +59,40 @@ pub fn system_loading_map(
 }
 
 pub fn handle_tile_change(
-    game_opt: Option<ResMut<GameState>>,
+    engine_opt: Option<Res<DarkRiftEngine>>,
     shader_map_opt: Option<ResMut<ShaderMapData>>,
     mut images: ResMut<Assets<Image>>,
+    mut last_event_idx: Local<usize>,
 ) {
-    let Some(mut game) = game_opt else { return };
-    if !game.is_changed() { return; }
+    let Some(engine) = engine_opt else { return };
     let Some(mut shader_map) = shader_map_opt else { return };
 
     if shader_map.colors_dirty {
         if let Some(colors_img) = images.get_mut(&shader_map.player_colors) {
-            sync_player_colors(&game, colors_img);
+            sync_player_colors(&engine.state, colors_img);
             shader_map.colors_dirty = false;
         }
     }
 
-    if let Some(board_img) = images.get_mut(&shader_map.board_data) {
-        if let Some(ref mut data) = board_img.data {
-            for ev in &game.events {
-                if let GameEvent::TileCaptured { x, y, new_owner: owner, .. } = ev {
-                    // Update single owner ID at (x, y)
-                    let linear_index = (*y as usize * game.map.width as usize) + *x as usize;
-                    let byte_offset = linear_index * 2;
-                    if byte_offset + 1 < data.len() {
-                        data[byte_offset..byte_offset+2].copy_from_slice(&owner.to_ne_bytes());
+    let current_len = engine.state.events.len();
+    if *last_event_idx < current_len {
+        if let Some(board_img) = images.get_mut(&shader_map.board_data) {
+            if let Some(ref mut data) = board_img.data {
+                for i in *last_event_idx..current_len {
+                    let ev = &engine.state.events[i];
+                    if let GameEvent::TileCaptured { x, y, new_owner: owner, .. } = ev {
+                        // Update single owner ID at (x, y)
+                        let linear_index = (*y as usize * engine.state.map.width as usize) + *x as usize;
+                        let byte_offset = linear_index * 2;
+                        if byte_offset + 1 < data.len() {
+                            data[byte_offset..byte_offset+2].copy_from_slice(&owner.to_ne_bytes());
+                        }
                     }
                 }
             }
         }
+        *last_event_idx = current_len;
     }
-
-    game.events.clear();
 }
 
 pub fn spawn_shader_map(

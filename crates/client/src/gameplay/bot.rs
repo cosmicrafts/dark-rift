@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use dark_rift_shared::game_config::{BotProfile, GameConfig};
-use dark_rift_shared::game::GameState;
+use dark_rift_shared::engine::DarkRiftEngine;
 use dark_rift_shared::protocol::{ClientGameplayMessage, GameplayIntent, AttackIntent};
 use lightyear::prelude::MessageSender;
 use dark_rift_shared::protocol::ReliableChannel;
@@ -17,7 +17,7 @@ pub struct HeadlessBotState {
 /// Headless client logic for the bot.
 pub fn system_headless_bot_engine(
     mut bot_state: ResMut<HeadlessBotState>,
-    game: Res<GameState>,
+    engine: Res<DarkRiftEngine>,
     mut sender: Query<&mut MessageSender<ClientGameplayMessage>>,
     my_id: Res<MyPlayerId>,
 ) {
@@ -29,7 +29,7 @@ pub fn system_headless_bot_engine(
         return;
     };
 
-    let Some(_player) = game.player(my_id.0) else {
+    let Some(_player) = engine.state.player(my_id.0) else {
         return;
     };
 
@@ -40,21 +40,21 @@ pub fn system_headless_bot_engine(
     let reserve_ratio = bot_state.profile.reserve_ratio;
     let expand_ratio = bot_state.profile.expand_ratio;
     
-    let player = game.player(bot_id).unwrap();
-    let border_tiles: Vec<_> = player.border_coords(game.map.width).collect();
+    let player = engine.state.player(bot_id).unwrap();
+    let border_tiles: Vec<_> = player.border_coords(engine.state.map.width).collect();
     if border_tiles.is_empty() { return; }
 
     let mut has_neutral = false;
     let mut player_targets = Vec::new();
     let max_scan = border_tiles.len().min(256);
-    let mut bot_rng = WyRand::seed_from_u64(game.seed.wrapping_add(game.tick as u64).wrapping_add(1999));
+    let mut bot_rng = WyRand::seed_from_u64(engine.state.seed.wrapping_add(engine.state.tick as u64).wrapping_add(1999));
     let start_idx = bot_rng.next_int(0, border_tiles.len() as i32) as usize;
 
     for i in 0..max_scan {
         let b_idx = (start_idx + i) % border_tiles.len();
         let (bx, by) = border_tiles[b_idx];
-        game.map.for_each_neighbor(bx, by, |nx, ny| {
-            let owner = game.map.owner_id(nx, ny);
+        engine.state.map.for_each_neighbor(bx, by, |nx, ny| {
+            let owner = engine.state.map.owner_id(nx, ny);
             if owner != bot_id {
                 if owner == 0 {
                     has_neutral = true;

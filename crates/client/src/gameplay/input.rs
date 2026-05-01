@@ -1,12 +1,11 @@
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
-use dark_rift_shared::game::GameState;
+use dark_rift_shared::engine::DarkRiftEngine;
 
 use dark_rift_shared::building::{
     find_upgrade_target_id, resolve_structure_spawn_tile, structure_build_cost_gold,
-    existing_structure_positions_with_width, Building,
+    existing_structure_positions_with_width,
 };
-use dark_rift_shared::config;
 use dark_rift_shared::protocol::{ClientGameplayMessage, GameplayIntent, AttackIntent};
 use lightyear::prelude::MessageSender;
 use dark_rift_shared::water_components::WaterComponents;
@@ -16,7 +15,7 @@ use dark_rift_shared::warp_fleet::{shares_border_with, player_water_components};
 use crate::{
     MyPlayerId, AttackRatio, LocalIntentBuffer, BuildStructureMode,
     CameraDragState, TouchGestureState, TILE_SIZE, 
-    ActionDockPointerSink, BottomHudRoot, ClientSettings,
+    ActionDockPointerSink, BottomHudRoot, BuildingVisual, ClientSettings,
     AttackRingMesh,
     try_launch_fleet_intent, spawn_attack_command_ring, send_gameplay_intent,
 };
@@ -58,25 +57,25 @@ pub fn hover_system(
     windows:     Query<&Window, With<bevy::window::PrimaryWindow>>,
     camera_q:    Query<(&Camera, &GlobalTransform), With<Camera2d>>,
     mut hovered: ResMut<HoveredTile>,
-    game_opt:    Option<Res<GameState>>,
+    engine_opt:  Option<Res<DarkRiftEngine>>,
 ) {
     hovered.0 = None;
-    let Some(game) = game_opt else { return };
+    let Some(engine) = engine_opt else { return };
     let Ok(window) = windows.single() else { return };
     let Ok((camera, cam_t)) = camera_q.single() else { return };
     let Some(cursor) = window.cursor_position() else { return };
     let Ok(world) = camera.viewport_to_world_2d(cam_t, cursor) else { return };
 
     let gx = (world.x / TILE_SIZE).round() as i32;
-    let gy = game.map.height as i32 - 1 - (world.y / TILE_SIZE).round() as i32;
-    if game.map.is_valid_coord(gx, gy) {
+    let gy = engine.state.map.height as i32 - 1 - (world.y / TILE_SIZE).round() as i32;
+    if engine.state.map.is_valid_coord(gx, gy) {
         hovered.0 = Some((gx as u32, gy as u32));
     }
 }
 
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct ForceBoatKeyCtx<'w> {
-    pub game_opt: Option<Res<'w, GameState>>,
+    pub engine_opt: Option<Res<'w, DarkRiftEngine>>,
     pub my_id: Res<'w, MyPlayerId>,
     pub attack_ratio: Res<'w, AttackRatio>,
     pub components: Option<Res<'w, WaterComponents>>,
@@ -106,7 +105,7 @@ pub fn system_force_boat_key(
     if over_hud {
         return;
     }
-    let Some(game) = ctx.game_opt.as_deref() else {
+    let Some(engine) = ctx.engine_opt.as_deref() else {
         return;
     };
     let Some((x, y)) = hovered.0 else {
@@ -117,17 +116,17 @@ pub fn system_force_boat_key(
     if pid == 0 {
         return;
     }
-    let Some(player) = game.player(pid) else {
+    let Some(player) = engine.state.player(pid) else {
         return;
     };
     if !player.alive || player.troops < settings.config.gameplay.attack_cost_neutral {
         return;
     }
-    let target_owner = game.map.owner_id(x, y);
+    let target_owner = engine.state.map.owner_id(x, y);
     if target_owner == pid {
         return;
     }
-    let target_tile = y * game.map.width + x;
+    let target_tile = y * engine.state.map.width + x;
     let ratio = ctx.attack_ratio.0.clamp(0.01, 1.0) as f64;
     let send = (player.troops * ratio).floor().max(0.0).min(player.troops);
     if send < settings.config.gameplay.attack_cost_neutral {
@@ -143,7 +142,7 @@ pub fn system_force_boat_key(
         Some(send)
     };
     let Some(intent) = try_launch_fleet_intent(
-        game,
+        &engine.state,
         wc,
         &mut *ctx.path_scratch,
         pid,
@@ -162,7 +161,7 @@ pub fn system_force_boat_key(
         player.color,
         x,
         y,
-        game.map.height,
+        engine.state.map.height,
         send,
     );
     send_gameplay_intent(intent, pid, local_buf, &mut senders);
@@ -170,7 +169,7 @@ pub fn system_force_boat_key(
 
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct ClickCtx<'w> {
-    pub game_opt: Option<Res<'w, GameState>>,
+    pub engine_opt: Option<Res<'w, DarkRiftEngine>>,
     pub my_id: Res<'w, MyPlayerId>,
     pub attack_ratio: Res<'w, AttackRatio>,
     pub components: Option<Res<'w, WaterComponents>>,
@@ -195,7 +194,7 @@ pub fn player_click(
     mut senders: Query<&mut MessageSender<ClientGameplayMessage>>,
     local_buf: Option<ResMut<LocalIntentBuffer>>,
     build_mode: Res<BuildStructureMode>,
-    q_building: Query<(Entity, &Building)>,
+    _q_building: Query<(Entity, &BuildingVisual)>,
     mut ctx: ClickCtx,
 ) {
     // We trigger ONLY on release to support dragging.
@@ -219,14 +218,14 @@ pub fn player_click(
         return;
     }
 
-    let Some(game) = ctx.game_opt.as_deref() else { return };
+    let Some(engine) = ctx.engine_opt.as_deref() else { return };
     let target = hovered.0.or_else(|| {
         let viewport = touch_gesture.last_touch_pos?;
         let (camera, cam_t) = q_camera.single().ok()?;
         let world = camera.viewport_to_world_2d(cam_t, viewport).ok()?;
         let gx = (world.x / TILE_SIZE).round() as i32;
-        let gy = game.map.height as i32 - 1 - (world.y / TILE_SIZE).round() as i32;
-        if game.map.is_valid_coord(gx, gy) {
+        let gy = engine.state.map.height as i32 - 1 - (world.y / TILE_SIZE).round() as i32;
+        if engine.state.map.is_valid_coord(gx, gy) {
             Some((gx as u32, gy as u32))
         } else {
             None
@@ -235,13 +234,13 @@ pub fn player_click(
     let Some((x, y)) = target else { return };
 
     let pid = ctx.my_id.0;
-    let Some(player) = game.player(pid) else { return };
+    let Some(player) = engine.state.player(pid) else { return };
     if !player.alive {
         return;
     }
 
-    let target_owner = game.map.owner_id(x, y);
-    let map_w = game.map.width;
+    let target_owner = engine.state.map.owner_id(x, y);
+    let map_w = engine.state.map.width;
     let target_tile = y * map_w + x;
 
     if target_owner == pid {
@@ -251,11 +250,11 @@ pub fn player_click(
         if let Some(kind) = build_mode.0 {
             let place_release = left_mouse_release || touch_release;
             if place_release {
-                let snapshot: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
+                let snapshot = engine.buildings.clone();
                 let positions =
                     existing_structure_positions_with_width(snapshot.iter(), map_w, None);
                 if let Some(bid) =
-                    find_upgrade_target_id(&game.map, pid, kind, target_tile, &snapshot)
+                    find_upgrade_target_id(&engine.state.map, pid, kind, target_tile, &snapshot)
                 {
                     let cost = structure_build_cost_gold(kind, pid, &snapshot);
                     if player.gold >= cost && cost.is_finite() {
@@ -268,7 +267,7 @@ pub fn player_click(
                     }
                     return;
                 }
-                if resolve_structure_spawn_tile(&game.map, pid, kind, target_tile, &positions)
+                if resolve_structure_spawn_tile(&engine.state.map, pid, kind, target_tile, &positions)
                     .is_some()
                 {
                     let cost = structure_build_cost_gold(kind, pid, &snapshot);
@@ -299,11 +298,11 @@ pub fn player_click(
     let border_tiles = &player.border_tiles;
 
     let can_ground_attack = if target_owner != 0 {
-        shares_border_with(&game.map, border_tiles, target_owner)
+        shares_border_with(&engine.state.map, border_tiles, target_owner)
     } else {
         let scratch = &mut *ctx.path_scratch;
         dark_rift_shared::warp_fleet::can_ground_attack_neutral(
-            &game.map,
+            &engine.state.map,
             pid,
             target_tile,
             200,
@@ -314,7 +313,7 @@ pub fn player_click(
     };
 
     let has_water_access = match ctx.components.as_deref() {
-        Some(wc) => !player_water_components(&game.map, wc, pid, border_tiles).is_empty(),
+        Some(wc) => !player_water_components(&engine.state.map, wc, pid, border_tiles).is_empty(),
         None => false,
     };
 
@@ -337,7 +336,7 @@ pub fn player_click(
             return;
         };
         try_launch_fleet_intent(
-            game,
+            &engine.state,
             wc,
             &mut *ctx.path_scratch,
             pid,
@@ -356,7 +355,7 @@ pub fn player_click(
             return;
         };
         try_launch_fleet_intent(
-            game,
+            &engine.state,
             wc,
             &mut *ctx.path_scratch,
             pid,
@@ -381,7 +380,7 @@ pub fn player_click(
         player.color,
         x,
         y,
-        game.map.height,
+        engine.state.map.height,
         send,
     );
     send_gameplay_intent(intent, pid, local_buf, &mut senders);

@@ -1,4 +1,3 @@
-use bevy::prelude::Resource;
 use serde::{Deserialize, Serialize};
 
 // No more custom bevy event required
@@ -94,7 +93,7 @@ pub enum GameEvent {
 }
 
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Resource)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct GameState {
     pub seed: u64,
     pub config: crate::game_config::GameConfig,
