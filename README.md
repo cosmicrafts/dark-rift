@@ -241,17 +241,20 @@ above.
 collect `(Entity, id)` and `sort_by_key(|&(_, id)| id)` before mutating — see
 `system_attack_execution` and `apply_attack_intent`.
 
-**Critical:** This applies to ALL Query iterations in simulation code, not just
-attack execution. Building queries, fleet queries, and any other dynamic entity
-iteration MUST be sorted by ID before processing:
+**Spatial Iterators (Grids, QuadTrees, BFS/DFS):**
+Any iterator that partitions objects spatially (e.g., `BuildingGrid::iter_in_range`) will yield elements in spatial order (Y, then X), losing their chronological creation order. If the logic using this iterator performs *mutations*, allocates limited resources (like connecting railroads), or triggers intents, you **MUST** collect the results into a `Vec` and sort by the domain ID (`b.id`) before execution to maintain lockstep determinism.
+
+**Critical:** This applies to ALL Query iterations and Spatial grid traversals in simulation code. Building queries, fleet queries, and any other dynamic iteration MUST be sorted by ID before processing:
 ```rust
-// Simulation code - MUST sort:
+// Simulation code ECS - MUST sort:
 let mut buildings: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
 buildings.sort_by_key(|b| b.id);
 
-// Bot code - MUST sort:
-let mut buildings_snapshot: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
-buildings_snapshot.sort_unstable_by_key(|b| b.id);
+// Spatial Grids - MUST sort neighbors before mutations:
+let mut neighbors = Vec::new();
+for &(ox, oy) in grid.iter_in_range(fx, fy, RANGE) { /* ... push ob.id ... */ }
+neighbors.sort_unstable(); // Restore historical processing order!
+for nid in neighbors { /* ... apply mutation ... */ }
 ```
 
 ### 9. No `std::time` / `Instant` / `SystemTime` in simulation

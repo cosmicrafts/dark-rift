@@ -1,8 +1,8 @@
 (
     max_players: 1,
-    bot_count: 900,
-    map_name: "world",
-    map_width: 2000,
-    map_height: 1000,
-    random_spawn: true,
+    bot_count: 17,
+    map_name: "guadalajara",
+    map_width: 400,
+    map_height: 400,
+    random_spawn: false,
 )
