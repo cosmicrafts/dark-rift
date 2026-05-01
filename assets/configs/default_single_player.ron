@@ -1,8 +1,11 @@
 (
     max_players: 1,
-    bot_count: 17,
-    map_name: "guadalajara",
-    map_width: 400,
-    map_height: 400,
-    random_spawn: false,
+    bot_count: 7,
+    bot_difficulty: Vanilla,
+    map_width: 1000,
+    map_height: 1000,
+    random_spawn: true,
+    base_income: 1.0,
+    attack_cost: 0.15,
+    expand_cost: 0.2,
 )

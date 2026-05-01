@@ -1,9 +1,6 @@
 use bevy::prelude::*;
 use dark_rift_shared::game::GameState;
-use crate::{
-    BuildingMapBadgeRoot, ClientSettings, InGameEntity, TILE_SIZE, player_label_scale,
-};
-use crate::ui::write_guard::set_text_font_size_if_changed;
+use crate::{ClientSettings, InGameEntity, TILE_SIZE, building_kind_short, player_label_scale, BuildingLabelTarget, Building};
 
 #[derive(Component)]
 pub struct PlayerLabel(pub u16);
@@ -13,35 +10,25 @@ pub struct PlayerLabelRenderCache(pub f32);
 
 pub fn system_sync_building_map_labels(
     game_opt: Option<Res<GameState>>,
-    mut q_badge: Query<(&BuildingMapBadgeRoot, &mut Visibility, &Children)>,
-    mut q_text: Query<&mut Text2d>,
+    q_b: Query<&Building>,
+    mut q_l: Query<(&BuildingLabelTarget, &mut Text2d)>,
 ) {
-    let Some(game) = game_opt.as_deref() else {
+    if game_opt.is_none() {
         return;
-    };
-    for (marker, mut vis, children) in q_badge.iter_mut() {
-        let Some(b) = game.buildings.iter().find(|b| b.id == marker.0) else {
+    }
+    for (t, mut text) in q_l.iter_mut() {
+        let Ok(b) = q_b.get(t.0) else {
             continue;
         };
-        let line = match (b.under_construction, b.level) {
-            (true, _) => "…".to_string(),
-            (false, lvl) if lvl > 1 => lvl.to_string(),
-            _ => String::new(),
-        };
-        let next_vis = if line.is_empty() {
-            Visibility::Hidden
-        } else {
-            Visibility::Visible
-        };
-        if *vis != next_vis {
-            *vis = next_vis;
-        }
-        for child in children.iter() {
-            if let Ok(mut text) = q_text.get_mut(child) {
-                if text.0 != line {
-                    text.0 = line.clone();
-                }
-            }
+        let pending = if b.under_construction { "…" } else { "" };
+        let line = format!(
+            "{}{}{}",
+            building_kind_short(b.kind),
+            b.level,
+            pending
+        );
+        if text.0 != line {
+            text.0 = line.clone();
         }
     }
 }
@@ -95,6 +82,9 @@ pub fn system_sync_player_labels(
                 TextFont {
                     font: ui.font.clone(),
                     font_size: font_px,
+                    // Rajdhani is a vector face: default AA keeps strokes from collapsing to 1px;
+                    // slightly heavier weight reads better on noisy tile colors.
+                    weight: FontWeight::SEMIBOLD,
                     ..default()
                 },
                 TextColor(Color::BLACK),
@@ -115,9 +105,7 @@ pub fn system_sync_player_labels(
         mut cache,
     ) in q_labels.iter_mut()
     {
-        if text_color.0 != Color::BLACK {
-            text_color.0 = Color::BLACK;
-        }
+        *text_color = TextColor(Color::BLACK);
         let Some(player) = game.player(label.0) else { continue };
 
         let new_text = format!("{}\n[{:.0}]", player.name, player.troops);
@@ -147,7 +135,8 @@ pub fn system_sync_player_labels(
             let font_px = (base_font * mul).round().max(1.0);
             if cache.0 != font_px {
                 cache.0 = font_px;
-                set_text_font_size_if_changed(&mut p_font, font_px);
+                p_font.font_size = font_px;
+                p_font.weight = FontWeight::SEMIBOLD;
             }
         }
     }

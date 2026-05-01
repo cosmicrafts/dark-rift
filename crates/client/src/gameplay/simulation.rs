@@ -83,15 +83,7 @@ pub fn start_game_core(
                 cam.translation = Vec3::new(cx, cy, 999.0);
             }
             if let Some(images_res) = params.images.as_mut() {
-                let grid = spawn_shader_map(
-                    commands,
-                    &game,
-                    images_res,
-                    params.materials.as_mut().unwrap(),
-                    params.meshes.as_mut().unwrap(),
-                    true,
-                    &params.settings.config.visuals.border,
-                );
+                let grid = spawn_shader_map(commands, &game, images_res, params.materials.as_mut().unwrap(), params.meshes.as_mut().unwrap(), true);
                 commands.insert_resource(grid);
             }
 
@@ -124,7 +116,7 @@ pub fn start_game_core(
 
 pub fn catchup_fast_forward(world: &mut World) {
     let ready = world.resource::<GameReady>().0;
-    if !ready || !world.contains_resource::<GameState>() { return; }
+    if !ready { return; }
     
     let pending = world.resource::<PendingTicks>().0;
     if pending == 0 { return; }
@@ -145,6 +137,7 @@ pub fn pop_turn(
     mut queue: ResMut<TurnQueue>,
     mut q_exec: Query<(Entity, &mut AttackExecution)>,
     mut q_fleet: Query<(Entity, &mut WarpFleet)>,
+    mut q_building: Query<(Entity, &mut Building)>,
     mut path_scratch: ResMut<WaterPathfinderScratch>,
     water_components: Res<WaterComponents>,
     mut desync_tracker: ResMut<DesyncTracker>,
@@ -156,6 +149,7 @@ pub fn pop_turn(
                 &mut *game,
                 &mut q_exec,
                 &mut q_fleet,
+                &mut q_building,
                 stamped,
                 i as u32,
                 &mut *path_scratch,
@@ -165,7 +159,7 @@ pub fn pop_turn(
 
         let checksum = dark_rift_shared::checksum::compute_state_hash(
             &game,
-            game.buildings.iter(),
+            q_building.iter().map(|(_, b)| b as &Building),
             q_fleet.iter().map(|(_, f)| f as &WarpFleet),
             q_exec.iter().map(|(_, e)| e as &AttackExecution),
         );
@@ -207,5 +201,24 @@ pub fn system_single_player_tick(
             pending.0 += 1;
             highest.0 = Some(highest.0.unwrap_or(0).max(st.current_turn));
         }
+    }
+}
+
+pub fn system_mock_single_player_start(
+    mock:      Option<ResMut<MockSinglePlayerStart>>,
+    mut cam_q:     Query<&mut Transform, With<Camera2d>>,
+    mut commands:  Commands,
+    mut params:    StartGameParams,
+) {
+    if let Some(m) = mock {
+        commands.insert_resource(SinglePlayerState {
+            timer: Timer::from_seconds(0.040, TimerMode::Repeating),
+            current_turn: 0,
+        });
+        commands.insert_resource(LocalIntentBuffer::default());
+        start_game_core(
+            m.0.clone(), &mut cam_q, &mut commands, &mut params
+        );
+        commands.remove_resource::<MockSinglePlayerStart>();
     }
 }

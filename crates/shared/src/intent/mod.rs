@@ -9,6 +9,7 @@ pub use combat::*;
 
 use bevy::prelude::*;
 
+use crate::building::Building;
 use crate::execution::AttackExecution;
 use crate::game::GameState;
 use crate::pathfinding::WaterPathfinderScratch;
@@ -30,6 +31,7 @@ pub fn apply_stamped_intent(
     game: &mut GameState,
     q_exec: &mut Query<(Entity, &mut AttackExecution)>,
     q_fleet: &mut Query<(Entity, &mut WarpFleet)>,
+    q_building: &mut Query<(Entity, &mut Building)>,
     stamped: &StampedIntent,
     intent_index: u32,
     path_scratch: &mut WaterPathfinderScratch,
@@ -61,7 +63,8 @@ pub fn apply_stamped_intent(
  target_tile,
  troops,
  } => {
- let buildings_clone = game.buildings.clone();
+ let mut buildings: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
+ buildings.sort_by_key(|b| b.id);
  fleet::apply_launch_fleet_intent(
                 commands,
                 game,
@@ -71,7 +74,7 @@ pub fn apply_stamped_intent(
                 stamped.player_id,
                 *target_tile,
                 *troops,
-                &buildings_clone,
+                &buildings,
             );
         }
         GameplayIntent::CancelAttack { attack_id } => {
@@ -98,14 +101,16 @@ pub fn apply_stamped_intent(
         }
         GameplayIntent::BuildStructure { kind, target_tile } => {
             buildings::apply_build_structure_intent(
+                commands,
                 game,
+                q_building,
                 stamped.player_id,
                 *kind,
                 *target_tile,
             );
         }
         GameplayIntent::UpgradeStructure { building_id } => {
-            buildings::apply_upgrade_structure_intent(game, stamped.player_id, *building_id);
+            buildings::apply_upgrade_structure_intent(game, q_building, stamped.player_id, *building_id);
         }
     }
 }

@@ -14,40 +14,7 @@ fn default_attack_ratio() -> f32 {
 
 /// Default HUD / map feedback scale (plan: ~2× vs legacy hardcoded sizes).
 fn default_hud_scale_2() -> f32 {
-    1.0
-}
-
-fn default_hud_scale_0_9() -> f32 {
-    0.9
-}
-
-fn default_border_band() -> f32 {
-    0.08
-}
-
-fn default_border_tint() -> f32 {
-    0.1
-}
-
-/// Map territory border outline appearance. Read once when `spawn_shader_map`
-/// builds the `BorderMaterial`; pumped into the WGSL `BorderUniforms` so the
-/// shader's `fract()` band test and `mix(black, base, tint)` use these values.
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct BorderVisualSettings {
-    /// Edge band width as a fraction of one tile's UV (0..0.49). Lower = thinner outline.
-    /// Maps to `border_thickness.y` in `assets/shaders/border.wgsl`.
-    #[serde(default = "default_border_band")]
-    pub band: f32,
-    /// Territory color tint inside the (otherwise black) border band.
-    /// 0.0 = pure black; 1.0 = full territory color. Maps to `border_color.a`.
-    #[serde(default = "default_border_tint")]
-    pub tint: f32,
-}
-
-impl Default for BorderVisualSettings {
-    fn default() -> Self {
-        Self { band: default_border_band(), tint: default_border_tint() }
-    }
+    2.0
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -62,8 +29,6 @@ pub struct VisualSettingsConfig {
     pub enable_territory_expansion_animations: bool,
     #[serde(default = "default_true")]
     pub enable_floating_labels: bool,
-    #[serde(default)]
-    pub border: BorderVisualSettings,
 }
 
 impl Default for VisualSettingsConfig {
@@ -73,7 +38,6 @@ impl Default for VisualSettingsConfig {
             enable_hdr_bloom: true,
             enable_territory_expansion_animations: true,
             enable_floating_labels: true,
-            border: BorderVisualSettings::default(),
         }
     }
 }
@@ -119,9 +83,6 @@ pub struct UiSettingsConfig {
     /// Bottom combat HUD: fonts, row paddings, slider, gaps (`spawn_bottom_combat_hud` + row sync).
     #[serde(default = "default_hud_scale_2")]
     pub combat_hud_scale: f32,
-    /// HUD scale override for mobile (compact breakpoint).
-    #[serde(default = "default_hud_scale_0_9")]
-    pub mobile_hud_scale: f32,
     /// Show outgoing `WarpFleet` payload rows with recall (OpenFront `AttacksDisplay` transport list).
     #[serde(default = "default_true")]
     pub combat_hud_fleet_rows: bool,
@@ -141,8 +102,7 @@ impl Default for UiSettingsConfig {
             fleet_boat_scale: 2.0,
             fleet_target_ring_scale: 2.0,
             fleet_wake_scale: 2.0,
-            combat_hud_scale: 1.0,
-            mobile_hud_scale: 0.9,
+            combat_hud_scale: 2.0,
             combat_hud_fleet_rows: true,
         }
     }
@@ -310,51 +270,29 @@ pub fn build_client_settings_config() -> ClientSettingsConfig {
     config
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Hard guard: `assets/settings.ron` must parse with all currently-declared keys.
-    /// `build_client_settings_config` falls back to defaults silently on parse error,
-    /// so this test is the only thing that catches a broken RON before runtime.
-    #[test]
-    fn settings_ron_parses_successfully() {
-        const RON_BODY: &str = include_str!("../../../assets/settings.ron");
-        let cfg: ClientSettingsConfig = ron::from_str(RON_BODY)
-            .unwrap_or_else(|e| panic!("assets/settings.ron failed to parse: {e}"));
-        let band = cfg.visuals.border.band;
-        let tint = cfg.visuals.border.tint;
-        assert!((0.001..=0.49).contains(&band), "border.band {band} out of [0.001, 0.49]");
-        assert!((0.0..=1.0).contains(&tint), "border.tint {tint} out of [0.0, 1.0]");
-    }
-
-    /// If the RON omits the new `border` block, defaults must kick in (no panic, no NaN).
-    #[test]
-    fn settings_ron_border_defaults_when_missing() {
-        const MINIMAL: &str = "(visuals: (), ui: (font_path: \"\", font_size: 16.0, label_offset_y: 12.0, label_size_ref_tiles: 64.0, label_max_scale: 5.0))";
-        let cfg: ClientSettingsConfig = ron::from_str(MINIMAL)
-            .expect("minimal RON should parse with serde defaults");
-        assert_eq!(cfg.visuals.border.band, default_border_band());
-        assert_eq!(cfg.visuals.border.tint, default_border_tint());
-    }
-}
-
-/// System that patches the real font Handle into ClientSettings once AssetServer is available.
-pub fn init_client_font(mut settings: ResMut<ClientSettings>, asset_server: Res<AssetServer>) {
-    let path = &settings.config.ui.font_path;
-    if !path.is_empty() {
-        settings.font = asset_server.load(path);
-    }
+/// System that patches the real font Handle into ClientSettings once Assets<Font> is available.
+pub fn init_client_font(mut settings: ResMut<ClientSettings>, mut fonts: ResMut<Assets<Font>>) {
+    let font_bytes = include_bytes!("../../../assets/fonts/Rajdhani-Medium.ttf");
+    settings.font = match Font::try_from_bytes(font_bytes.to_vec()) {
+        Ok(f) => fonts.add(f),
+        Err(e) => {
+            bevy::log::error!("Rajdhani font bytes invalid: {e}");
+            Handle::default()
+        }
+    };
 }
 
 /// Legacy: kept for compatibility, delegates to build+patch.
 #[allow(dead_code)]
-pub fn load_client_settings(mut commands: Commands, asset_server: Res<AssetServer>) {
+pub fn load_client_settings(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
     let config = build_client_settings_config();
-    let font_handle = if !config.ui.font_path.is_empty() {
-        asset_server.load(&config.ui.font_path)
-    } else {
-        Handle::default()
+    let font_bytes = include_bytes!("../../../assets/fonts/Rajdhani-Medium.ttf");
+    let font_handle = match Font::try_from_bytes(font_bytes.to_vec()) {
+        Ok(f) => fonts.add(f),
+        Err(e) => {
+            bevy::log::error!("Rajdhani font bytes invalid: {e}; map labels may be invisible");
+            Handle::default()
+        }
     };
     commands.insert_resource(ClientSettings {
         config,

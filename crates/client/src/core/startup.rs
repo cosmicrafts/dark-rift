@@ -127,15 +127,7 @@ pub fn setup_offline(
         game.spawn_player(player, info.spawn_x, info.spawn_y);
     }
 
-    let grid = spawn_shader_map(
-        &mut commands,
-        &game,
-        &mut images,
-        &mut materials,
-        &mut meshes,
-        false,
-        &settings.config.visuals.border,
-    );
+    let grid = spawn_shader_map(&mut commands, &game, &mut images, &mut materials, &mut meshes, false);
     commands.insert_resource(grid);
 
     commands.insert_resource(WaterComponents::compute(&game.map));
@@ -175,18 +167,15 @@ pub fn setup_live(
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
                 margin: UiRect::left(Val::Auto),
-                column_gap: Val::Px(8.0),
-                flex_shrink: 0.0,
+                column_gap: Val::Px(12.0),
                 ..default()
             },
         ))
         .with_children(|right_group| {
-            // Dev Diagnostics (FPS, Ping, Status) Pill — hidden by default on mobile
+            // Dev Diagnostics (FPS, Ping, Status) Pill
             right_group.spawn((
-                DevStatsPill,
                 Node {
-                    display: Display::None, // hidden by default, toggled via Settings button
-                    padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                    padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
                     border_radius: BorderRadius::all(Val::Px(8.0)),
                     ..default()
                 },
@@ -197,7 +186,7 @@ pub fn setup_live(
                     Text::new("Connecting…"),
                     TextFont {
                         font: settings.font.clone(),
-                        font_size: 13.0,
+                        font_size: 15.0,
                         ..default()
                     },
                     TextColor(Color::srgba(0.4, 0.9, 0.4, 1.0)),
@@ -207,7 +196,7 @@ pub fn setup_live(
             // Game Timer Pill
             right_group.spawn((
                 Node {
-                    padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                    padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
                     border_radius: BorderRadius::all(Val::Px(8.0)),
                     ..default()
                 },
@@ -218,24 +207,24 @@ pub fn setup_live(
                     Text::new("00:00"),
                     TextFont {
                         font: settings.font.clone(),
-                        font_size: 14.0,
+                        font_size: 16.0,
                         ..default()
                     },
                     TextColor(Color::srgba(0.9, 0.9, 0.9, 1.0)),
                 ));
             });
 
-            // SETTINGS Button (toggles dev stats)
+            // SETTINGS Button
             right_group.spawn((
                 Button,
                 SettingsButton,
                 Node {
-                    width: Val::Px(40.0),
-                    height: Val::Px(40.0),
+                    width: Val::Px(48.0),
+                    height: Val::Px(48.0),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     border: UiRect::all(Val::Px(2.0)),
-                    border_radius: BorderRadius::all(Val::Px(10.0)),
+                    border_radius: BorderRadius::all(Val::Px(12.0)),
                     ..default()
                 },
                 BackgroundColor(panel_bg()),
@@ -245,8 +234,8 @@ pub fn setup_live(
                 b.spawn((
                     ImageNode::new(asset_server.load("icons/home.png")),
                     Node {
-                        width: Val::Px(20.0),
-                        height: Val::Px(20.0),
+                        width: Val::Px(24.0),
+                        height: Val::Px(24.0),
                         ..default()
                     },
                 ));
@@ -257,12 +246,12 @@ pub fn setup_live(
                 Button,
                 ExitButton,
                 Node {
-                    width: Val::Px(40.0),
-                    height: Val::Px(40.0),
+                    width: Val::Px(48.0),
+                    height: Val::Px(48.0),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     border: UiRect::all(Val::Px(2.0)),
-                    border_radius: BorderRadius::all(Val::Px(10.0)),
+                    border_radius: BorderRadius::all(Val::Px(12.0)),
                     ..default()
                 },
                 BackgroundColor(crate::ui::theme::accent_danger()),
@@ -272,8 +261,8 @@ pub fn setup_live(
                 b.spawn((
                     ImageNode::new(asset_server.load("icons/exit.png")),
                     Node {
-                        width: Val::Px(20.0),
-                        height: Val::Px(20.0),
+                        width: Val::Px(24.0),
+                        height: Val::Px(24.0),
                         ..default()
                     },
                 ));

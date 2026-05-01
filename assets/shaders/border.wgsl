@@ -188,8 +188,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
         base_color = terrain_color;
     }
 
-    // Border: narrow band along tile edges (border_thickness.y = fraction of tile, e.g. 0.08).
-    // Color = mix toward black with a touch of territory tint (border_color.a = tint strength, ~0.1).
+    // Border detection: check 4 cardinal neighbors for ownership change.
     if uniforms.enable_players.x != 0u {
         let center_is_water = tile_is_water(center_terrain);
         if !center_is_water {
@@ -198,51 +197,20 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
             let own_e = get_owner_at(pixel_coord + vec2<i32>( offset,  0));
             let own_w = get_owner_at(pixel_coord + vec2<i32>(-offset,  0));
 
-            var edge_n = false;
-            var edge_s = false;
-            var edge_e = false;
-            var edge_w = false;
+            let ownership_change = (center_owner != own_n || center_owner != own_s ||
+                                    center_owner != own_e || center_owner != own_w);
+            let has_water_neighbor = tile_is_water(t_n) || tile_is_water(t_s) ||
+                                     tile_is_water(t_e) || tile_is_water(t_w);
+
+            var is_border = false;
             if center_owner == 0u {
-                edge_n = (center_owner != own_n) || tile_is_water(t_n);
-                edge_s = (center_owner != own_s) || tile_is_water(t_s);
-                edge_e = (center_owner != own_e) || tile_is_water(t_e);
-                edge_w = (center_owner != own_w) || tile_is_water(t_w);
+                is_border = ownership_change || has_water_neighbor;
             } else {
-                edge_n = center_owner != own_n;
-                edge_s = center_owner != own_s;
-                edge_e = center_owner != own_e;
-                edge_w = center_owner != own_w;
+                is_border = ownership_change;
             }
 
-            // One arc per shared edge: paint +x and +y sides always; paint -x/-y only when that
-            // neighbor is water (water fragments skip this block, so land must draw the seam).
-            // Opposite land tiles otherwise draw the same line twice (double thickness).
-            let paint_n = edge_n;
-            let paint_e = edge_e;
-            let paint_s = edge_s && tile_is_water(t_s);
-            let paint_w = edge_w && tile_is_water(t_w);
-
-            let ft = fract(mesh.uv * uniforms.texture_size.xy);
-            let band = clamp(uniforms.border_thickness.y, 0.001, 0.49);
-            var edge_mix = 0.0;
-            if paint_n {
-                edge_mix = max(edge_mix, smoothstep(1.0 - band, 1.0, ft.y));
-            }
-            if paint_s {
-                edge_mix = max(edge_mix, smoothstep(1.0 - band, 1.0, 1.0 - ft.y));
-            }
-            if paint_e {
-                edge_mix = max(edge_mix, smoothstep(1.0 - band, 1.0, ft.x));
-            }
-            if paint_w {
-                edge_mix = max(edge_mix, smoothstep(1.0 - band, 1.0, 1.0 - ft.x));
-            }
-
-            if edge_mix > 0.0 {
-                let tint = uniforms.border_color.a;
-                let border_rgb = mix(vec3<f32>(0.0), base_color.rgb, tint);
-                let out_rgb = mix(base_color.rgb, border_rgb, edge_mix);
-                return vec4<f32>(out_rgb, base_color.a);
+            if is_border {
+                return vec4<f32>(base_color.rgb * uniforms.border_color.rgb, base_color.a);
             }
         }
     }

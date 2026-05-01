@@ -1,6 +1,6 @@
 use crate::map::{GameMap, TerrainType};
 use crate::game::BuildingKind;
-use super::core::{Building, BuildingGrid};
+use super::core::Building;
 /// OpenFront `structureMinDist()` / search radius for land valid tiles.
 pub const STRUCTURE_MIN_DIST: i32 = 15;
 const STRUCTURE_MIN_DIST_SQ: i64 = (STRUCTURE_MIN_DIST as i64) * (STRUCTURE_MIN_DIST as i64);
@@ -50,7 +50,7 @@ pub fn valid_land_structure_indices(
     map: &GameMap,
     owner_id: u16,
     click_idx: u32,
-    existing: &BuildingGrid,
+    existing: &[(u32, u32)],
 ) -> Vec<u32> {
     let w = map.width;
     let (cx, cy) = idx_xy(click_idx, w);
@@ -63,17 +63,11 @@ pub fn valid_land_structure_indices(
 
     let cx_i = cx as i64;
     let cy_i = cy as i64;
-
-    // A 32x32 grid handles dx/dy up to +/- 15 (radius 15) without bounds panics
-    let mut visited = [false; 32 * 32];
-    let local_idx = |nx: i64, ny: i64| -> usize {
-        let lx = (nx - cx_i + 15) as usize;
-        let ly = (ny - cy_i + 15) as usize;
-        ly * 32 + lx
-    };
-
+    let h = map.height;
+    let area = (w * h) as usize;
+    let mut visited = vec![false; area];
     let mut queue: Vec<u32> = Vec::new();
-    visited[local_idx(cx_i, cy_i)] = true;
+    visited[click_idx as usize] = true;
     queue.push(click_idx);
 
     let mut out: Vec<u32> = Vec::new();
@@ -96,7 +90,7 @@ pub fn valid_land_structure_indices(
         }
 
         let mut too_close = false;
-        for &(bx, by) in existing.iter_in_range(x, y, STRUCTURE_MIN_DIST as u32) {
+        for &(bx, by) in existing {
             if euclid_sq(xi, yi, bx as i64, by as i64) < STRUCTURE_MIN_DIST_SQ {
                 too_close = true;
                 break;
@@ -107,21 +101,20 @@ pub fn valid_land_structure_indices(
         }
 
         map.for_each_neighbor(x, y, |nx, ny| {
+            let nidx = xy_idx(nx, ny, w) as usize;
+            if visited[nidx] {
+                return;
+            }
             let nxi = nx as i64;
             let nyi = ny as i64;
             if euclid_sq(nxi, nyi, cx_i, cy_i) >= STRUCTURE_SEARCH_RADIUS_SQ {
                 return;
             }
-            let l_idx = local_idx(nxi, nyi);
-            if visited[l_idx] {
-                return;
-            }
             if map.owner_id(nx, ny) != owner_id {
                 return;
             }
-            visited[l_idx] = true;
-            let nidx = xy_idx(nx, ny, w) as u32;
-            queue.push(nidx);
+            visited[nidx] = true;
+            queue.push(nidx as u32);
         });
     }
 
@@ -190,7 +183,7 @@ pub fn resolve_structure_spawn_tile(
     owner_id: u16,
     kind: BuildingKind,
     click_idx: u32,
-    existing: &BuildingGrid,
+    existing: &[(u32, u32)],
 ) -> Option<u32> {
     let w = map.width;
     let h = map.height;
@@ -214,10 +207,10 @@ pub fn resolve_structure_spawn_tile(
 pub fn existing_structure_positions_with_width<'a>(
     buildings: impl Iterator<Item = &'a Building>,
     map_width: u32,
-    map_height: u32,
     exclude_id: Option<u64>,
-) -> BuildingGrid {
-    let mut grid = BuildingGrid::default();
-    grid.rebuild(buildings, map_width, map_height, 32, exclude_id);
-    grid
+) -> Vec<(u32, u32)> {
+    buildings
+        .filter(|b| exclude_id.map(|id| b.id != id).unwrap_or(true))
+        .map(|b| idx_xy(b.tile_idx, map_width))
+        .collect()
 }

@@ -7,6 +7,7 @@ use bevy_prng::WyRand;
 use rand_core::SeedableRng;
 use crate::rng::NextIntExt;
 use crate::map::TerrainType;
+use crate::config;
 pub fn merge_frontiers(
     mut a: BinaryHeap<PrioritizedTile>,
     mut b: BinaryHeap<PrioritizedTile>,

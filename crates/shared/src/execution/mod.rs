@@ -8,11 +8,9 @@ use crate::rng::NextIntExt;
 
 pub mod income;
 pub mod combat;
-pub mod rail;
 
 pub use income::*;
 pub use combat::*;
-pub use rail::*;
 
 /// Fraction of refunded troops lost when retreating from an attack on another player (OpenFront parity).
 pub const RETREAT_PENALTY_VS_PLAYER: f64 = 0.25;

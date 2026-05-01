@@ -19,19 +19,6 @@ pub struct TouchGestureState {
     pub last_touch_pos: Option<Vec2>,
 }
 
-/// Low-pass filter for mouse-drag pan so desktop feels closer to touch (less jitter), without touching touch/pinch paths.
-#[derive(Resource, Default)]
-pub struct DesktopCameraPanSmooth {
-    pub smoothed_delta: Vec2,
-}
-
-/// One-finger pan on touch was tuned conservative; `2.0×` vs the previous `0.5` multiplier.
-const MOBILE_PAN_MULTIPLIER: f32 = 1.0;
-/// Raw mouse motion scale before smoothing.
-const DESKTOP_PAN_RAW_MULTIPLIER: f32 = 0.88;
-/// Higher = snappier tracking; lower = smoother ease (per frame lerp toward raw drag).
-const DESKTOP_PAN_SMOOTH: f32 = 0.52;
-
 pub fn camera_movement_and_zoom(
     mut q_camera: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
@@ -42,7 +29,6 @@ pub fn camera_movement_and_zoom(
     mut drag_state: ResMut<CameraDragState>,
     mut pinch_state: ResMut<PinchState>,
     mut touch_gesture: ResMut<TouchGestureState>,
-    mut desktop_pan_smooth: ResMut<DesktopCameraPanSmooth>,
 ) {
     if mouse_input.just_pressed(MouseButton::Left) || touches.any_just_pressed() {
         drag_state.is_dragging = true;
@@ -150,22 +136,17 @@ pub fn camera_movement_and_zoom(
             let mut raw_drag = Vec2::ZERO;
             let drag_delta = if touches.iter().count() > 0 {
                 // Prefer touch on mobile (avoids DPI-scaled emulated MouseMotion spikes)
-                desktop_pan_smooth.smoothed_delta = Vec2::ZERO;
                 raw_drag = touch_delta;
                 let _ = motion_evr.read().count(); // Drain mouse events
-                raw_drag * MOBILE_PAN_MULTIPLIER
+                raw_drag * 0.5 // Dampen mobile sensitivity significantly
             } else {
                 for ev in motion_evr.read() {
                     raw_drag += ev.delta;
                 }
-                raw_drag *= DESKTOP_PAN_RAW_MULTIPLIER;
-                desktop_pan_smooth.smoothed_delta = desktop_pan_smooth
-                    .smoothed_delta
-                    .lerp(raw_drag, DESKTOP_PAN_SMOOTH);
-                desktop_pan_smooth.smoothed_delta
+                raw_drag * 0.85 // Slightly dampen desktop mouse
             };
 
-            drag_state.accumulated_drag += drag_delta.length();
+            drag_state.accumulated_drag += raw_drag.length();
 
             if drag_delta != Vec2::ZERO {
                 // Screen coordinates: +X is right, +Y is down
@@ -175,8 +156,6 @@ pub fn camera_movement_and_zoom(
                 pan.x -= drag_delta.x * ortho.scale;
                 pan.y += drag_delta.y * ortho.scale;
             }
-        } else {
-            desktop_pan_smooth.smoothed_delta = Vec2::ZERO;
         }
         
         transform.translation.x += pan.x;

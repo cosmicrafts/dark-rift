@@ -12,7 +12,6 @@ pub mod intent;
 pub mod warp_fleet;
 pub mod water_components;
 pub mod checksum;
-pub mod railway;
 
 #[cfg(test)]
 mod warp_fleet_tests;

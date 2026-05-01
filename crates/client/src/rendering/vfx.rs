@@ -7,7 +7,7 @@ pub fn setup_attack_ring_mesh(
     settings: Res<ClientSettings>,
 ) {
     let s = clamp_ui_scale(settings.config.ui.click_feedback_scale);
-    let mesh = Annulus::new(9.0 * s, 15.0 * s)
+    let mesh = Annulus::new(5.0 * s, 8.8 * s)
         .mesh()
         .resolution(56)
         .build();
@@ -42,12 +42,10 @@ pub fn setup_fleet_visual_meshes(
 }
 
 pub fn setup_structure_marker_meshes(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
-    let place_plate = Circle::new(1.35).mesh().resolution(24).build();
     let place_ring = Annulus::new(0.12, 1.35)
         .mesh()
         .resolution(20)
         .build();
-    let level_badge_capsule = Capsule2d::new(3.0, 4.0).mesh().resolution(16).build();
     let sam_r = config::SAM_RANGE_TILES as f32 * TILE_SIZE;
     let sam_range = Annulus::new((sam_r - 0.28).max(0.12), sam_r + 0.28)
         .mesh()
@@ -59,9 +57,7 @@ pub fn setup_structure_marker_meshes(mut commands: Commands, mut meshes: ResMut<
         .resolution(30)
         .build();
     commands.insert_resource(StructureMarkerMeshes {
-        place_plate: meshes.add(place_plate),
         place_ring: meshes.add(place_ring),
-        level_badge_capsule: meshes.add(level_badge_capsule),
         sam_range: meshes.add(sam_range),
         defense_range: meshes.add(defense_range),
     });

@@ -90,7 +90,7 @@ pub fn system_spawn_fleet_visuals(
         if fleet.owner_id != pid {
             continue;
         }
-        commands.entity(fleet_e).try_insert(FleetClientVisuals);
+        commands.entity(fleet_e).insert(FleetClientVisuals);
         let boat_mat =
             materials.add(ColorMaterial::from_color(Color::srgba(0.12, 0.82, 1.0, 0.9)));
         let wake_mat =
@@ -186,20 +186,14 @@ pub fn ease_out_back_scaled(t: f32) -> f32 {
 
 /// Quick 0→full scale pop (rest of lifetime = settle + fade).
 const ATTACK_RING_POP_SECS: f32 = 0.1;
-const ATTACK_COMMAND_RING_LIFETIME: f32 = 1.0;
+const ATTACK_COMMAND_RING_LIFETIME: f32 = 0.38;
 
 pub fn system_animate_attack_command_rings(
     time: Res<Time>,
     mut commands: Commands,
-    mut q: Query<
-        (Entity, &mut AttackCommandRing, &mut Transform, &Children),
-        Without<AttackPingTroopLabel>,
-    >,
+    mut q: Query<(Entity, &mut AttackCommandRing, &mut Transform, &Children)>,
     mesh_q: Query<&MeshMaterial2d<ColorMaterial>, With<AttackPingMesh>>,
-    mut text_label_q: Query<
-        (&mut TextColor, &mut Transform),
-        (With<AttackPingTroopLabel>, Without<AttackCommandRing>),
-    >,
+    mut text_color_q: Query<&mut TextColor, With<AttackPingTroopLabel>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     let dt = time.delta_secs();
@@ -224,24 +218,18 @@ pub fn system_animate_attack_command_rings(
         let [r, g, b] = ring.rgb;
 
         for child in children.iter() {
-            let child_ent = child;
-            if let Ok(mat_h) = mesh_q.get(child_ent) {
+            if let Ok(mat_h) = mesh_q.get(child) {
                 if let Some(mat) = materials.get_mut(&mat_h.0) {
                     mat.color = Color::srgba(r, g, b, 0.97 * fade);
                 }
             }
-            if let Ok((mut tc, mut tf)) = text_label_q.get_mut(child_ent) {
+            if let Ok(mut tc) = text_color_q.get_mut(child) {
                 *tc = TextColor(Color::srgba(
-                    0.0,
-                    0.0,
-                    0.0,
+                    1.0,
+                    1.0,
+                    1.0,
                     (0.25 + 0.75 * fade).clamp(0.0, 1.0),
                 ));
-                // Add a bouncing up effect
-                let bounce = (t * std::f32::consts::PI * 4.0).sin().max(0.0) * 12.0;
-                let rise = t * 45.0; // moves up steadily
-                // Base Y is around TILE_SIZE * 0.35, but we override here
-                tf.translation.y = 40.0 + bounce + rise;
             }
         }
     }
@@ -265,8 +253,8 @@ pub fn spawn_attack_command_ring(
     let label = format!("{:.0}", send);
     let ls = clamp_ui_scale(settings.config.ui.click_troop_label_scale);
     let ox = TILE_SIZE * 1.75 * ls;
-    let oy = 40.0; // initial offset overridden by animation
-    let troop_font = 64.0 * ls; // Much larger text
+    let oy = TILE_SIZE * 0.35 * ls;
+    let troop_font = 28.0 * ls;
     commands
         .spawn((
             AttackCommandRing {
@@ -295,7 +283,7 @@ pub fn spawn_attack_command_ring(
                     weight: FontWeight::BOLD,
                     ..default()
                 },
-                TextColor(Color::BLACK),
+                TextColor(Color::WHITE),
                 TextLayout::new_with_justify(Justify::Center),
                 Transform::from_xyz(ox, oy, 1.0),
             ));

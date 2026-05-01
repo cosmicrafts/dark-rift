@@ -2,12 +2,12 @@ use bevy::prelude::*;
 
 use crate::ui::layers::HUD_SHELL;
 use crate::ui::theme::{BUTTON_RADIUS, PANEL_RADIUS, SPACE_2, SPACE_3, SPACE_4};
-use crate::ui::write_guard::assign_if_ne;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UiBreakpoint {
     Compact,
-    Desktop,
+    Medium,
+    Wide,
 }
 
 /// HUD scale used for the bottom-right build grid + HOME dock (matches `combat_hud_scale` at game start).
@@ -20,7 +20,7 @@ impl Default for CombatDockUiScale {
     }
 }
 
-#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+#[derive(Resource, Clone, Copy, Debug)]
 pub struct UiShellState {
     pub breakpoint: UiBreakpoint,
     pub inset_top: f32,
@@ -29,39 +29,10 @@ pub struct UiShellState {
     pub inset_left: f32,
 }
 
-/// Stable breakpoint across frames: desktop window metrics jitter sub‑pixels; WASM canvas is steadier.
-/// Without hysteresis, `aspect < 0.80` / `width < 600` flip flop → whole HUD relayout every frame.
-fn breakpoint_from_window_stabilized(width: f32, height: f32, prev: UiBreakpoint) -> UiBreakpoint {
-    let h = height.max(1.0);
-    let aspect = width / h;
-    // Keep this as a strict 2-mode model:
-    // - Compact: phone / portrait / narrow
-    // - Desktop: landscape / wider tablet / desktop
-    let compact_enter = aspect <= 1.02 || width < 760.0;
-    let desktop_enter = aspect >= 1.10 && width >= 820.0;
-
-    match prev {
-        UiBreakpoint::Compact => {
-            if desktop_enter {
-                UiBreakpoint::Desktop
-            } else {
-                UiBreakpoint::Compact
-            }
-        }
-        UiBreakpoint::Desktop => {
-            if compact_enter {
-                UiBreakpoint::Compact
-            } else {
-                UiBreakpoint::Desktop
-            }
-        }
-    }
-}
-
 impl Default for UiShellState {
     fn default() -> Self {
         Self {
-            breakpoint: UiBreakpoint::Desktop,
+            breakpoint: UiBreakpoint::Wide,
             inset_top: SPACE_3,
             inset_right: SPACE_3,
             inset_bottom: SPACE_3,
@@ -125,7 +96,6 @@ pub fn setup_hud_shell(mut commands: Commands) {
                 position_type: PositionType::Absolute,
                 ..default()
             },
-            ZIndex(50),
         ))
         .id();
     let action_dock = commands
@@ -136,7 +106,6 @@ pub fn setup_hud_shell(mut commands: Commands) {
                 position_type: PositionType::Absolute,
                 ..default()
             },
-            ZIndex(100),
         ))
         .id();
 
@@ -149,45 +118,34 @@ pub fn setup_hud_shell(mut commands: Commands) {
 
 pub fn system_update_ui_shell_state(
     mut state: ResMut<UiShellState>,
-    mut dock_scale: ResMut<CombatDockUiScale>,
-    settings: Option<Res<crate::ClientSettings>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
 ) {
     let Ok(window) = windows.single() else { return };
-    // Whole-pixel quantization kills winit sub-pixel oscillation on resize/DPI that triggers breakpoint churn.
-    let width = window.width().round();
-    let height = window.height().round().max(1.0);
+    let width = window.width();
+    let height = window.height();
+    let aspect = if height > 0.0 { width / height } else { 1.0 };
 
-    let breakpoint = breakpoint_from_window_stabilized(width, height, state.breakpoint);
+    let breakpoint = if width < 600.0 || aspect < 0.80 {
+        UiBreakpoint::Compact
+    } else if width < 1100.0 {
+        UiBreakpoint::Medium
+    } else {
+        UiBreakpoint::Wide
+    };
 
     let inset = match breakpoint {
         UiBreakpoint::Compact => SPACE_2,
-        UiBreakpoint::Desktop => SPACE_4,
+        UiBreakpoint::Medium => SPACE_3,
+        UiBreakpoint::Wide => SPACE_4,
     };
 
-    let new_state = UiShellState {
+    *state = UiShellState {
         breakpoint,
         inset_top: inset,
         inset_right: inset,
         inset_bottom: inset,
         inset_left: inset,
     };
-
-    // Critical: assigning `ResMut` every frame marks the resource **changed** even when values match,
-    // which forces layout systems to dirty the entire HUD every tick on native.
-    if *state != new_state {
-        *state = new_state;
-    }
-
-    if let Some(s) = settings {
-        let new_scale = crate::clamp_ui_scale(match breakpoint {
-            UiBreakpoint::Compact => s.config.ui.mobile_hud_scale,
-            _ => s.config.ui.combat_hud_scale,
-        });
-        if (dock_scale.0 - new_scale).abs() > 1e-4 {
-            dock_scale.0 = new_scale;
-        }
-    }
 }
 
 pub fn system_apply_ui_shell_layout(
@@ -208,75 +166,33 @@ pub fn system_apply_ui_shell_layout(
         top.top = Val::Px(state.inset_top);
         top.flex_direction = FlexDirection::Row;
         top.justify_content = JustifyContent::SpaceBetween;
-        top.align_items = AlignItems::FlexStart;
+        top.align_items = AlignItems::Center;
         top.column_gap = Val::Px(SPACE_2);
     }
 
     {
         let mut bottom_q = regions.p1();
         let Ok(mut bottom) = bottom_q.single_mut() else { return };
-        let compact = matches!(state.breakpoint, UiBreakpoint::Compact);
-
-        assign_if_ne(&mut bottom.left, Val::Px(state.inset_left));
-        if compact {
-            // Full width: combat HUD stacks above the bottom action dock.
-            assign_if_ne(&mut bottom.right, Val::Px(state.inset_right));
-            let dock_reserve_h = action_dock_grid_layout_sizes(dock_scale.0).0 + 8.0 * dock_scale.0;
-            assign_if_ne(
-                &mut bottom.bottom,
-                Val::Px(state.inset_bottom + dock_reserve_h),
-            );
-            if bottom.align_items != AlignItems::Center {
-                bottom.align_items = AlignItems::Center;
-            }
-        } else {
-            // Leave a horizontal lane for the bottom-right action dock so HUD does not overlap it.
-            let dock_lane = action_dock_content_reserve_width(state.breakpoint, dock_scale.0);
-            assign_if_ne(
-                &mut bottom.right,
-                Val::Px(state.inset_right + dock_lane),
-            );
-            assign_if_ne(&mut bottom.bottom, Val::Px(state.inset_bottom));
-            if bottom.align_items != AlignItems::FlexStart {
-                bottom.align_items = AlignItems::FlexStart;
-            }
-        }
-
+        // Same bottom inset as the action dock so combat HUD sits flush with HOME vertically.
+        // Reserve the bottom-right corner so the centered column does not sit under the build grid + HOME.
+        let dock_reserve = action_dock_content_reserve_width(state.breakpoint, dock_scale.0);
+        bottom.left = Val::Px(state.inset_left);
+        bottom.right = Val::Px(state.inset_right + dock_reserve);
+        bottom.bottom = Val::Px(state.inset_bottom);
         bottom.flex_direction = FlexDirection::Column;
         bottom.justify_content = JustifyContent::FlexEnd;
+        bottom.align_items = AlignItems::Center;
     }
 
     {
         let mut dock_q = regions.p2();
         let Ok(mut dock) = dock_q.single_mut() else { return };
-        let compact = matches!(state.breakpoint, UiBreakpoint::Compact);
-        if compact {
-            assign_if_ne(&mut dock.left, Val::Px(state.inset_left));
-            assign_if_ne(&mut dock.right, Val::Px(state.inset_right));
-            assign_if_ne(&mut dock.bottom, Val::Px(state.inset_bottom));
-            dock.flex_direction = FlexDirection::Row;
-            if dock.justify_content != JustifyContent::Center {
-                dock.justify_content = JustifyContent::Center;
-            }
-            if dock.align_items != AlignItems::FlexEnd {
-                dock.align_items = AlignItems::FlexEnd;
-            }
-            assign_if_ne(&mut dock.column_gap, Val::Px(SPACE_2));
-            assign_if_ne(&mut dock.row_gap, Val::Px(0.0));
-        } else {
-            assign_if_ne(&mut dock.left, Val::Auto);
-            assign_if_ne(&mut dock.right, Val::Px(state.inset_right));
-            assign_if_ne(&mut dock.bottom, Val::Px(state.inset_bottom));
-            dock.flex_direction = FlexDirection::Row;
-            if dock.justify_content != JustifyContent::FlexEnd {
-                dock.justify_content = JustifyContent::FlexEnd;
-            }
-            if dock.align_items != AlignItems::FlexEnd {
-                dock.align_items = AlignItems::FlexEnd;
-            }
-            assign_if_ne(&mut dock.column_gap, Val::Px(SPACE_2));
-            assign_if_ne(&mut dock.row_gap, Val::Px(SPACE_2));
-        }
+        dock.right = Val::Px(state.inset_right);
+        dock.bottom = Val::Px(state.inset_bottom);
+        dock.flex_direction = FlexDirection::Row;
+        dock.justify_content = JustifyContent::FlexEnd;
+        dock.align_items = AlignItems::FlexEnd;
+        dock.column_gap = Val::Px(SPACE_2);
     }
 }
 
@@ -312,20 +228,22 @@ pub fn home_button_width_for_breakpoint(bp: UiBreakpoint) -> f32 {
 pub fn home_button_size_for_breakpoint(bp: UiBreakpoint) -> f32 {
     match bp {
         UiBreakpoint::Compact => 44.0,
-        UiBreakpoint::Desktop => 56.0,
+        UiBreakpoint::Medium => 52.0,
+        UiBreakpoint::Wide => 60.0,
     }
 }
 
 pub fn touch_target_for_breakpoint(bp: UiBreakpoint) -> (f32, f32) {
     match bp {
         UiBreakpoint::Compact => (44.0, 40.0),
-        UiBreakpoint::Desktop => (34.0, 30.0),
+        UiBreakpoint::Medium => (40.0, 34.0),
+        UiBreakpoint::Wide => (32.0, 28.0),
     }
 }
 
 pub fn panel_radius_for_breakpoint(bp: UiBreakpoint) -> f32 {
     match bp {
         UiBreakpoint::Compact => BUTTON_RADIUS,
-        UiBreakpoint::Desktop => PANEL_RADIUS,
+        UiBreakpoint::Medium | UiBreakpoint::Wide => PANEL_RADIUS,
     }
 }

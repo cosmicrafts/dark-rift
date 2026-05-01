@@ -4,7 +4,6 @@ members = [
     "crates/shared",
     "crates/server",
     "crates/client",
-    "crates/map-generator",
 ]
 
 [workspace.package]

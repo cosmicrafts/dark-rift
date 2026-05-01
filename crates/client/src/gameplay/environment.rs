@@ -13,7 +13,6 @@ pub fn system_loading_map(
     mut timeout: ResMut<LoadingMapTimeout>,
     mut cache: Option<ResMut<MapCache>>,
     pending_msg: Option<ResMut<PendingServerStart>>,
-    mock_msg: Option<ResMut<MockSinglePlayerStart>>,
     mut cam_q: Query<&mut Transform, With<Camera2d>>,
     mut params: StartGameParams,
 ) {
@@ -21,12 +20,11 @@ pub fn system_loading_map(
     if timeout.0.just_finished() {
         bevy::log::error!("Map load timeout! Returning to lobby.");
         params.next_state.set(AppState::LobbyBrowser);
-        if pending_msg.is_some() { commands.remove_resource::<PendingServerStart>(); }
-        if mock_msg.is_some() { commands.remove_resource::<MockSinglePlayerStart>(); }
+        commands.remove_resource::<PendingServerStart>();
         return;
     }
 
-    if pending_msg.is_none() && mock_msg.is_none() { return; }
+    let Some(mut p_msg) = pending_msg else { return; };
 
     // Ensure MapCache exists
     if cache.is_none() {
@@ -35,75 +33,28 @@ pub fn system_loading_map(
     }
     let cache = cache.as_mut().unwrap();
 
-    let map_name = if let Some(ref p) = pending_msg {
-        p.0.config.map_name.clone()
-    } else if let Some(ref m) = mock_msg {
-        m.0.config.map_name.clone()
-    } else {
-        return;
-    };
+    let map_name = &p_msg.0.config.map_name;
 
     // If cache doesn't have the right map, request it
-    if !cache.is_ready() || cache.map_name != map_name {
-        if !cache.is_fetching() || cache.map_name != map_name {
-            cache.request(&map_name, &mut commands);
+    if !cache.is_ready() || cache.map_name != *map_name {
+        if !cache.is_fetching() || cache.map_name != *map_name {
+            cache.request(map_name, &mut commands);
         }
         return; // Wait for fetch to complete
     }
 
     // Map is ready — start the game
     let cached_bytes = cache.take_data();
-    
-    if let Some(mut p_msg) = pending_msg {
-        p_msg.0.map_data = cached_bytes;
-        start_game_core(p_msg.0.clone(), &mut cam_q, &mut commands, &mut params);
-        commands.remove_resource::<PendingServerStart>();
-    } else if let Some(mut m_msg) = mock_msg {
-        if let Some(bytes) = &cached_bytes {
-            let width = m_msg.0.config.map_width;
-            let height = m_msg.0.config.map_height;
-            let total_players = 1 + m_msg.0.config.bot_count;
-            
-            use rand::{Rng, SeedableRng};
-            let mut rng = rand::rngs::StdRng::seed_from_u64(m_msg.0.seed);
-            
-            for i in 0..total_players {
-                for _ in 0..10000 {
-                    let sx = rng.gen_range(0..width);
-                    let sy = rng.gen_range(0..height);
-                    let idx = (sy * width + sx) as usize;
-                    if idx < bytes.len() {
-                        let tile = dark_rift_shared::map::MapTile::from_byte(bytes[idx]);
-                        if tile.is_land() {
-                            if i == 0 {
-                                m_msg.0.players[0].spawn_x = sx;
-                                m_msg.0.players[0].spawn_y = sy;
-                            } else {
-                                m_msg.0.players.push(dark_rift_shared::protocol::PlayerInfo {
-                                    id: (i + 1) as u16,
-                                    name: format!("Bot {}", i),
-                                    player_type: dark_rift_shared::player::PlayerType::Bot,
-                                    color: [rng.gen_range(0.2..0.8), rng.gen_range(0.2..0.8), rng.gen_range(0.2..0.8)],
-                                    spawn_x: sx,
-                                    spawn_y: sy,
-                                });
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
-        }
+    p_msg.0.map_data = cached_bytes;
 
-        m_msg.0.map_data = cached_bytes;
-        commands.insert_resource(SinglePlayerState {
-            timer: Timer::from_seconds(0.040, TimerMode::Repeating),
-            current_turn: 0,
-        });
-        commands.insert_resource(LocalIntentBuffer::default());
-        start_game_core(m_msg.0.clone(), &mut cam_q, &mut commands, &mut params);
-        commands.remove_resource::<MockSinglePlayerStart>();
-    }
+    start_game_core(
+        p_msg.0.clone(),
+        &mut cam_q,
+        &mut commands,
+        &mut params,
+    );
+
+    commands.remove_resource::<PendingServerStart>();
 }
 
 pub fn handle_tile_change(
@@ -147,7 +98,6 @@ pub fn spawn_shader_map(
     materials: &mut Assets<crate::rendering::BorderMaterial>,
     meshes: &mut Assets<Mesh>,
     in_game: bool,
-    border_cfg: &crate::settings::BorderVisualSettings,
 ) -> ShaderMapData {
     let width = game.map.width;
     let height = game.map.height;
@@ -209,10 +159,8 @@ pub fn spawn_shader_map(
     let material = crate::rendering::BorderMaterial {
         board_data: board_handle.clone(),
         uniforms: crate::rendering::BorderUniforms {
-            // Alpha = territory tint mixed into the otherwise-black border (RGB unused).
-            border_color: LinearRgba::new(0.0, 0.0, 0.0, border_cfg.tint.clamp(0.0, 1.0)),
-            // X = neighbor sample offset in tiles; Y = edge band width as fraction of one tile.
-            border_thickness: Vec4::new(1.0, border_cfg.band.clamp(0.001, 0.49), 0.0, 0.0),
+            border_color: LinearRgba::new(0.6, 0.6, 0.6, 1.0),
+            border_thickness: Vec4::new(1.0, 0.0, 0.0, 0.0),
             texture_size: Vec4::new(width as f32, height as f32, 0.0, 0.0),
             time: Vec4::new(0.0, 0.0, 0.0, 0.0),
             enable_water_animation: UVec4::new(1, 0, 0, 0),

@@ -4,7 +4,9 @@ use dark_rift_shared::game::GameState;
 
 use dark_rift_shared::building::{
     find_upgrade_target_id, resolve_structure_spawn_tile, structure_build_cost_gold,
+    existing_structure_positions_with_width, Building,
 };
+use dark_rift_shared::config;
 use dark_rift_shared::protocol::{ClientGameplayMessage, GameplayIntent, AttackIntent};
 use lightyear::prelude::MessageSender;
 use dark_rift_shared::water_components::WaterComponents;
@@ -167,22 +169,12 @@ pub fn system_force_boat_key(
 }
 
 #[derive(bevy::ecs::system::SystemParam)]
-pub struct ClickCtx<'w, 's> {
+pub struct ClickCtx<'w> {
     pub game_opt: Option<Res<'w, GameState>>,
     pub my_id: Res<'w, MyPlayerId>,
     pub attack_ratio: Res<'w, AttackRatio>,
     pub components: Option<Res<'w, WaterComponents>>,
     pub path_scratch: ResMut<'w, WaterPathfinderScratch>,
-    pub q_window: Query<'w, 's, &'static Window, With<bevy::window::PrimaryWindow>>,
-    pub q_ui_blocks: Query<'w, 's,
-        (&'static bevy::ui::ComputedNode, &'static GlobalTransform),
-        Or<(
-            With<Interaction>,
-            With<BottomHudRoot>,
-            With<ActionDockPointerSink>,
-            With<crate::ui::hud_combat::BottomHudPanel>,
-        )>,
-    >,
 }
 
 pub fn player_click(
@@ -196,9 +188,14 @@ pub fn player_click(
     touch_gesture: Res<TouchGestureState>,
     hovered:     Res<HoveredTile>,
     settings:    Res<ClientSettings>,
+    mut hud_hit: ParamSet<(
+        Query<&RelativeCursorPosition, With<BottomHudRoot>>,
+        Query<&RelativeCursorPosition, With<ActionDockPointerSink>>,
+    )>,
     mut senders: Query<&mut MessageSender<ClientGameplayMessage>>,
     local_buf: Option<ResMut<LocalIntentBuffer>>,
     build_mode: Res<BuildStructureMode>,
+    q_building: Query<(Entity, &Building)>,
     mut ctx: ClickCtx,
 ) {
     // We trigger ONLY on release to support dragging.
@@ -215,24 +212,11 @@ pub fn player_click(
     }
     if drag_state.accumulated_drag > 10.0 { return; } // It was a drag, not a click
 
-    let viewport = touch_gesture.last_touch_pos.or_else(|| {
-        ctx.q_window.single().ok().and_then(|w: &Window| w.cursor_position())
-    });
-
-    if let Some(pos) = viewport {
-        let mut over_hud = false;
-        for (node, transform) in &ctx.q_ui_blocks {
-            let size = node.size();
-            let center = transform.translation().truncate();
-            let rect = Rect::from_center_size(center, size);
-            if rect.contains(pos) {
-                over_hud = true;
-                break;
-            }
-        }
-        if over_hud {
-            return;
-        }
+    // Clicks/releases over the combat HUD must not issue map attacks (OpenFront: UI eats pointer).
+    let over_hud = hud_hit.p0().iter().any(|rcp| rcp.cursor_over)
+        || hud_hit.p1().iter().any(|rcp| rcp.cursor_over);
+    if over_hud {
+        return;
     }
 
     let Some(game) = ctx.game_opt.as_deref() else { return };
@@ -267,12 +251,13 @@ pub fn player_click(
         if let Some(kind) = build_mode.0 {
             let place_release = left_mouse_release || touch_release;
             if place_release {
-                let mut positions = dark_rift_shared::building::BuildingGrid::default();
-                positions.rebuild(game.buildings.iter(), map_w, game.map.height, 32, None);
+                let snapshot: Vec<Building> = q_building.iter().map(|(_, b)| *b).collect();
+                let positions =
+                    existing_structure_positions_with_width(snapshot.iter(), map_w, None);
                 if let Some(bid) =
-                    find_upgrade_target_id(&game.map, pid, kind, target_tile, &game.buildings)
+                    find_upgrade_target_id(&game.map, pid, kind, target_tile, &snapshot)
                 {
-                    let cost = structure_build_cost_gold(kind, pid, &game.buildings);
+                    let cost = structure_build_cost_gold(kind, pid, &snapshot);
                     if player.gold >= cost && cost.is_finite() {
                         send_gameplay_intent(
                             GameplayIntent::UpgradeStructure { building_id: bid },
@@ -286,7 +271,7 @@ pub fn player_click(
                 if resolve_structure_spawn_tile(&game.map, pid, kind, target_tile, &positions)
                     .is_some()
                 {
-                    let cost = structure_build_cost_gold(kind, pid, &game.buildings);
+                    let cost = structure_build_cost_gold(kind, pid, &snapshot);
                     if player.gold >= cost && cost.is_finite() {
                         send_gameplay_intent(
                             GameplayIntent::BuildStructure {

@@ -61,33 +61,5 @@ pub fn compute_state_hash<'a>(
         }
     }
 
-    // Railways + trains (OpenFront parity for desync detection)
-    let rail = &game.rail;
-    for s in &rail.stations {
-        hash = hash.wrapping_add(s.id as u64);
-        hash = hash.wrapping_add(s.building_id);
-        hash = hash.wrapping_add(s.tile_idx as u64);
-        hash = hash.wrapping_add(s.owner_id as u64);
-    }
-    for r in &rail.railroads {
-        hash = hash.wrapping_add(r.id);
-        hash = hash.wrapping_add(r.from_station as u64);
-        hash = hash.wrapping_add(r.to_station as u64);
-        for &t in &r.tiles {
-            hash = hash.wrapping_add(t as u64);
-        }
-    }
-    for t in &rail.trains {
-        hash = hash.wrapping_add(t.id);
-        hash = hash.wrapping_add(if t.active { 1 } else { 0 });
-        hash = hash.wrapping_add(t.owner_id as u64);
-        hash = hash.wrapping_add(t.current_leg as u64);
-        hash = hash.wrapping_add(t.idx_in_leg as u64);
-        hash = hash.wrapping_add(t.trade_stops_visited as u64);
-        for &sid in &t.path_stations {
-            hash = hash.wrapping_add(sid as u64);
-        }
-    }
-
     hash
 }

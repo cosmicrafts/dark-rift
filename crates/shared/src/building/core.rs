@@ -1,11 +1,10 @@
 use bevy::prelude::*;
-use serde::{Deserialize, Serialize};
 use crate::game::BuildingKind;
 use crate::config;
 use super::placement::{idx_xy, manhattan};
 /// Build and upgrade costs use **gold**; see `structure_build_cost_gold`.
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Component, Debug, Clone, Copy)]
 pub struct Building {
     pub id: u64,
     pub owner_id: u16,
@@ -118,18 +117,18 @@ impl DefenseGrid {
             }
         }
     }
-
-    /// Priority bonus from defender defense posts near `(tile_x, tile_y)` using the spatial grid.
+    
+    /// Calculate priority bonus querying only cells within `DEFENSE_POST_RANGE`.
     #[inline]
     pub fn priority_bonus(&self, tile_x: u32, tile_y: u32, map_width: u32) -> i64 {
         let mut bonus: i64 = 0;
         let range = config::DEFENSE_POST_RANGE as u32;
-
+        
         let cx_min = tile_x.saturating_sub(range) / self.cell_size;
         let cx_max = (tile_x + range) / self.cell_size;
         let cy_min = tile_y.saturating_sub(range) / self.cell_size;
         let cy_max = (tile_y + range) / self.cell_size;
-
+        
         let cx_max = cx_max.min(self.grid_w.saturating_sub(1));
         let cy_max = cy_max.min(self.grid_h.saturating_sub(1));
 
@@ -147,81 +146,6 @@ impl DefenseGrid {
             }
         }
         bonus
-    }
-}
-
-/// A generic spatial grid for all buildings, optimizing spacing checks during construction and railway updates.
-#[derive(Clone)]
-pub struct BuildingGrid {
-    pub cells: Vec<Vec<(u32, u32)>>,
-    pub grid_w: u32,
-    pub grid_h: u32,
-    pub cell_size: u32,
-}
-
-impl Default for BuildingGrid {
-    fn default() -> Self {
-        Self {
-            cells: Vec::new(),
-            grid_w: 0,
-            grid_h: 0,
-            cell_size: 32, // Prevent division by zero
-        }
-    }
-}
-
-impl BuildingGrid {
-    /// Rebuild the grid with the specified buildings.
-    pub fn rebuild<'a>(&mut self, buildings: impl Iterator<Item = &'a Building>, map_width: u32, map_height: u32, cell_size: u32, exclude_id: Option<u64>) {
-        let grid_w = (map_width + cell_size - 1) / cell_size;
-        let grid_h = (map_height + cell_size - 1) / cell_size;
-        
-        self.grid_w = grid_w;
-        self.grid_h = grid_h;
-        self.cell_size = cell_size;
-        
-        let num_cells = (grid_w * grid_h) as usize;
-        if self.cells.len() < num_cells {
-            self.cells.resize(num_cells, Vec::new());
-        }
-        for cell in self.cells.iter_mut() {
-            cell.clear();
-        }
-        
-        for b in buildings {
-            if exclude_id.map(|id| b.id != id).unwrap_or(true) {
-                let bx = b.tile_idx % map_width;
-                let by = b.tile_idx / map_width;
-                let cx = bx / cell_size;
-                let cy = by / cell_size;
-                if cx < grid_w && cy < grid_h {
-                    self.cells[(cy * grid_w + cx) as usize].push((bx, by));
-                }
-            }
-        }
-    }
-
-    /// Iterator over buildings within the specified Manhattan radius.
-    pub fn iter_in_range(&self, x: u32, y: u32, range: u32) -> impl Iterator<Item = &(u32, u32)> {
-        let cx_min = x.saturating_sub(range) / self.cell_size;
-        let cx_max = (x + range) / self.cell_size;
-        let cy_min = y.saturating_sub(range) / self.cell_size;
-        let cy_max = (y + range) / self.cell_size;
-        
-        let cx_max = cx_max.min(self.grid_w.saturating_sub(1));
-        let cy_max = cy_max.min(self.grid_h.saturating_sub(1));
-        
-        let mut idxs = Vec::with_capacity(((cx_max - cx_min + 1) * (cy_max - cy_min + 1)) as usize);
-        if self.grid_w > 0 && self.grid_h > 0 && cx_min <= cx_max && cy_min <= cy_max {
-            for cy in cy_min..=cy_max {
-                for cx in cx_min..=cx_max {
-                    idxs.push((cy * self.grid_w + cx) as usize);
-                }
-            }
-        }
-        
-        let cells = &self.cells;
-        idxs.into_iter().flat_map(move |i| cells[i].iter())
     }
 }
 

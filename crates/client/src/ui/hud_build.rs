@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use dark_rift_shared::game::GameState;
 use dark_rift_shared::game::BuildingKind;
 use dark_rift_shared::building::{BuildableEntry, compute_buildables_for_player, patch_buildable_entries_gold_and_counts};
-use crate::{MyPlayerId, OverlayDiagnostics};
+use crate::{MyPlayerId, OverlayDiagnostics, Building};
 use crate::core::BuildStructureMode;
 use crate::ui::theme::*;
 
@@ -10,10 +10,6 @@ use crate::ui::theme::*;
 pub struct BuildableHudState {
     entries: Vec<BuildableEntry>,
 }
-
-/// Set by [`system_refresh_buildable_hud`] when buildable entries change; consumed by apply.
-#[derive(Resource, Default)]
-pub struct BuildableHudDirty(pub bool);
 
 #[derive(Component)]
 pub struct BuildPillRow;
@@ -51,25 +47,23 @@ pub fn system_build_structure_hotkeys(
             break;
         }
     }
-    let next_hint = match mode.0 {
+    overlay.build_hint = match mode.0 {
         None => String::new(),
         Some(k) => format!(
             "{} · 1–6 · Esc · click own tile (pays gold)",
             k.as_str()
         ),
     };
-    if overlay.build_hint != next_hint {
-        overlay.build_hint = next_hint;
-    }
 }
 
 pub fn system_refresh_buildable_hud(
     game_opt: Option<Res<GameState>>,
     my_id: Res<MyPlayerId>,
+    q_building: Query<&Building>,
+    mut removed: RemovedComponents<Building>,
+    added: Query<(), Added<Building>>,
     mut state: ResMut<BuildableHudState>,
-    mut dirty: ResMut<BuildableHudDirty>,
     mut last_gold: Local<Option<f64>>,
-    mut last_buildings_len: Local<Option<usize>>,
 ) {
     let Some(game) = game_opt.as_deref() else {
         return;
@@ -81,24 +75,20 @@ pub fn system_refresh_buildable_hud(
     let Some(p) = game.player(pid) else {
         return;
     };
-    
-    let current_len = game.buildings.len();
-    let buildings_changed = last_buildings_len.map_or(true, |l| l != current_len);
+    let buildings_changed = removed.read().count() > 0 || added.iter().next().is_some();
     let gold_changed = last_gold.map(|g| (p.gold - g).abs() > 0.5).unwrap_or(true);
+    let buildings: Vec<Building> = q_building.iter().copied().collect();
 
     if buildings_changed || state.entries.len() != BuildingKind::ALL.len() {
-        state.entries = compute_buildables_for_player(&game.map, pid, p.gold, &game.buildings)
+        state.entries = compute_buildables_for_player(&game.map, pid, p.gold, &buildings)
             .into_iter()
             .collect();
-        dirty.0 = true;
         *last_gold = Some(p.gold);
-        *last_buildings_len = Some(current_len);
         return;
     }
 
     if gold_changed && state.entries.len() == BuildingKind::ALL.len() {
-        patch_buildable_entries_gold_and_counts(&mut state.entries, pid, p.gold, &game.buildings);
-        dirty.0 = true;
+        patch_buildable_entries_gold_and_counts(&mut state.entries, pid, p.gold, &buildings);
         *last_gold = Some(p.gold);
     }
 }
@@ -106,8 +96,6 @@ pub fn system_refresh_buildable_hud(
 pub fn system_apply_buildable_hud(
     state: Res<BuildableHudState>,
     mode: Res<BuildStructureMode>,
-    mut dirty: ResMut<BuildableHudDirty>,
-    q_ix: Query<(), (With<BuildPillButton>, Changed<Interaction>, With<Button>)>,
     mut q_btn: Query<
         (
             &BuildPillButton,
@@ -122,12 +110,6 @@ pub fn system_apply_buildable_hud(
     if state.entries.len() != BuildingKind::ALL.len() {
         return;
     }
-    let labels_need = dirty.0;
-    let pills_need = dirty.0 || mode.is_changed() || q_ix.iter().next().is_some();
-    if !labels_need && !pills_need {
-        return;
-    }
-    if labels_need {
     for (label, mut text) in q_label.iter_mut() {
         let Some(entry) = state.entries.iter().find(|e| e.kind == label.kind) else {
             continue;
@@ -147,43 +129,25 @@ pub fn system_apply_buildable_hud(
             **text = s;
         }
     }
-    }
-    if pills_need {
     for (btn, interaction, mut bg, mut border) in q_btn.iter_mut() {
         let Some(entry) = state.entries.iter().find(|e| e.kind == btn.0) else {
             continue;
         };
         let disabled = !entry.can_build && !entry.can_upgrade;
         let sel = mode.0 == Some(btn.0);
-        let (target_bg, target_border) = if disabled {
-            (
-                Color::srgba(0.1, 0.11, 0.13, 0.38).into(),
-                BorderColor::all(Color::srgba(0.3, 0.32, 0.36, 0.35)),
-            )
+        if disabled {
+            *bg = Color::srgba(0.1, 0.11, 0.13, 0.38).into();
+            *border = BorderColor::all(Color::srgba(0.3, 0.32, 0.36, 0.35));
         } else if sel {
-            (
-                accent_primary().with_alpha(0.42).into(),
-                BorderColor::all(accent_primary()),
-            )
+            *bg = accent_primary().with_alpha(0.42).into();
+            *border = BorderColor::all(accent_primary());
         } else if *interaction == Interaction::Hovered {
-            (
-                panel_bg().with_alpha(0.92).into(),
-                BorderColor::all(panel_border()),
-            )
+            *bg = panel_bg().with_alpha(0.92).into();
+            *border = BorderColor::all(panel_border());
         } else {
-            (panel_bg().into(), BorderColor::all(panel_border()))
-        };
-        // Avoid writing identical colors every frame — native UI relayouts on any Node/BackgroundColor touch.
-        if bg.0 != target_bg {
-            bg.0 = target_bg;
+            *bg = panel_bg().into();
+            *border = BorderColor::all(panel_border());
         }
-        if *border != target_border {
-            *border = target_border;
-        }
-    }
-    }
-    if dirty.0 {
-        dirty.0 = false;
     }
 }
 
@@ -195,10 +159,7 @@ pub fn system_buildpill_interactions(
     for (ix, btn) in &q {
         if *ix == Interaction::Pressed {
             mode.0 = Some(btn.0);
-            let h = format!("Place {} — click own tile (gold) · Esc", btn.0.as_str());
-            if overlay.build_hint != h {
-                overlay.build_hint = h;
-            }
+            overlay.build_hint = format!("Place {} — click own tile (gold) · Esc", btn.0.as_str());
         }
     }
 }

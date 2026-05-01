@@ -189,9 +189,9 @@ pub fn system_cleanup_ingame_entities(
     mut build_mode: ResMut<BuildStructureMode>,
     mut ghost_parts: ResMut<StructureGhostParts>,
     mut build_hud: ResMut<BuildableHudState>,
-    mut build_hud_dirty: ResMut<crate::ui::hud_build::BuildableHudDirty>,
     q_ingame: Query<Entity, With<InGameEntity>>,
     q_execs: Query<Entity, With<AttackExecution>>,
+    q_buildings: Query<Entity, With<Building>>,
     q_fleets: Query<Entity, With<dark_rift_shared::warp_fleet::WarpFleet>>,
 ) {
     ready.0 = false;
@@ -204,12 +204,14 @@ pub fn system_cleanup_ingame_entities(
     build_mode.0 = None;
     *ghost_parts = StructureGhostParts::default();
     *build_hud = BuildableHudState::default();
-    *build_hud_dirty = crate::ui::hud_build::BuildableHudDirty::default();
 
     for e in q_ingame.iter() {
         commands.entity(e).despawn();
     }
     for e in q_execs.iter() {
+        commands.entity(e).despawn();
+    }
+    for e in q_buildings.iter() {
         commands.entity(e).despawn();
     }
     for e in q_fleets.iter() {
@@ -218,39 +220,4 @@ pub fn system_cleanup_ingame_entities(
     commands.remove_resource::<GameState>();
     commands.remove_resource::<SinglePlayerState>();
     commands.remove_resource::<LocalIntentBuffer>();
-}
-
-/// Cleanup rail rendering resources — runs alongside entity cleanup on OnExit(InGame).
-/// Prevents cross-game memory accumulation of mesh handles, pathfinding buffers,
-/// tile caches, and train entity pools.
-pub fn system_cleanup_rail_resources(
-    mut rail_cache: ResMut<crate::rendering::rail::RailRenderCache>,
-    mut rail_dirty: ResMut<crate::rendering::rail::RailColorDirty>,
-    mut rail_pool: ResMut<crate::rendering::rail::RailTrainPool>,
-    mut rail_scratch: ResMut<dark_rift_shared::execution::rail::RailPathScratchResource>,
-    mut meshes: ResMut<Assets<Mesh>>,
-) {
-    // Remove the stale mesh asset so GPU memory is freed.
-    if let Some(h) = rail_cache.mesh_handle.take() {
-        meshes.remove(&h);
-    }
-    rail_cache.mesh_entity = None;
-    rail_cache.topo_hash = (0, 0);
-    rail_cache.tile_ranges.clear();
-    rail_cache.tile_ranges.shrink_to_fit();
-    rail_cache.tiles.clear();
-    rail_cache.tiles.shrink_to_fit();
-    rail_cache.tile_owner_cache.clear();
-    rail_cache.tile_owner_cache.shrink_to_fit();
-    rail_cache.next_check = 0;
-
-    rail_dirty.tiles.clear();
-    rail_dirty.tiles.shrink_to_fit();
-
-    // Pool entity references are stale (entities are despawned by system_cleanup_ingame_entities).
-    rail_pool.by_train_id.clear();
-    rail_pool.by_train_id.shrink_to_fit();
-
-    // Reset pathfinding scratch — free the ~95MB backing buffers.
-    *rail_scratch = dark_rift_shared::execution::rail::RailPathScratchResource::default();
 }

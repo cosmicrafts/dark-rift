@@ -115,12 +115,6 @@ pub struct GameState {
     /// Monotonic id for `AttackExecution` entities (ground + fleet merge roots).
     #[serde(default = "default_next_attack_id")]
     pub next_attack_id: u64,
-    /// All active buildings in the simulation.
-    #[serde(default)]
-    pub buildings: Vec<crate::building::core::Building>,
-    /// Railways, stations, and train runtimes (OpenFront rail parity).
-    #[serde(default)]
-    pub rail: crate::railway::RailWorld,
 }
 
 fn default_next_fleet_id() -> u64 {
@@ -150,8 +144,6 @@ impl GameState {
             next_fleet_id: 1,
             next_building_id: 1,
             next_attack_id: 1,
-            buildings: Vec::new(),
-            rail: crate::railway::RailWorld::default(),
         }
     }
 
