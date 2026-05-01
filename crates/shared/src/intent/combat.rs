@@ -9,6 +9,24 @@ use rand_core::SeedableRng;
 use crate::rng::NextIntExt;
 use crate::map::TerrainType;
 use crate::config;
+/// When merging troops into an existing attack, always pick the canonical execution
+/// (lowest `id`). `Vec` order can differ after `swap_remove` removals; using the first
+/// match would desync lockstep clients that agree on ids but not buffer order.
+fn merge_attack_index(
+    attacks: &[AttackExecution],
+    owner_id: u16,
+    target_owner: u16,
+) -> Option<usize> {
+    attacks
+        .iter()
+        .enumerate()
+        .filter(|(_, ex)| {
+            ex.owner_id == owner_id && ex.target_owner == target_owner && !ex.retreating
+        })
+        .min_by_key(|(_, ex)| ex.id)
+        .map(|(i, _)| i)
+}
+
 pub fn merge_frontiers(
     mut a: BinaryHeap<PrioritizedTile>,
     mut b: BinaryHeap<PrioritizedTile>,
@@ -119,13 +137,7 @@ pub fn spawn_or_merge_attack_for_fleet_arrival_pure(
         return;
     }
 
-    let mut merge_idx = None;
-    for (i, ex) in attacks.iter().enumerate() {
-        if ex.owner_id == owner_id && ex.target_owner == target_owner && !ex.retreating {
-            merge_idx = Some(i);
-            break;
-        }
-    }
+    let merge_idx = merge_attack_index(attacks, owner_id, target_owner);
 
     if let Some(i) = merge_idx {
         let ex = &mut attacks[i];
@@ -258,13 +270,7 @@ pub(super) fn apply_attack_intent(
     }
 
     // Merge into existing outgoing attack to same target (lowest exec id wins).
-    let mut merge_idx = None;
-    for (i, ex) in self.attacks.iter().enumerate() {
-        if ex.owner_id == player_id && ex.target_owner == target_owner && !ex.retreating {
-            merge_idx = Some(i);
-            break;
-        }
-    }
+    let merge_idx = merge_attack_index(&self.attacks, player_id, target_owner);
 
     if let Some(i) = merge_idx {
         let ex = &mut self.attacks[i];
