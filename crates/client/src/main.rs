@@ -38,12 +38,12 @@ pub use network::*;
 pub use rendering::*;
 pub use ui::*;
 
-pub const TILE_SIZE: f32 = 8.0;
+pub const TILE_SIZE: f32 = 12.0;
 
 
 pub const PERF_OVERLAY_FPS_INTERVAL: Duration = Duration::from_millis(250);
-pub const CLIENT_CATCHUP_MAX_TICKS_PER_FRAME: usize = 10;
-pub const ATTACK_RATIO_KEYSTEP: f32 = 0.05;
+pub const CLIENT_CATCHUP_MAX_TICKS_PER_FRAME: usize = 1000;
+pub const ATTACK_RATIO_KEYSTEP: f32 = 0.25;
 
 fn main() {
     let cli = Cli::parse();

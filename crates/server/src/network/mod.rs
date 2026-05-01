@@ -95,7 +95,7 @@ pub fn handle_client_joins(
             if msg.is_observer {
                 info!("👁  Observer joined (name={})", msg.name);
             } else {
-                let player_id = (roster.0.len() + 1) as u16;
+                let player_id = roster.0.iter().map(|p| p.id).max().unwrap_or(0) + 1;
                 assigned_id = Some(player_id);
                 
                 let colors = player_colors();

@@ -105,7 +105,7 @@ pub fn system_master_lobby(
                         let suffixes = ["Tribe", "Empire", "Kingdom", "Horde", "Clan", "Legion"];
                         
                         for _i in 0..bot_count {
-                            let player_id = (roster.0.len() + 1) as u16;
+                            let player_id = roster.0.iter().map(|p| p.id).max().unwrap_or(0) + 1;
                             let color = dark_rift_shared::player::bot_territory_color(meta.seed, player_id);
                             
                             let mut rng = dark_rift_shared::rng::WyRand::seed_from_u64(meta.seed.wrapping_add(player_id as u64));

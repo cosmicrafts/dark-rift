@@ -220,4 +220,9 @@ pub fn system_cleanup_ingame_entities(
     commands.remove_resource::<GameState>();
     commands.remove_resource::<SinglePlayerState>();
     commands.remove_resource::<LocalIntentBuffer>();
+    commands.remove_resource::<crate::ShaderMapData>();
+    commands.remove_resource::<dark_rift_shared::water_components::WaterComponents>();
+    commands.remove_resource::<crate::DesyncTracker>();
+    commands.remove_resource::<crate::ui::CombatDockUiScale>();
+    commands.remove_resource::<dark_rift_shared::game_config::GameConfig>();
 }
