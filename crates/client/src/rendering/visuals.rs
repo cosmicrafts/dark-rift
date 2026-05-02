@@ -1,6 +1,5 @@
 use bevy::prelude::*;
-use std::collections::HashSet;
-use bevy_enoki::prelude::*;
+
 use dark_rift_shared::engine::DarkRiftEngine;
 
 
@@ -52,15 +51,6 @@ pub struct FollowFleetTarget {
     pub fleet_id: u64,
 }
 
-
-#[derive(Resource, Default)]
-pub struct CombatVfxCache(pub Handle<Particle2dEffect>);
-
-/// An independent entity that tracks an attack and emits Enoki particles
-#[derive(Component)]
-pub struct CombatVfx {
-    pub target_exec_id: u64,
-}
 
 pub fn system_sync_fleet_visuals(
     mut commands: Commands,
@@ -286,77 +276,3 @@ pub fn spawn_attack_command_ring(
         });
 }
 
-pub fn system_spawn_attack_vfx(
-    mut commands: Commands,
-    engine_opt: Option<Res<DarkRiftEngine>>,
-    q_vfx: Query<&CombatVfx>,
-    vfx_cache: Res<CombatVfxCache>,
-    mut tracked: Local<Vec<u64>>,
-) {
-    let Some(engine) = engine_opt else { return; };
-    // Track ones that already have VFX
-    tracked.clear();
-    for vfx in &q_vfx {
-        tracked.push(vfx.target_exec_id);
-    }
-    tracked.sort_unstable();
-
-    for attack in engine.attacks.iter() {
-        if tracked.binary_search(&attack.id).is_ok() { continue; }
-        if attack.retreating { continue; }
-
-        let active_target = match attack.to_conquer.peek() {
-            Some(t) => t,
-            None => continue,
-        };
-
-        // Determine target world position
-        let wx = (active_target.x as f32 + 0.5) * TILE_SIZE;
-        let wy = (engine.state.map.height as f32 - active_target.y as f32 - 0.5) * TILE_SIZE;
-
-        let spawn_pos = Vec2::new(wx, wy);
-
-        commands.spawn((
-            CombatVfx {
-                target_exec_id: attack.id,
-            },
-            InGameEntity,
-            Transform::from_xyz(spawn_pos.x, spawn_pos.y, 110.0),
-            Visibility::default(),
-            InheritedVisibility::default(),
-            ViewVisibility::default(),
-            ParticleSpawner::<ColorParticle2dMaterial>::default(),
-            ParticleEffectHandle(vfx_cache.0.clone()),
-        ));
-    }
-}
-
-pub fn system_sync_attack_vfx_position(
-    mut commands: Commands,
-    engine_opt: Option<Res<DarkRiftEngine>>,
-    mut q_vfx: Query<(Entity, &CombatVfx, &mut Transform)>,
-) {
-    let Some(engine) = engine_opt else { return; };
-    for (vfx_ent, vfx, mut target_t) in &mut q_vfx {
-        if let Some(attack) = engine.attacks.iter().find(|a| a.id == vfx.target_exec_id) {
-            // Despawn if attack is retreating or queue is empty
-            if attack.retreating || attack.to_conquer.is_empty() {
-                commands.entity(vfx_ent).try_despawn();
-                continue;
-            }
-
-            // Sync visual position continuously to current target tile logic
-            if let Some(front) = attack.to_conquer.peek() {
-                let wx = (front.x as f32 + 0.5) * TILE_SIZE;
-                let wy = (engine.state.map.height as f32 - front.y as f32 - 0.5) * TILE_SIZE;
-                
-                // Exponential decay interpolation for smooth VFX gliding
-                let target_pos = Vec3::new(wx, wy, 110.0);
-                target_t.translation = target_t.translation.lerp(target_pos, 0.4);
-            }
-        } else {
-            // Target AttackExecution died/merged/resolved, clean up VFX independent shadow
-            commands.entity(vfx_ent).try_despawn();
-        }
-    }
-}

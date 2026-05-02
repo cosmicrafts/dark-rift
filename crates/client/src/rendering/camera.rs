@@ -203,7 +203,9 @@ pub fn camera_movement_and_zoom(
             desktop_pan_smooth.smoothed_delta = Vec2::ZERO;
         }
         
-        transform.translation.x += pan.x;
-        transform.translation.y += pan.y;
+        if pan != Vec2::ZERO {
+            transform.translation.x += pan.x;
+            transform.translation.y += pan.y;
+        }
     }
 }

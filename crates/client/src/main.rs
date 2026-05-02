@@ -4,7 +4,6 @@ use bevy::prelude::*;
 use bevy::ecs::schedule::common_conditions::resource_changed;
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::log::{Level, LogPlugin, DEFAULT_FILTER};
-use bevy_enoki::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::netcode::Key;
 use std::net::SocketAddr;
@@ -209,9 +208,7 @@ fn main() {
 
         if !cli.bot {
             // Visual-only plugins — skip entirely in headless mode
-            app.add_plugins(EnokiPlugin)
-               .add_plugins(bevy::sprite_render::Material2dPlugin::<rendering::BorderMaterial>::default())
-               .init_resource::<CombatVfxCache>();
+            app.add_plugins(bevy::sprite_render::Material2dPlugin::<rendering::BorderMaterial>::default());
         }
 
         app.add_systems(
@@ -225,7 +222,6 @@ fn main() {
                     init_attack_ratio_from_ui_settings,
                     setup_hud_shell,
                     setup_live,
-                    setup_combat_vfx,
                 )
                     .chain()
                     .run_if(|cli: Res<Cli>| !cli.bot),
@@ -377,8 +373,6 @@ fn main() {
         
         app.add_systems(Update, (
             camera_movement_and_zoom,
-            system_spawn_attack_vfx.run_if(|settings: Res<ClientSettings>| settings.config.visuals.enable_combat_particles),
-            system_sync_attack_vfx_position.run_if(|settings: Res<ClientSettings>| settings.config.visuals.enable_combat_particles),
             system_sync_player_labels
                 .run_if(|settings: Res<ClientSettings>| settings.config.visuals.enable_floating_labels)
                 .run_if(bevy::time::common_conditions::on_timer(std::time::Duration::from_millis(33))),

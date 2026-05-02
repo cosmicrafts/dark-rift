@@ -1,7 +1,7 @@
 use crate::engine::DarkRiftEngine;
 use crate::game::BuildingKind;
 use crate::protocol::{GameplayIntent, StampedIntent, AttackIntent};
-use crate::building::{Building, existing_structure_positions_with_width, structure_kind_enabled, structure_build_cost_gold, resolve_structure_spawn_tile};
+use crate::building::{existing_structure_positions_with_width, structure_kind_enabled, structure_build_cost_gold, resolve_structure_spawn_tile};
 use crate::rng::{NextIntExt, WyRand, SeedableRng};
 fn bot_structure_target_count(
     kind: BuildingKind,

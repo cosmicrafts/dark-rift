@@ -8,7 +8,7 @@ use crate::ui::write_guard::{approx_eq_f32, set_display_if_changed, set_text_fon
 use crate::ui::theme::*;
 use crate::hud_combat::{CancelFleetButton, CancelAttackButton};
 use crate::hud_trunc_name;
-use std::collections::HashSet;
+
 use dark_rift_shared::execution::AttackExecution;
 use dark_rift_shared::warp_fleet::WarpFleet;
 use dark_rift_shared::game::GameEvent;
@@ -255,13 +255,12 @@ pub fn system_sync_outgoing_attack_rows(
     let cancel_h = th * s;
     let row_radius = panel_radius_for_breakpoint(ui_shell.breakpoint) * s;
 
-    let mut outgoing: Vec<&AttackExecution> = engine
+    let outgoing: Vec<&AttackExecution> = engine
         .attacks
         .iter()
+        .rev() // Newest attacks first (engine array is sorted ascending by ID)
         .filter(|e| e.owner_id == my_id.0 && !e.retreating)
         .collect();
-    // Newest attacks first (higher id); list is shown top-to-newest via `ColumnReverse` on the container.
-    outgoing.sort_by(|a, b| b.id.cmp(&a.id));
 
     let stale: Vec<u64> = row_map
         .0
@@ -423,12 +422,12 @@ pub fn system_sync_outgoing_attack_rows(
         return;
     }
 
-    let mut fleets: Vec<&WarpFleet> = engine
+    let fleets: Vec<&WarpFleet> = engine
         .fleets
         .iter()
+        .rev() // Newest fleets first
         .filter(|f| f.owner_id == my_id.0 && !f.retreating)
         .collect();
-    fleets.sort_by(|a, b| b.id.cmp(&a.id));
 
     let stale_f: Vec<u64> = fleet_row_map
         .0

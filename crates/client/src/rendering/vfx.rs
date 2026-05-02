@@ -62,22 +62,3 @@ pub fn setup_structure_marker_meshes(mut commands: Commands, mut meshes: ResMut<
         defense_range: meshes.add(defense_range),
     });
 }
-
-pub fn impact_particle_effect() -> Particle2dEffect {
-    Particle2dEffect {
-        spawn_rate: 80.0,
-        spawn_amount: 3,
-        emission_shape: EmissionShape::Circle(5.0),
-        lifetime: Rval::new(0.28, 0.06),
-        linear_speed: Some(Rval(90.0, 0.35)),
-        direction: Some(Rval(Vec2::Y, 1.0)),
-        scale: Some(Rval(3.0, 0.35)),
-        linear_damp: Some(Rval(3.5, 0.15)),
-        ..Default::default()
-    }
-}
-
-pub fn setup_combat_vfx(mut commands: Commands, mut effects: ResMut<Assets<Particle2dEffect>>) {
-    let handle = effects.add(impact_particle_effect());
-    commands.insert_resource(CombatVfxCache(handle));
-}

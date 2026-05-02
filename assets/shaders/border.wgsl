@@ -161,15 +161,25 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     let center_terrain = get_map_tile_at(pixel_coord);
     let center_owner   = get_owner_at(pixel_coord);
 
-    let t_n = get_map_tile_at(pixel_coord + vec2<i32>( 0,  offset));
-    let t_s = get_map_tile_at(pixel_coord + vec2<i32>( 0, -offset));
-    let t_e = get_map_tile_at(pixel_coord + vec2<i32>( offset,  0));
-    let t_w = get_map_tile_at(pixel_coord + vec2<i32>(-offset,  0));
-
     var terrain_color = get_terrain_color(center_terrain, pixel_coord);
+    let center_is_water = tile_is_water(center_terrain);
 
-    // Shoreline sand blend for land tiles adjacent to water.
+    // Defer fetching 4 cardinal neighbors unless we actually need them for sand blend or borders.
+    // This saves 4 texture reads per pixel for the vast majority of deep ocean pixels.
+    var is_border = false;
+    var t_n: u32;
+    var t_s: u32;
+    var t_e: u32;
+    var t_w: u32;
+    var fetched_neighbors = false;
+
     if tile_is_land(center_terrain) {
+        t_n = get_map_tile_at(pixel_coord + vec2<i32>( 0,  offset));
+        t_s = get_map_tile_at(pixel_coord + vec2<i32>( 0, -offset));
+        t_e = get_map_tile_at(pixel_coord + vec2<i32>( offset,  0));
+        t_w = get_map_tile_at(pixel_coord + vec2<i32>(-offset,  0));
+        fetched_neighbors = true;
+
         if tile_is_water(t_n) || tile_is_water(t_s) || tile_is_water(t_e) || tile_is_water(t_w) {
             terrain_color = mix(terrain_color, SAND_COLOR, SAND_BLEND);
         }
@@ -184,14 +194,17 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
             let player_color = textureLoad(player_colors, vec2<i32>(i32(center_owner), 0), 0);
             base_color = mix(terrain_color, player_color, PLAYER_COLOR_BLEND);
         }
-    } else {
-        base_color = terrain_color;
-    }
 
-    // Border detection: check 4 cardinal neighbors for ownership change.
-    if uniforms.enable_players.x != 0u {
-        let center_is_water = tile_is_water(center_terrain);
+        // Border detection
         if !center_is_water {
+            if !fetched_neighbors {
+                t_n = get_map_tile_at(pixel_coord + vec2<i32>( 0,  offset));
+                t_s = get_map_tile_at(pixel_coord + vec2<i32>( 0, -offset));
+                t_e = get_map_tile_at(pixel_coord + vec2<i32>( offset,  0));
+                t_w = get_map_tile_at(pixel_coord + vec2<i32>(-offset,  0));
+                fetched_neighbors = true;
+            }
+
             let own_n = get_owner_at(pixel_coord + vec2<i32>( 0,  offset));
             let own_s = get_owner_at(pixel_coord + vec2<i32>( 0, -offset));
             let own_e = get_owner_at(pixel_coord + vec2<i32>( offset,  0));
@@ -202,7 +215,6 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
             let has_water_neighbor = tile_is_water(t_n) || tile_is_water(t_s) ||
                                      tile_is_water(t_e) || tile_is_water(t_w);
 
-            var is_border = false;
             if center_owner == 0u {
                 is_border = ownership_change || has_water_neighbor;
             } else {
@@ -213,6 +225,8 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
                 return vec4<f32>(base_color.rgb * uniforms.border_color.rgb, base_color.a);
             }
         }
+    } else {
+        base_color = terrain_color;
     }
 
     return base_color;

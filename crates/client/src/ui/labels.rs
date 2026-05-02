@@ -143,11 +143,14 @@ pub fn system_sync_player_labels(
             
             let target = Vec3::new(cx, cy + ui.config.ui.label_offset_y, 150.0);
             
-            // Just jump directly to target if too far, otherwise float smoothly
-            if transform.translation.distance(target) > 100.0 {
+            // Just jump directly to target if too far, float smoothly, and snap when close to halt Transform recalculations
+            let dist = transform.translation.distance(target);
+            if dist > 100.0 {
                 transform.translation = target;
-            } else {
+            } else if dist > 0.5 {
                 transform.translation = transform.translation.lerp(target, 0.2);
+            } else if transform.translation != target {
+                transform.translation = target;
             }
 
             let base_font = ui.config.ui.font_size;

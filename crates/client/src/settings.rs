@@ -4,9 +4,6 @@ use serde::{Deserialize, Serialize};
 
 fn default_true() -> bool { true }
 
-fn default_false() -> bool {
-    false
-}
 
 fn default_attack_ratio() -> f32 {
     0.2
@@ -47,10 +44,6 @@ impl Default for BorderVisualSettings {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct VisualSettingsConfig {
-    /// Reserved for a future particle path; Enoki was removed (despawn races + perf).
-    #[serde(default = "default_false")]
-    #[allow(dead_code)]
-    pub enable_combat_particles: bool,
     #[serde(default = "default_true")]
     pub enable_hdr_bloom: bool,
     #[serde(default = "default_true")]
@@ -65,7 +58,6 @@ pub struct VisualSettingsConfig {
 impl Default for VisualSettingsConfig {
     fn default() -> Self {
         Self {
-            enable_combat_particles: false,
             enable_hdr_bloom: true,
             enable_floating_labels: true,
             enable_water_animation: true,
