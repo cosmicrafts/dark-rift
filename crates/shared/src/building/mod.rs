@@ -139,6 +139,48 @@ mod tests {
     }
 
     #[test]
+    fn construction_complete_marks_building_grid_dirty() {
+        use crate::engine::DarkRiftEngine;
+        use crate::game::{GamePhase, GameState};
+        use crate::player::Player;
+        use crate::water_components::WaterComponents;
+
+        let mut game = GameState::new(3, 5, 1, crate::game_config::GameConfig::default());
+        game.phase = GamePhase::Playing;
+        let (map, owner) = tiny_owned_map();
+        game.map = map;
+        game.players.push(Player::new_human(
+            owner,
+            "c".into(),
+            [1.0, 0.0, 0.0],
+            &crate::game_config::GameConfig::default(),
+        ));
+        game.player_lookup.resize(owner as usize + 1, None);
+        game.player_lookup[owner as usize] = Some(0);
+        let water = WaterComponents::compute(&game.map);
+        let mut engine = DarkRiftEngine::new(game, water);
+        engine.add_building(Building {
+            id: 7,
+            owner_id: owner,
+            tile_idx: 2,
+            kind: BuildingKind::City,
+            level: 1,
+            under_construction: true,
+            ticks_until_complete: 1,
+        });
+        engine.refresh_building_grid();
+        assert!(
+            !engine.building_grid.dirty && engine.building_grid.grid_w > 0,
+            "precondition: grid rebuilt and clean"
+        );
+        engine.execute_construction();
+        assert!(
+            engine.building_grid.dirty,
+            "placement grid must invalidate when a structure leaves under_construction"
+        );
+    }
+
+    #[test]
     fn construction_ready_events_sorted_by_building_id() {
         use crate::engine::DarkRiftEngine;
         use crate::game::{GameEvent, GamePhase, GameState};

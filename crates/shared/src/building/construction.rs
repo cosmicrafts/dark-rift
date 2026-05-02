@@ -19,6 +19,10 @@ impl DarkRiftEngine {
             }
             if b.ticks_until_complete == 0 {
                 b.under_construction = false;
+                // Placement uses `BuildingGrid`; it must reflect newly "solid" structures or
+                // `refresh_building_grid` may skip rebuild (dirty=false) and desync human vs bot
+                // spawn resolution on the same tick as `aggregate_buildings_per_player` updates.
+                self.building_grid.mark_dirty();
                 self.state.events.push(GameEvent::StructureReady {
                     id: b.id,
                     tile_idx: b.tile_idx,
