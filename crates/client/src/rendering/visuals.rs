@@ -72,6 +72,7 @@ pub fn system_sync_fleet_visuals(
     mut boat_q: Query<(Entity, &mut FollowFleetBoat, &mut Transform), (Without<FollowFleetWake>, Without<FollowFleetTarget>)>,
     mut wake_q: Query<(&FollowFleetWake, &mut Transform, &mut Visibility), (Without<FollowFleetBoat>, Without<FollowFleetTarget>)>,
     mut target_q: Query<(Entity, &FollowFleetTarget, &mut Transform), (Without<FollowFleetBoat>, Without<FollowFleetWake>)>,
+    mut local_existing: Local<Vec<u64>>,
 ) {
     let Some(engine) = engine_opt.as_deref() else { return; };
     let Some(m) = meshes.as_ref() else { return; };
@@ -80,22 +81,20 @@ pub fn system_sync_fleet_visuals(
     let mw = engine.state.map.width;
     let mh = engine.state.map.height;
 
-    let mut current_ids = std::collections::HashSet::new();
-    for f in engine.fleets.iter() {
-        current_ids.insert(f.id);
+    local_existing.clear();
+    for (_, vis) in &q_existing {
+        local_existing.push(vis.0);
     }
+    local_existing.sort_unstable();
 
-    let mut existing_ids = std::collections::HashSet::new();
     for (e, vis) in &q_existing {
-        if !current_ids.contains(&vis.0) {
+        if engine.fleets.binary_search_by_key(&vis.0, |f| f.id).is_err() {
             commands.entity(e).try_despawn();
-        } else {
-            existing_ids.insert(vis.0);
         }
     }
 
     for f in engine.fleets.iter() {
-        if !existing_ids.contains(&f.id) && f.owner_id == pid {
+        if f.owner_id == pid && local_existing.binary_search(&f.id).is_err() {
             let boat_mat = materials.add(ColorMaterial::from_color(Color::srgba(0.12, 0.82, 1.0, 0.9)));
             let wake_mat = materials.add(ColorMaterial::from_color(Color::srgba(0.35, 0.95, 1.0, 0.4)));
             let ring_mat = materials.add(ColorMaterial::from_color(Color::srgba(1.0, 0.1, 0.06, 0.42)));

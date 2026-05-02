@@ -206,6 +206,7 @@ pub fn system_sync_building_visuals(
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     q_existing: Query<(Entity, &BuildingVisual)>,
+    mut local_existing: Local<Vec<u64>>,
 ) {
     let Some(engine) = engine_opt.as_deref() else {
         return;
@@ -216,22 +217,20 @@ pub fn system_sync_building_visuals(
     let mw = engine.state.map.width;
     let mh = engine.state.map.height;
 
-    let mut current_ids = std::collections::HashSet::new();
-    for b in engine.buildings.iter() {
-        current_ids.insert(b.id);
+    local_existing.clear();
+    for (_, vis) in &q_existing {
+        local_existing.push(vis.0);
     }
-    
-    let mut existing_ids = std::collections::HashSet::new();
+    local_existing.sort_unstable();
+
     for (e, vis) in &q_existing {
-        if !current_ids.contains(&vis.0) {
+        if engine.buildings.binary_search_by_key(&vis.0, |b| b.id).is_err() {
             commands.entity(e).try_despawn();
-        } else {
-            existing_ids.insert(vis.0);
         }
     }
 
     for b in engine.buildings.iter() {
-        if existing_ids.contains(&b.id) {
+        if local_existing.binary_search(&b.id).is_ok() {
             continue;
         }
         let rgb = engine.state

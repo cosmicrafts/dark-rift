@@ -9,7 +9,10 @@ use crate::ui::write_guard::set_text_font_size_if_changed;
 pub struct PlayerLabel(pub u16);
 
 #[derive(Component)]
-pub struct PlayerLabelRenderCache(pub f32);
+pub struct PlayerLabelRenderCache {
+    pub font_px: f32,
+    pub troops: i64,
+}
 
 pub fn system_sync_building_map_labels(
     engine_opt: Option<Res<DarkRiftEngine>>,
@@ -20,9 +23,10 @@ pub fn system_sync_building_map_labels(
         return;
     };
     for (marker, mut vis, children) in q_badge.iter_mut() {
-        let Some(b) = engine.buildings.iter().find(|b| b.id == marker.0) else {
+        let Ok(idx) = engine.buildings.binary_search_by_key(&marker.0, |b| b.id) else {
             continue;
         };
+        let b = &engine.buildings[idx];
         let line = match (b.under_construction, b.level) {
             (true, _) => "…".to_string(),
             (false, lvl) if lvl > 1 => lvl.to_string(),
@@ -91,7 +95,10 @@ pub fn system_sync_player_labels(
             commands.spawn((
                 PlayerLabel(player.id),
                 InGameEntity,
-                PlayerLabelRenderCache(font_px),
+                PlayerLabelRenderCache {
+                    font_px,
+                    troops: player.troops.round() as i64,
+                },
                 Text2d::new(label_text),
                 TextFont {
                     font: ui.font.clone(),
@@ -121,9 +128,13 @@ pub fn system_sync_player_labels(
         }
         let Some(player) = game.player(label.0) else { continue };
 
-        let new_text = format!("{}\n[{:.0}]", player.name, player.troops);
-        if text.0 != new_text {
-            text.0 = new_text.clone();
+        let t_int = player.troops.round() as i64;
+        if cache.troops != t_int {
+            cache.troops = t_int;
+            let new_text = format!("{}\n[{}]", player.name, t_int);
+            if text.0 != new_text {
+                text.0 = new_text;
+            }
         }
 
         if player.tile_count > 0 {
@@ -146,8 +157,8 @@ pub fn system_sync_player_labels(
                 ui.config.ui.label_max_scale,
             );
             let font_px = (base_font * mul).round().max(1.0);
-            if cache.0 != font_px {
-                cache.0 = font_px;
+            if cache.font_px != font_px {
+                cache.font_px = font_px;
                 set_text_font_size_if_changed(&mut p_font, font_px);
             }
         }
