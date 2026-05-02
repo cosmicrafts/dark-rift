@@ -263,13 +263,11 @@ pub fn system_sync_outgoing_attack_rows(
     // Newest attacks first (higher id); list is shown top-to-newest via `ColumnReverse` on the container.
     outgoing.sort_by(|a, b| b.id.cmp(&a.id));
 
-    let desired: HashSet<u64> = outgoing.iter().map(|e| e.id).collect();
-
     let stale: Vec<u64> = row_map
         .0
         .keys()
         .copied()
-        .filter(|id| !desired.contains(id))
+        .filter(|id| outgoing.binary_search_by(|e| e.id.cmp(id).reverse()).is_err())
         .collect();
     for id in stale {
         if let Some((row_e, _, _)) = row_map.0.remove(&id) {
@@ -432,12 +430,11 @@ pub fn system_sync_outgoing_attack_rows(
         .collect();
     fleets.sort_by(|a, b| b.id.cmp(&a.id));
 
-    let desired_f: HashSet<u64> = fleets.iter().map(|f| f.id).collect();
     let stale_f: Vec<u64> = fleet_row_map
         .0
         .keys()
         .copied()
-        .filter(|id| !desired_f.contains(id))
+        .filter(|id| fleets.binary_search_by(|e| e.id.cmp(id).reverse()).is_err())
         .collect();
     for id in stale_f {
         if let Some((row_e, _, _)) = fleet_row_map.0.remove(&id) {

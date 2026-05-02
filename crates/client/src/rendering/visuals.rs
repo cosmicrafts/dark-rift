@@ -291,16 +291,18 @@ pub fn system_spawn_attack_vfx(
     engine_opt: Option<Res<DarkRiftEngine>>,
     q_vfx: Query<&CombatVfx>,
     vfx_cache: Res<CombatVfxCache>,
+    mut tracked: Local<Vec<u64>>,
 ) {
     let Some(engine) = engine_opt else { return; };
     // Track ones that already have VFX
-    let mut tracked = HashSet::new();
+    tracked.clear();
     for vfx in &q_vfx {
-        tracked.insert(vfx.target_exec_id);
+        tracked.push(vfx.target_exec_id);
     }
+    tracked.sort_unstable();
 
     for attack in engine.attacks.iter() {
-        if tracked.contains(&attack.id) { continue; }
+        if tracked.binary_search(&attack.id).is_ok() { continue; }
         if attack.retreating { continue; }
 
         let active_target = match attack.to_conquer.peek() {

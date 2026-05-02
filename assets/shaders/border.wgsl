@@ -134,10 +134,10 @@ fn get_terrain_color(tile: u32, coord: vec2<i32>) -> vec4<f32> {
         }
 
         if uniforms.enable_water_animation.x != 0u {
+            // LOW-END OPTIMIZATION: Only 1 layer of procedural noise, modulated by a cheap sine wave.
             let wave1 = animated_simplex_noise(f_coord, WAVE1_SPEED, WAVE1_SCALE, uniforms.time.x);
-            let wave2 = animated_simplex_noise(f_coord, WAVE2_SPEED, WAVE2_SCALE, uniforms.time.x);
-            let wave3 = animated_simplex_noise(f_coord, WAVE3_SPEED, WAVE3_SCALE, uniforms.time.x);
-            let combined = (wave1 * WAVE1_W + wave2 * WAVE2_W + wave3 * WAVE3_W) * WAVE_COMBINED;
+            let cheap_sine = sin(f_coord.x * 0.05 + uniforms.time.x * 2.0) * cos(f_coord.y * 0.05 - uniforms.time.x * 1.5);
+            let combined = (wave1 * 0.8 + (cheap_sine * 0.5 + 0.5) * 0.2) * WAVE_COMBINED;
             base_color = mix(base_color, WAVE_HIGHLIGHT, combined * WAVE_STRENGTH);
         }
 
