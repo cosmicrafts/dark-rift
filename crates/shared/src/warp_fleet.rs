@@ -76,8 +76,8 @@ pub fn resolve_fleet_route(
     player_id: u16,
     target_owner: u16,
     target_tile: u32,
-    border_tiles: &[u32],
-    target_border: Option<&[u32]>,
+    border_tiles: &crate::bitset::DenseBitSet,
+    target_border: Option<&crate::bitset::DenseBitSet>,
     has_completed_port: bool,
 ) -> Result<FleetRoute, FleetLaunchError> {
     let map_area = map.width.saturating_mul(map.height);
@@ -153,11 +153,11 @@ pub fn player_water_components(
     map: &GameMap,
     components: &WaterComponents,
     player_id: u16,
-    border_tiles: &[u32],
+    border_tiles: &crate::bitset::DenseBitSet,
 ) -> Vec<u32> {
     let w = map.width;
     let mut out: Vec<u32> = Vec::new();
-    for &idx in border_tiles {
+    for idx in border_tiles.ones() {
         let x = idx % w;
         let y = idx / w;
         if map.owner_id(x, y) != player_id {
@@ -186,10 +186,10 @@ pub fn player_has_water_access(
     map: &GameMap,
     components: &WaterComponents,
     player_id: u16,
-    border_tiles: &std::collections::BTreeSet<u32>,
+    border_tiles: &crate::bitset::DenseBitSet,
 ) -> bool {
     let w = map.width;
-    for &idx in border_tiles {
+    for idx in border_tiles.ones() {
         let x = idx % w;
         let y = idx / w;
         if map.owner_id(x, y) != player_id {
@@ -210,9 +210,9 @@ pub fn player_has_water_access(
 /// 4-neighbor is owned by `target_owner`. This is the correct gate for a land `Attack`
 /// intent — a click on a far-away enemy interior still ground-attacks as long as we
 /// touch them somewhere on the map.
-pub fn shares_border_with(map: &GameMap, border_tiles: &[u32], target_owner: u16) -> bool {
+pub fn shares_border_with(map: &GameMap, border_tiles: &crate::bitset::DenseBitSet, target_owner: u16) -> bool {
     let w = map.width;
-    for &idx in border_tiles {
+    for idx in border_tiles.ones() {
         let x = idx % w;
         let y = idx / w;
         let mut found = false;
@@ -342,7 +342,7 @@ pub fn closest_target_shore_for_player(
     components: &WaterComponents,
     my_water_comps: &[u32],
     target_owner: u16,
-    target_border_tiles: &[u32],
+    target_border_tiles: &crate::bitset::DenseBitSet,
     click_tile: u32,
 ) -> Option<u32> {
     if my_water_comps.is_empty() {
@@ -350,7 +350,7 @@ pub fn closest_target_shore_for_player(
     }
     let w = map.width;
     let mut best: Option<(u32, u32)> = None;
-    for &idx in target_border_tiles {
+    for idx in target_border_tiles.ones() {
         let x = idx % w;
         let y = idx / w;
         if map.owner_id(x, y) != target_owner {
@@ -486,7 +486,7 @@ pub const FLEET_RETREAT_SHORE_MALUS: f64 = 0.25;
 pub fn best_shore_spawn_for_transport(
     map: &GameMap,
     player_id: u16,
-    border_tiles: &[u32],
+    border_tiles: &crate::bitset::DenseBitSet,
     reference_idx: u32,
     components: Option<(&WaterComponents, u32)>,
 ) -> Option<u32> {
@@ -496,7 +496,7 @@ pub fn best_shore_spawn_for_transport(
 
     let mut best: Option<(u32, u32)> = None;
 
-    for &idx in border_tiles {
+    for idx in border_tiles.ones() {
         let x = idx % w;
         let y = idx / w;
         if map.owner_id(x, y) != player_id {

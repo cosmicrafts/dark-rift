@@ -16,3 +16,4 @@ pub mod engine;
 
 pub mod game_config;
 pub mod map_loader;
+pub mod bitset;

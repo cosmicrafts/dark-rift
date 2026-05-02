@@ -33,13 +33,13 @@ pub(super) fn apply_launch_fleet_intent(
     }
 
     let border_tiles = match self.state.player(player_id) {
-        Some(p) => p.border_tiles.as_slice(),
+        Some(p) => &p.border_tiles,
         None => return,
     };
 
-    let target_border: Option<&[u32]> = if target_owner != 0 {
+    let target_border: Option<&crate::bitset::DenseBitSet> = if target_owner != 0 {
         match self.state.player(target_owner) {
-            Some(p) => Some(p.border_tiles.as_slice()),
+            Some(p) => Some(&p.border_tiles),
             None => {
                 bevy::log::warn!(
                     "apply_launch_fleet_intent: target_owner={} not found (player {})",

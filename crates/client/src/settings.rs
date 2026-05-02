@@ -54,8 +54,6 @@ pub struct VisualSettingsConfig {
     #[serde(default = "default_true")]
     pub enable_hdr_bloom: bool,
     #[serde(default = "default_true")]
-    pub enable_territory_expansion_animations: bool,
-    #[serde(default = "default_true")]
     pub enable_floating_labels: bool,
     /// GPU water simplex-noise animation. Disable on low-end mobile GPUs for ~30% frag savings.
     #[serde(default = "default_true")]
@@ -69,7 +67,6 @@ impl Default for VisualSettingsConfig {
         Self {
             enable_combat_particles: false,
             enable_hdr_bloom: true,
-            enable_territory_expansion_animations: true,
             enable_floating_labels: true,
             enable_water_animation: true,
             border: BorderVisualSettings::default(),
@@ -87,9 +84,6 @@ impl VisualSettingsConfig {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct UiSettingsConfig {
-    /// Reserved for future AssetServer-based font override; labels use the embedded TTF.
-    #[allow(dead_code)]
-    pub font_path: String,
     /// Minimum label size; effective size is `font_size * scale` (scale ≥ 1 from territory).
     pub font_size: f32,
     pub label_offset_y: f32,
@@ -129,7 +123,6 @@ pub struct UiSettingsConfig {
 impl Default for UiSettingsConfig {
     fn default() -> Self {
         Self {
-            font_path: "".to_string(),
             font_size: 16.0,
             label_offset_y: 12.0,
             label_size_ref_tiles: 64.0,
@@ -299,23 +292,18 @@ pub fn build_client_settings_config() -> ClientSettingsConfig {
         }
     };
 
-    if assign_default_anon_if_nickname_empty(&mut config) {
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Err(e) = save_client_settings_config(&config) {
-            bevy::log::warn!("Could not persist default Anon### nickname: {e}");
-        }
-    }
+    assign_default_anon_if_nickname_empty(&mut config);
 
     config
 }
 
 /// System that patches the real font Handle into ClientSettings once Assets<Font> is available.
 pub fn init_client_font(mut settings: ResMut<ClientSettings>, mut fonts: ResMut<Assets<Font>>) {
-    let font_bytes = include_bytes!("../../../assets/fonts/Rajdhani-Medium.ttf");
+    let font_bytes = include_bytes!("../../../assets/fonts/Gabarito-ExtraBold.ttf");
     settings.font = match Font::try_from_bytes(font_bytes.to_vec()) {
         Ok(f) => fonts.add(f),
         Err(e) => {
-            bevy::log::error!("Rajdhani font bytes invalid: {e}");
+            bevy::log::error!("Goldman font bytes invalid: {e}");
             Handle::default()
         }
     };
@@ -325,11 +313,11 @@ pub fn init_client_font(mut settings: ResMut<ClientSettings>, mut fonts: ResMut<
 #[allow(dead_code)]
 pub fn load_client_settings(mut commands: Commands, mut fonts: ResMut<Assets<Font>>) {
     let config = build_client_settings_config();
-    let font_bytes = include_bytes!("../../../assets/fonts/Rajdhani-Medium.ttf");
+    let font_bytes = include_bytes!("../../../assets/fonts/Gabarito-ExtraBold.ttf");
     let font_handle = match Font::try_from_bytes(font_bytes.to_vec()) {
         Ok(f) => fonts.add(f),
         Err(e) => {
-            bevy::log::error!("Rajdhani font bytes invalid: {e}; map labels may be invisible");
+            bevy::log::error!("Goldman font bytes invalid: {e}; map labels may be invisible");
             Handle::default()
         }
     };

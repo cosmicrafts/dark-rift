@@ -143,10 +143,10 @@ pub fn execute_bot_think(&mut self) {
                 // internally (BFS visited array). On a 2000x1200 map that's 2.4MB per call.
                 // With 400 bots × 6 kinds × 256 attempts = OOM / freeze.
                 // Fix: try exactly ONE random border tile. If it fails, wait until next tick.
-                let border_len = bot_now.border_tiles.len();
+                let border_len = bot_now.border_tiles.count_ones();
                 if border_len > 0 {
                     let pick = bot_now.bot_rng.next_int(0, border_len as i32) as usize;
-                    let raw_idx = bot_now.border_tiles[pick];
+                    let raw_idx = bot_now.border_tiles.ones().nth(pick).unwrap();
                     let (bx, by) = (raw_idx % map_w, raw_idx / map_w);
                     let idx = by * map_w + bx;
                     if resolve_structure_spawn_tile(&self.state.map, bot_id, kind, idx, &structure_positions).is_some() {

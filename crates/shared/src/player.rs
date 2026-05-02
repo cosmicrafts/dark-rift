@@ -50,10 +50,10 @@ pub struct Player {
     pub sum_y: u64,
     /// Number of tiles owned by the player.
     pub tile_count: u32,
-    /// Flat cache of linear indices of border tiles. Order is insertion-deterministic
-    /// across all platforms because the simulation loop is deterministic.
-    /// Uses Vec for contiguous-memory iteration (cache-line friendly on every tick).
-    pub border_tiles: Vec<u32>,
+    /// Flat, contiguous cache of boolean flags for border tiles. Order is strictly
+    /// spatial-deterministic via `.ones()`. Uses DenseBitSet to avoid O(N) shifting
+    /// while remaining completely cache-line friendly on every tick.
+    pub border_tiles: crate::bitset::DenseBitSet,
     /// RNG stream for bot logic. Persists across ticks and serializes natively.
     pub bot_rng: WyRand,
     /// Number of factories owned.
@@ -78,7 +78,7 @@ impl Player {
             sum_x: 0,
             sum_y: 0,
             tile_count: 0,
-            border_tiles: Vec::new(),
+            border_tiles: crate::bitset::DenseBitSet::new(),
             bot_rng: WyRand::seed_from_u64(id as u64),
             factories: 0,
             cities: 0,
@@ -100,7 +100,7 @@ impl Player {
             sum_x: 0,
             sum_y: 0,
             tile_count: 0,
-            border_tiles: Vec::new(),
+            border_tiles: crate::bitset::DenseBitSet::new(),
             bot_rng: WyRand::seed_from_u64(id as u64),
             factories: 0,
             cities: 0,
@@ -114,26 +114,19 @@ impl Player {
 
     /// Decode linear indices to (x, y) coordinates.
     pub fn border_coords(&self, map_width: u32) -> impl Iterator<Item = (u32, u32)> + '_ {
-        self.border_tiles.iter().map(move |&idx| (idx % map_width, idx / map_width))
+        self.border_tiles.ones().map(move |idx| (idx % map_width, idx / map_width))
     }
 
-    /// Absolute spatial order insert via `binary_search`.
-    /// Guarantees strict determinism regardless of network arrival time,
-    /// and replaces O(N) contains with O(log N) search.
+    /// O(1) insert via DenseBitSet. Iteration order via `.ones()` stays strictly deterministic.
     #[inline]
     pub fn border_insert(&mut self, idx: u32) {
-        if let Err(pos) = self.border_tiles.binary_search(&idx) {
-            self.border_tiles.insert(pos, idx);
-        }
+        self.border_tiles.insert(idx);
     }
 
-    /// Absolute spatial order remove via `binary_search`.
-    /// `swap_remove` is completely banned by the determinism contract.
+    /// O(1) remove via DenseBitSet. Iteration order via `.ones()` stays strictly deterministic.
     #[inline]
     pub fn border_remove(&mut self, idx: u32) {
-        if let Ok(pos) = self.border_tiles.binary_search(&idx) {
-            self.border_tiles.remove(pos);
-        }
+        self.border_tiles.remove(idx);
     }
 }
 

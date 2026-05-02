@@ -146,10 +146,10 @@ pub fn try_launch_fleet_intent(
         bevy::log::warn!("{log_ctx}: launcher player {pid} not found");
         return None;
     };
-    let border = launcher.border_tiles.as_slice();
+    let border = &launcher.border_tiles;
     let target_border = if target_owner != 0 {
         match game.player(target_owner) {
-            Some(p) => Some(p.border_tiles.as_slice()),
+            Some(p) => Some(&p.border_tiles),
             None => {
                 bevy::log::warn!("{log_ctx}: target_owner {target_owner} not found");
                 return None;
