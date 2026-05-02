@@ -24,6 +24,29 @@ pub struct BuildingAggregate {
     pub defense_levels: u32,
     /// True if any ready Port exists (same as `port_levels > 0` when ports are never level-0 ready without existing).
     pub has_completed_port: bool,
+    /// Ready cities only (for bot `city_equivalent` base).
+    pub ready_city_count: u32,
+    /// Total instances per kind, **including** under construction (for bot build quotas).
+    pub count_city: u32,
+    pub count_factory: u32,
+    pub count_port: u32,
+    pub count_defense: u32,
+    pub count_sam: u32,
+    pub count_silo: u32,
+}
+
+impl BuildingAggregate {
+    #[inline]
+    pub fn total_structures_of_kind(self, kind: BuildingKind) -> u32 {
+        match kind {
+            BuildingKind::City => self.count_city,
+            BuildingKind::Factory => self.count_factory,
+            BuildingKind::Port => self.count_port,
+            BuildingKind::DefensePost => self.count_defense,
+            BuildingKind::SamLauncher => self.count_sam,
+            BuildingKind::MissileSilo => self.count_silo,
+        }
+    }
 }
 
 /// `out[v]` is aggregate for owner id `v` (resize to `max_player_id + 1`).
@@ -33,16 +56,28 @@ pub fn aggregate_buildings_per_player(
 ) -> Vec<BuildingAggregate> {
     let mut out = vec![BuildingAggregate::default(); max_player_id.saturating_add(1)];
     for b in buildings {
-        if b.under_construction {
-            continue;
-        }
         let i = b.owner_id as usize;
         if i >= out.len() {
             continue;
         }
         let a = &mut out[i];
         match b.kind {
-            BuildingKind::City => a.city_levels += b.level as u32,
+            BuildingKind::City => a.count_city += 1,
+            BuildingKind::Factory => a.count_factory += 1,
+            BuildingKind::Port => a.count_port += 1,
+            BuildingKind::DefensePost => a.count_defense += 1,
+            BuildingKind::SamLauncher => a.count_sam += 1,
+            BuildingKind::MissileSilo => a.count_silo += 1,
+        }
+        if b.under_construction {
+            continue;
+        }
+        let a = &mut out[i];
+        match b.kind {
+            BuildingKind::City => {
+                a.city_levels += b.level as u32;
+                a.ready_city_count += 1;
+            }
             BuildingKind::Factory => a.factory_levels += b.level as u32,
             BuildingKind::Port => {
                 a.port_levels += b.level as u32;
@@ -145,6 +180,123 @@ impl DefenseGrid {
             }
         }
         bonus
+    }
+}
+
+/// Cell side length for spatial indexing of structure centers. Must match `STRUCTURE_MIN_DIST` in `placement.rs`.
+pub const BUILDING_GRID_CELL_SIZE: u32 = 15;
+
+/// Spatial grid of structure tile coordinates `(x, y)` for O(local) minimum-distance checks during placement.
+#[derive(Clone)]
+pub struct BuildingGrid {
+    pub cells: Vec<Vec<(u32, u32)>>,
+    pub grid_w: u32,
+    pub grid_h: u32,
+    pub cell_size: u32,
+    /// When false and `grid_w > 0`, [`DarkRiftEngine::refresh_building_grid`] may skip work.
+    pub dirty: bool,
+}
+
+impl Default for BuildingGrid {
+    fn default() -> Self {
+        Self {
+            cells: Vec::new(),
+            grid_w: 0,
+            grid_h: 0,
+            cell_size: BUILDING_GRID_CELL_SIZE,
+            dirty: true,
+        }
+    }
+}
+
+impl BuildingGrid {
+    /// Grid with no buildings: dimensions and cells initialized, [`Self::dirty`] false.
+    pub fn rebuild_empty(map_w: u32, map_h: u32) -> Self {
+        let mut g = Self::default();
+        g.rebuild_from_pairs(map_w, map_h, &[]);
+        g
+    }
+
+    #[inline]
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Fill grid from all buildings (including under construction), matching legacy `existing_structure_positions_with_width`.
+    pub fn rebuild<'a>(&mut self, buildings: impl Iterator<Item = &'a Building>, map_w: u32, map_h: u32) {
+        let cell_size = BUILDING_GRID_CELL_SIZE;
+        let grid_w = (map_w + cell_size - 1) / cell_size;
+        let grid_h = (map_h + cell_size - 1) / cell_size;
+
+        self.grid_w = grid_w;
+        self.grid_h = grid_h;
+        self.cell_size = cell_size;
+
+        let num_cells = (grid_w * grid_h) as usize;
+        if self.cells.len() < num_cells {
+            self.cells.resize(num_cells, Vec::new());
+        }
+        for cell in self.cells.iter_mut() {
+            cell.clear();
+        }
+
+        for b in buildings {
+            let bx = b.tile_idx % map_w;
+            let by = b.tile_idx / map_w;
+            let cx = bx / cell_size;
+            let cy = by / cell_size;
+            if cx < grid_w && cy < grid_h {
+                self.cells[(cy * grid_w + cx) as usize].push((bx, by));
+            }
+        }
+        self.dirty = false;
+    }
+
+    /// Rebuild from raw tile coordinates (tests / tooling; no `Building` structs).
+    pub fn rebuild_from_pairs(&mut self, map_w: u32, map_h: u32, pairs: &[(u32, u32)]) {
+        let cell_size = BUILDING_GRID_CELL_SIZE;
+        let grid_w = (map_w + cell_size - 1) / cell_size;
+        let grid_h = (map_h + cell_size - 1) / cell_size;
+        self.grid_w = grid_w;
+        self.grid_h = grid_h;
+        self.cell_size = cell_size;
+        let num_cells = (grid_w * grid_h) as usize;
+        if self.cells.len() < num_cells {
+            self.cells.resize(num_cells, Vec::new());
+        }
+        for cell in self.cells.iter_mut() {
+            cell.clear();
+        }
+        for &(bx, by) in pairs {
+            let cx = bx / cell_size;
+            let cy = by / cell_size;
+            if cx < grid_w && cy < grid_h {
+                self.cells[(cy * grid_w + cx) as usize].push((bx, by));
+            }
+        }
+        self.dirty = false;
+    }
+
+    /// All stored structure positions in cells overlapping the Euclidean disk of radius `range` around `(tile_x, tile_y)`.
+    pub fn iter_in_range(
+        &self,
+        tile_x: u32,
+        tile_y: u32,
+        range: u32,
+    ) -> impl Iterator<Item = (u32, u32)> + '_ {
+        let cx_min = tile_x.saturating_sub(range) / self.cell_size;
+        let cx_max = (tile_x + range) / self.cell_size;
+        let cy_min = tile_y.saturating_sub(range) / self.cell_size;
+        let cy_max = (tile_y + range) / self.cell_size;
+        let cx_max = cx_max.min(self.grid_w.saturating_sub(1));
+        let cy_max = cy_max.min(self.grid_h.saturating_sub(1));
+
+        (cy_min..=cy_max).flat_map(move |cy| {
+            (cx_min..=cx_max).flat_map(move |cx| {
+                let idx = (cy * self.grid_w + cx) as usize;
+                self.cells[idx].iter().copied()
+            })
+        })
     }
 }
 

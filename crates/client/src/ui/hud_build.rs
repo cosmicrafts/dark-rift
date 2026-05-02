@@ -1,14 +1,24 @@
 use bevy::prelude::*;
-use dark_rift_shared::engine::DarkRiftEngine;
+use dark_rift_shared::engine::{DarkRiftEngine, PlacementScratch};
 use dark_rift_shared::game::BuildingKind;
 use dark_rift_shared::building::{BuildableEntry, compute_buildables_for_player, patch_buildable_entries_gold_and_counts};
 use crate::{MyPlayerId, OverlayDiagnostics};
 use crate::core::BuildStructureMode;
 use crate::ui::theme::*;
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct BuildableHudState {
     entries: Vec<BuildableEntry>,
+    pub placement_scratch: PlacementScratch,
+}
+
+impl Default for BuildableHudState {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            placement_scratch: PlacementScratch::default(),
+        }
+    }
 }
 
 /// Set by [`system_refresh_buildable_hud`] when buildable entries change; consumed by apply.
@@ -64,42 +74,50 @@ pub fn system_build_structure_hotkeys(
 }
 
 pub fn system_refresh_buildable_hud(
-    engine_opt: Option<Res<DarkRiftEngine>>,
+    mut engine_opt: Option<ResMut<DarkRiftEngine>>,
     my_id: Res<MyPlayerId>,
     mut state: ResMut<BuildableHudState>,
     mut dirty: ResMut<BuildableHudDirty>,
     mut last_gold: Local<Option<f64>>,
     mut last_buildings_len: Local<Option<usize>>,
 ) {
-    let Some(engine) = engine_opt.as_deref() else {
+    let Some(engine) = engine_opt.as_mut() else {
         return;
     };
     let pid = my_id.0;
     if pid == 0 {
         return;
     }
-    let Some(p) = engine.state.player(pid) else {
+    let Some(player_gold) = engine.state.player(pid).map(|p| p.gold) else {
         return;
     };
-    
+
     let current_len = engine.buildings.len();
     let buildings_changed = last_buildings_len.map_or(true, |l| l != current_len);
-    let gold_changed = last_gold.map(|g| (p.gold - g).abs() > 0.5).unwrap_or(true);
+    let gold_changed = last_gold.map(|g| (player_gold - g).abs() > 0.5).unwrap_or(true);
 
     if buildings_changed || state.entries.len() != BuildingKind::ALL.len() {
-        state.entries = compute_buildables_for_player(&engine.state.map, pid, p.gold, &engine.buildings)
+        engine.refresh_building_grid();
+        state.entries = compute_buildables_for_player(
+            &engine.state.map,
+            pid,
+            player_gold,
+            &engine.buildings,
+            &engine.building_grid,
+            &mut state.placement_scratch,
+        )
             .into_iter()
             .collect();
         dirty.0 = true;
-        *last_gold = Some(p.gold);
+        *last_gold = Some(player_gold);
         *last_buildings_len = Some(current_len);
         return;
     }
 
     if gold_changed && state.entries.len() == BuildingKind::ALL.len() {
-        patch_buildable_entries_gold_and_counts(&mut state.entries, pid, p.gold, &engine.buildings);
+        patch_buildable_entries_gold_and_counts(&mut state.entries, pid, player_gold, &engine.buildings);
         dirty.0 = true;
-        *last_gold = Some(p.gold);
+        *last_gold = Some(player_gold);
     }
 }
 

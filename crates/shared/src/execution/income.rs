@@ -41,18 +41,25 @@ impl DarkRiftEngine {
         player.max_troops = config.max_troops_base
             + max_troops_bonus * config.max_troops_scale
             + agg.city_levels as f64 * config.city_max_troops_per_level;
+        if player.player_type == crate::player::PlayerType::Bot {
+            player.max_troops /= 3.0;
+        }
 
         // safe_troops^0.75 = safe_troops^(1/2) * safe_troops^(1/4)
         let s_half = safe_troops.sqrt();
         let s_quarter = s_half.sqrt();
         let s_75 = s_half * s_quarter;
         
-        let raw_income = config.troop_base_income + (s_75 / 4.6);
+        let raw_income = config.troop_base_income + (s_75 / 4.0);
         let ratio = 1.0 - (safe_troops / player.max_troops).min(1.0);
         let factory_extra = (agg.factory_levels as f64 * config.factory_income_bonus_per_level)
             .min(config.factory_income_bonus_cap - 1.0);
         let factory_mult = 1.0 + factory_extra;
-        let income = raw_income * ratio * factory_mult;
+        let mut income = raw_income * ratio * factory_mult;
+        
+        if player.player_type == crate::player::PlayerType::Bot {
+            income *= 0.6;
+        }
 
         player.troops = (safe_troops + income).min(player.max_troops);
 
@@ -136,7 +143,7 @@ mod tests {
         let s_half = low.sqrt();
         let s_quarter = s_half.sqrt();
         let s_75 = s_half * s_quarter;
-        let raw_income = cfg.troop_base_income + (s_75 / 4.6);
+        let raw_income = cfg.troop_base_income + (s_75 / 4.0);
         let ratio = 1.0 - (low / p.max_troops).min(1.0);
         let uncapped = raw_income
             * ratio

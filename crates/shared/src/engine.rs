@@ -1,7 +1,7 @@
 use crate::game::GameState;
 use crate::execution::AttackExecution;
 use crate::warp_fleet::WarpFleet;
-use crate::building::Building;
+use crate::building::{Building, BuildingGrid};
 use crate::pathfinding::WaterPathfinderScratch;
 use crate::water_components::WaterComponents;
 
@@ -24,6 +24,7 @@ pub struct DarkRiftEngine {
     pub path_scratch: WaterPathfinderScratch,
     pub placement_scratch: PlacementScratch,
     pub defense_grid: crate::building::DefenseGrid,
+    pub building_grid: BuildingGrid,
 }
 
 impl DarkRiftEngine {
@@ -37,13 +38,25 @@ impl DarkRiftEngine {
             path_scratch: WaterPathfinderScratch::default(),
             placement_scratch: PlacementScratch::default(),
             defense_grid: crate::building::DefenseGrid::default(),
+            building_grid: BuildingGrid::default(),
         }
+    }
+
+    /// Rebuilds [`BuildingGrid`] when dirty or first use (`grid_w == 0`).
+    pub fn refresh_building_grid(&mut self) {
+        if !self.building_grid.dirty && self.building_grid.grid_w > 0 {
+            return;
+        }
+        let w = self.state.map.width;
+        let h = self.state.map.height;
+        self.building_grid.rebuild(self.buildings.iter(), w, h);
     }
 
     #[inline]
     pub fn add_building(&mut self, b: Building) {
         let pos = self.buildings.partition_point(|x| x.id < b.id);
         self.buildings.insert(pos, b);
+        self.building_grid.mark_dirty();
     }
 
     #[inline]

@@ -1,7 +1,7 @@
 use crate::engine::DarkRiftEngine;
 use crate::game::BuildingKind;
 use crate::protocol::{GameplayIntent, StampedIntent, AttackIntent};
-use crate::building::{existing_structure_positions_with_width, structure_kind_enabled, structure_build_cost_gold, resolve_structure_spawn_tile};
+use crate::building::{aggregate_buildings_per_player, structure_kind_enabled, structure_build_cost_gold, resolve_structure_spawn_tile};
 use crate::rng::{NextIntExt, WyRand, SeedableRng};
 fn bot_structure_target_count(
     kind: BuildingKind,
@@ -81,10 +81,11 @@ pub fn execute_bot_think(&mut self) {
         return;
     }
 
-    let mut structure_positions = Vec::new();
+    let max_pid = self.state.players.iter().map(|p| p.id as usize).max().unwrap_or(0);
+    let aggs = aggregate_buildings_per_player(self.buildings.iter().copied(), max_pid);
+
     if any_structures {
-        structure_positions =
-            existing_structure_positions_with_width(self.buildings.iter(), self.state.map.width, None);
+        self.refresh_building_grid();
     }
     let mut decisions: Vec<BotDecision> = Vec::new();
 
@@ -99,11 +100,9 @@ pub fn execute_bot_think(&mut self) {
             let Some(player) = self.state.player(bot_id) else {
                 continue;
             };
-            let city_count = self.buildings
-                .iter()
-                .filter(|b| b.owner_id == bot_id && b.kind == BuildingKind::City && !b.under_construction)
-                .count() as u32;
-            let city_equivalent = city_count.max((player.tile_count / 2000).max(1));
+            let agg = aggs.get(bot_id as usize).copied().unwrap_or_default();
+            let city_equivalent =
+                agg.ready_city_count.max((player.tile_count / 2000).max(1));
             let build_order = [
                 BuildingKind::DefensePost,
                 BuildingKind::Port,
@@ -116,10 +115,7 @@ pub fn execute_bot_think(&mut self) {
                 if !structure_kind_enabled(kind) {
                     continue;
                 }
-                let owned = self.buildings
-                    .iter()
-                    .filter(|b| b.owner_id == bot_id && b.kind == kind && !b.under_construction)
-                    .count() as u32;
+                let owned = agg.total_structures_of_kind(kind);
                 let target_count =
                     bot_structure_target_count(kind, city_equivalent, config.bot_difficulty);
                 if kind == BuildingKind::MissileSilo && owned >= 3 {
@@ -136,17 +132,13 @@ pub fn execute_bot_think(&mut self) {
                     continue;
                 }
 
-                // PERF: resolve_structure_spawn_tile allocates vec![false; map_area]
-                // internally (BFS visited array). On a 2000x1200 map that's 2.4MB per call.
-                // With 400 bots × 6 kinds × 256 attempts = OOM / freeze.
-                // Fix: try exactly ONE random border tile. If it fails, wait until next tick.
                 let border_len = bot_now.border_tiles.count_ones();
                 if border_len > 0 {
                     let pick = bot_now.bot_rng.next_int(0, border_len as i32) as usize;
                     let raw_idx = bot_now.border_tiles.ones().nth(pick).unwrap();
                     let (bx, by) = (raw_idx % map_w, raw_idx / map_w);
                     let idx = by * map_w + bx;
-                    if resolve_structure_spawn_tile(&self.state.map, bot_id, kind, idx, &structure_positions, &mut self.placement_scratch).is_some() {
+                    if resolve_structure_spawn_tile(&self.state.map, bot_id, kind, idx, &self.building_grid, &mut self.placement_scratch).is_some() {
                         tile_choice = Some(idx);
                     }
                 }

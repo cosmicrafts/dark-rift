@@ -1,6 +1,6 @@
 use crate::game::{BuildingKind, GameEvent, GamePhase};
 use crate::engine::DarkRiftEngine;
-use crate::building::{Building, resolve_structure_spawn_tile, structure_build_cost_gold, existing_structure_positions_with_width, structure_kind_enabled};
+use crate::building::{Building, resolve_structure_spawn_tile, structure_build_cost_gold, structure_kind_enabled};
 
 
 impl DarkRiftEngine {
@@ -28,9 +28,9 @@ pub(super) fn apply_build_structure_intent(
         return;
     }
     
-    let positions = existing_structure_positions_with_width(self.buildings.iter(), w, None);
+    self.refresh_building_grid();
     let Some(spawn_idx) =
-        resolve_structure_spawn_tile(&self.state.map, player_id, kind, target_tile, &positions, &mut self.placement_scratch)
+        resolve_structure_spawn_tile(&self.state.map, player_id, kind, target_tile, &self.building_grid, &mut self.placement_scratch)
     else {
         bevy::log::warn!(
             "apply_build_structure: no valid spawn for {:?} at tile {}",

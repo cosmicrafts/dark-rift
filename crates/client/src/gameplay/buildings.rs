@@ -28,7 +28,7 @@ pub fn building_kind_icon_path(kind: BuildingKind) -> &'static str {
 
 pub fn system_sync_structure_ghost(
     mut commands: Commands,
-    engine_opt: Option<Res<DarkRiftEngine>>,
+    mut engine_opt: Option<ResMut<DarkRiftEngine>>,
     my_id: Res<MyPlayerId>,
     mode: Res<BuildStructureMode>,
     hovered: Res<HoveredTile>,
@@ -46,7 +46,7 @@ pub fn system_sync_structure_ghost(
         }
     };
 
-    let Some(engine) = engine_opt.as_deref() else {
+    let Some(engine) = engine_opt.as_mut() else {
         despawn_all(&mut commands, &mut ghost_parts);
         return;
     };
@@ -68,10 +68,6 @@ pub fn system_sync_structure_ghost(
         despawn_all(&mut commands, &mut ghost_parts);
         return;
     }
-    let Some(player) = engine.state.player(pid) else {
-        despawn_all(&mut commands, &mut ghost_parts);
-        return;
-    };
 
     let w = engine.state.map.width;
     let mh = engine.state.map.height;
@@ -81,8 +77,13 @@ pub fn system_sync_structure_ghost(
         return;
     }
 
+    engine.refresh_building_grid();
+    let Some(player) = engine.state.player(pid) else {
+        despawn_all(&mut commands, &mut ghost_parts);
+        return;
+    };
+
     let snapshot = &engine.buildings;
-    let positions = existing_structure_positions_with_width(snapshot.iter(), w, None);
     let cost = structure_build_cost_gold(kind, pid, snapshot);
     let afford = player.gold >= cost && cost.is_finite();
 
@@ -107,7 +108,7 @@ pub fn system_sync_structure_ghost(
             };
             (ti, GhostKind::Upgrade, afford)
         } else if let Some(spawn) =
-            resolve_structure_spawn_tile(&engine.state.map, pid, kind, click_idx, &positions, &mut *scratch)
+            resolve_structure_spawn_tile(&engine.state.map, pid, kind, click_idx, &engine.building_grid, &mut *scratch)
         {
             (spawn, GhostKind::Place, afford)
         } else {

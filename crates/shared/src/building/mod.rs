@@ -36,8 +36,9 @@ mod tests {
     #[test]
     fn valid_land_center_click() {
         let (map, owner) = tiny_owned_map();
-        let existing: Vec<(u32, u32)> = Vec::new();
-        let v = valid_land_structure_indices(&map, owner, 2, &existing);
+        let grid = BuildingGrid::rebuild_empty(map.width, map.height);
+        let mut scratch = crate::engine::PlacementScratch::default();
+        let v = valid_land_structure_indices(&map, owner, 2, &grid, &mut scratch);
         assert!(v.contains(&2));
     }
 
@@ -53,8 +54,10 @@ mod tests {
         }
         let click = 16u32;
         // Structure one tile away from click: click tile is excluded (too close).
-        let existing = vec![(15u32, 0u32)];
-        let v = valid_land_structure_indices(&m, owner, click, &existing);
+        let mut grid = BuildingGrid::default();
+        grid.rebuild_from_pairs(w, 1, &[(15u32, 0u32)]);
+        let mut scratch = crate::engine::PlacementScratch::default();
+        let v = valid_land_structure_indices(&m, owner, click, &grid, &mut scratch);
         assert!(!v.contains(&15));
         assert!(!v.is_empty());
     }
@@ -62,7 +65,9 @@ mod tests {
     #[test]
     fn port_picks_shore_in_valid_set() {
         let (map, owner) = tiny_owned_map();
-        let valid = valid_land_structure_indices(&map, owner, 2, &[]);
+        let grid = BuildingGrid::rebuild_empty(map.width, map.height);
+        let mut scratch = crate::engine::PlacementScratch::default();
+        let valid = valid_land_structure_indices(&map, owner, 2, &grid, &mut scratch);
         let p = resolve_port_spawn_tile(&map, owner, 2, &valid);
         assert!(p.is_some());
         let (x, y) = idx_xy(p.unwrap(), map.width);
@@ -177,13 +182,15 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(ready_ids, vec![1, 2]);
+        assert_eq!(ready_ids, vec![2, 1]);
     }
 
     #[test]
     fn compute_buildables_disables_when_too_poor() {
         let (map, owner) = tiny_owned_map();
-        let rows = compute_buildables_for_player(&map, owner, 0.0, &[]);
+        let grid = BuildingGrid::rebuild_empty(map.width, map.height);
+        let mut scratch = crate::engine::PlacementScratch::default();
+        let rows = compute_buildables_for_player(&map, owner, 0.0, &[], &grid, &mut scratch);
         for e in rows {
             assert!(!e.can_build, "{:?}", e.kind);
         }
@@ -200,7 +207,9 @@ mod tests {
             // Land but no shoreline bit — cannot place Port.
             m.terrain[ri] = MapTile::from_byte(0b1000_0000);
         }
-        let rows = compute_buildables_for_player(&m, owner, 50_000.0, &[]);
+        let grid = BuildingGrid::rebuild_empty(m.width, m.height);
+        let mut scratch = crate::engine::PlacementScratch::default();
+        let rows = compute_buildables_for_player(&m, owner, 50_000.0, &[], &grid, &mut scratch);
         let port = rows.iter().find(|e| e.kind == BuildingKind::Port).unwrap();
         assert!(!port.can_build);
     }
@@ -229,6 +238,8 @@ mod tests {
         ];
         let aggs = aggregate_buildings_per_player(b.into_iter(), 2);
         assert_eq!(aggs[1].city_levels, 2);
+        assert_eq!(aggs[1].count_city, 2);
+        assert_eq!(aggs[1].ready_city_count, 1);
     }
 
     #[test]
@@ -295,7 +306,9 @@ mod tests {
     #[test]
     fn missile_structures_disabled_in_buildables_when_feature_off() {
         let (map, owner) = tiny_owned_map();
-        let rows = compute_buildables_for_player(&map, owner, 1_000_000.0, &[]);
+        let grid = BuildingGrid::rebuild_empty(map.width, map.height);
+        let mut scratch = crate::engine::PlacementScratch::default();
+        let rows = compute_buildables_for_player(&map, owner, 1_000_000.0, &[], &grid, &mut scratch);
         let sam = rows
             .iter()
             .find(|e| e.kind == BuildingKind::SamLauncher)

@@ -11,7 +11,8 @@ pub fn player_has_valid_placement_sampled(
     map: &GameMap,
     owner_id: u16,
     kind: BuildingKind,
-    buildings: &[Building],
+    grid: &super::core::BuildingGrid,
+    scratch: &mut crate::engine::PlacementScratch,
     max_samples: usize,
 ) -> bool {
     let w = map.width;
@@ -19,8 +20,6 @@ pub fn player_has_valid_placement_sampled(
     if area == 0 {
         return false;
     }
-    let positions = existing_structure_positions_with_width(buildings.iter(), w, None);
-    let mut scratch = crate::engine::PlacementScratch::default();
     let n = area.min(max_samples.max(1));
     let divisor = n.max(1);
     for k in 0..n {
@@ -29,7 +28,7 @@ pub fn player_has_valid_placement_sampled(
         if map.owner_id(x, y) != owner_id {
             continue;
         }
-        if resolve_structure_spawn_tile(map, owner_id, kind, idx, &positions, &mut scratch).is_some() {
+        if resolve_structure_spawn_tile(map, owner_id, kind, idx, grid, scratch).is_some() {
             return true;
         }
     }
@@ -41,9 +40,10 @@ pub fn player_has_valid_placement_scan(
     map: &GameMap,
     owner_id: u16,
     kind: BuildingKind,
-    buildings: &[Building],
+    grid: &super::core::BuildingGrid,
+    scratch: &mut crate::engine::PlacementScratch,
 ) -> bool {
-    player_has_valid_placement_sampled(map, owner_id, kind, buildings, usize::MAX)
+    player_has_valid_placement_sampled(map, owner_id, kind, grid, scratch, usize::MAX)
 }
 #[derive(Clone, Copy, Debug)]
 pub struct BuildableEntry {
@@ -85,6 +85,8 @@ pub fn compute_buildables_for_player(
     owner_id: u16,
     player_gold: f64,
     buildings: &[Building],
+    grid: &super::core::BuildingGrid,
+    scratch: &mut crate::engine::PlacementScratch,
 ) -> [BuildableEntry; 6] {
     let mut out = [BuildableEntry {
         kind: BuildingKind::City,
@@ -101,7 +103,7 @@ pub fn compute_buildables_for_player(
         let level_total = count_kind_levels(buildings, owner_id, kind);
         let count = count_kind(buildings, owner_id, kind);
         let placement_feasible =
-            player_has_valid_placement_sampled(map, owner_id, kind, buildings, PLACEMENT_HUD_MAX_SAMPLES);
+            player_has_valid_placement_sampled(map, owner_id, kind, grid, scratch, PLACEMENT_HUD_MAX_SAMPLES);
         let can_build = enabled && player_gold >= cost && cost.is_finite() && placement_feasible;
         let can_upgrade = player_can_upgrade_kind(buildings, owner_id, kind, player_gold);
         out[i] = BuildableEntry {

@@ -4,7 +4,6 @@ use dark_rift_shared::engine::DarkRiftEngine;
 
 use dark_rift_shared::building::{
     find_upgrade_target_id, resolve_structure_spawn_tile, structure_build_cost_gold,
-    existing_structure_positions_with_width,
 };
 use dark_rift_shared::protocol::{ClientGameplayMessage, GameplayIntent, AttackIntent};
 use lightyear::prelude::MessageSender;
@@ -150,7 +149,7 @@ pub fn system_force_boat_key(
 
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct ClickCtx<'w> {
-    pub engine_opt: Option<Res<'w, DarkRiftEngine>>,
+    pub engine_opt: Option<ResMut<'w, DarkRiftEngine>>,
     pub my_id: Res<'w, MyPlayerId>,
     pub attack_ratio: Res<'w, AttackRatio>,
     pub components: Option<Res<'w, WaterComponents>>,
@@ -199,7 +198,7 @@ pub fn player_click(
         return;
     }
 
-    let Some(engine) = ctx.engine_opt.as_deref() else { return };
+    let Some(engine) = ctx.engine_opt.as_mut() else { return };
     let target = hovered.0.or_else(|| {
         let viewport = touch_gesture.last_touch_pos?;
         let (camera, cam_t) = q_camera.single().ok()?;
@@ -215,8 +214,10 @@ pub fn player_click(
     let Some((x, y)) = target else { return };
 
     let pid = ctx.my_id.0;
-    let Some(player) = engine.state.player(pid) else { return };
-    if !player.alive {
+    let Some(player_alive) = engine.state.player(pid).map(|p| p.alive) else {
+        return;
+    };
+    if !player_alive {
         return;
     }
 
@@ -231,14 +232,13 @@ pub fn player_click(
         if let Some(kind) = build_mode.0 {
             let place_release = left_mouse_release || touch_release;
             if place_release {
-                let snapshot = engine.buildings.clone();
-                let positions =
-                    existing_structure_positions_with_width(snapshot.iter(), map_w, None);
+                engine.refresh_building_grid();
                 if let Some(bid) =
-                    find_upgrade_target_id(&engine.state.map, pid, kind, target_tile, &snapshot)
+                    find_upgrade_target_id(&engine.state.map, pid, kind, target_tile, &engine.buildings)
                 {
-                    let cost = structure_build_cost_gold(kind, pid, &snapshot);
-                    if player.gold >= cost && cost.is_finite() {
+                    let cost = structure_build_cost_gold(kind, pid, &engine.buildings);
+                    let gold = engine.state.player(pid).unwrap().gold;
+                    if gold >= cost && cost.is_finite() {
                         send_gameplay_intent(
                             GameplayIntent::UpgradeStructure { building_id: bid },
                             pid,
@@ -248,12 +248,21 @@ pub fn player_click(
                     }
                     return;
                 }
-                let mut scratch = dark_rift_shared::engine::PlacementScratch::default();
-                if resolve_structure_spawn_tile(&engine.state.map, pid, kind, target_tile, &positions, &mut scratch)
-                    .is_some()
-                {
-                    let cost = structure_build_cost_gold(kind, pid, &snapshot);
-                    if player.gold >= cost && cost.is_finite() {
+                // Local scratch: avoid overlapping `&engine.state.map` and `&mut engine.placement_scratch` borrows.
+                let mut click_scratch = dark_rift_shared::engine::PlacementScratch::default();
+                let placed = resolve_structure_spawn_tile(
+                    &engine.state.map,
+                    pid,
+                    kind,
+                    target_tile,
+                    &engine.building_grid,
+                    &mut click_scratch,
+                )
+                .is_some();
+                if placed {
+                    let cost = structure_build_cost_gold(kind, pid, &engine.buildings);
+                    let gold = engine.state.player(pid).unwrap().gold;
+                    if gold >= cost && cost.is_finite() {
                         send_gameplay_intent(
                             GameplayIntent::BuildStructure {
                                 kind,
@@ -271,6 +280,8 @@ pub fn player_click(
         }
         return;
     }
+
+    let Some(player) = engine.state.player(pid) else { return };
 
     if player.troops < settings.config.gameplay.attack_cost_neutral {
         return;
