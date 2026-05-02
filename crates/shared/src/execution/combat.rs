@@ -13,12 +13,12 @@ impl DarkRiftEngine {
             return;
         }
 
-        self.buildings.sort_by_key(|b| b.id); // Poka-Yoke: MUST be strictly sorted for determinism
+        // Poka-Yoke: Collections are now strictly maintained sorted on insertion.
         let map_w = self.state.map.width;
         let map_h = self.state.map.height;
 
         let tick_now = self.state.tick;
-        self.attacks.sort_by_key(|a| a.id);
+        // attacks are sorted on insertion
 
         let mut to_remove = Vec::new();
 
@@ -221,7 +221,7 @@ pub fn execute_fleets(&mut self) {
         return;
     }
 
-    self.fleets.sort_by_key(|w| w.id);
+    // fleets are sorted on insertion
     let mut to_remove = Vec::new();
 
     for i in 0..self.fleets.len() {
@@ -307,25 +307,24 @@ pub fn execute_fleets(&mut self) {
         }
 
         let prev_owner = owner_here;
-        self.state.set_tile_owner(lx, ly, fleet.owner_id);
+        let f_owner = fleet.owner_id;
+        let f_troops = fleet.troops;
+        let f_id = fleet.id;
+        
+        self.state.set_tile_owner(lx, ly, f_owner);
         self.state.events.push(GameEvent::TileCaptured {
             x: lx,
             y: ly,
-            new_owner: fleet.owner_id,
+            new_owner: f_owner,
         });
 
-        // We can't call spawn_or_merge_attack_for_fleet_arrival directly here yet because it takes Commands/Query.
-        // We will refactor spawn_or_merge_attack_for_fleet_arrival in Step 7.
-        // For now, we will call it by passing the lists manually, but we need to change its signature first.
-        // Since we are refactoring intents soon, let's inline a quick shim here or wait until step 7?
-        // Actually, let's just use the refactored version:
+        // Drop mutable borrow of self.fleets before calling method on self
         crate::intent::spawn_or_merge_attack_for_fleet_arrival_pure(
-            &mut self.state,
-            &mut self.attacks,
-            fleet.owner_id,
+            self,
+            f_owner,
             prev_owner,
-            fleet.troops,
-            fleet.id,
+            f_troops,
+            f_id,
         );
         to_remove.push(i);
     }

@@ -10,35 +10,27 @@ use crate::rng::NextIntExt;
 use crate::map::TerrainType;
 pub fn merge_frontiers(
     mut a: BinaryHeap<PrioritizedTile>,
-    mut b: BinaryHeap<PrioritizedTile>,
+    b: BinaryHeap<PrioritizedTile>,
 ) -> BinaryHeap<PrioritizedTile> {
-    let mut all: Vec<PrioritizedTile> = Vec::with_capacity(a.len() + b.len());
-    all.extend(a.drain());
-    all.extend(b.drain());
-
-    // Primary key: spatial coordinate.
-    // Secondary: keep the *best* tile (lowest priority, then lowest insert_seq).
-    all.sort_by(|a, b| {
-        (a.x, a.y)
-            .cmp(&(b.x, b.y))
-            .then_with(|| a.priority.cmp(&b.priority))
-            .then_with(|| a.insert_seq.cmp(&b.insert_seq))
-    });
-    all.dedup_by_key(|t| (t.x, t.y));
-
-    BinaryHeap::from(all)
+    if a.capacity() < b.len() {
+        a.reserve(b.len());
+    }
+    a.extend(b);
+    a
 }
 
 pub fn build_attack_frontier(
     game: &GameState,
     player_id: u16,
     target_owner: u16,
-    border_tiles: &[(u32, u32)],
+    border_tiles: &crate::bitset::DenseBitSet,
     rng: &mut WyRand,
     insert_seq_counter: &mut u32,
 ) -> BinaryHeap<PrioritizedTile> {
     let mut to_conquer = BinaryHeap::new();
-    for (bx, by) in border_tiles.iter().copied() {
+    let map_w = game.map.width;
+    for raw_idx in border_tiles.ones() {
+        let (bx, by) = (raw_idx % map_w, raw_idx / map_w);
         game.map.for_each_neighbor(bx, by, |nx, ny| {
             if game.map.owner_id(nx, ny) != target_owner {
                 return;
@@ -77,49 +69,47 @@ pub fn build_attack_frontier(
 }
 
 pub fn spawn_or_merge_attack_for_fleet_arrival_pure(
-    game: &mut GameState,
-    attacks: &mut Vec<AttackExecution>,
+    engine: &mut DarkRiftEngine,
     owner_id: u16,
     target_owner: u16,
     troops: f64,
     fleet_id: u64,
 ) {
-    if troops < game.config.attack_cost_neutral || !troops.is_finite() {
-        if let Some(p) = game.player_mut(owner_id) {
+    if troops < engine.state.config.attack_cost_neutral || !troops.is_finite() {
+        if let Some(p) = engine.state.player_mut(owner_id) {
             p.troops = (p.troops + troops.max(0.0)).min(p.max_troops);
         }
         return;
     }
 
-    let exec_seed = game
+    let exec_seed = engine.state
         .seed
-        .wrapping_add(game.tick)
+        .wrapping_add(engine.state.tick)
         .wrapping_add(fleet_id)
         .wrapping_add(0xB04F_0000);
     let mut rng = WyRand::seed_from_u64(exec_seed);
     let mut initial_seq = 0u32;
-    let Some(player) = game.player(owner_id) else {
+    let Some(player) = engine.state.player(owner_id) else {
         return;
     };
-    let border_tiles: Vec<_> = player.border_coords(game.map.width).collect();
     let fresh = build_attack_frontier(
-        game,
+        &engine.state,
         owner_id,
         target_owner,
-        &border_tiles,
+        &player.border_tiles,
         &mut rng,
         &mut initial_seq,
     );
 
     if fresh.is_empty() {
-        if let Some(p) = game.player_mut(owner_id) {
+        if let Some(p) = engine.state.player_mut(owner_id) {
             p.troops = (p.troops + troops).min(p.max_troops);
         }
         return;
     }
 
     let mut merge_idx = None;
-    for (i, ex) in attacks.iter().enumerate() {
+    for (i, ex) in engine.attacks.iter().enumerate() {
         if ex.owner_id == owner_id && ex.target_owner == target_owner && !ex.retreating {
             merge_idx = Some(i);
             break;
@@ -127,7 +117,7 @@ pub fn spawn_or_merge_attack_for_fleet_arrival_pure(
     }
 
     if let Some(i) = merge_idx {
-        let ex = &mut attacks[i];
+        let ex = &mut engine.attacks[i];
         ex.troops += troops;
         ex.initial_troops += troops;
         let merged = merge_frontiers(std::mem::take(&mut ex.to_conquer), fresh);
@@ -135,10 +125,10 @@ pub fn spawn_or_merge_attack_for_fleet_arrival_pure(
         return;
     }
 
-    let exec_id = game.next_attack_id;
-    game.next_attack_id = game.next_attack_id.wrapping_add(1).max(1);
+    let exec_id = engine.state.next_attack_id;
+    engine.state.next_attack_id = engine.state.next_attack_id.wrapping_add(1).max(1);
 
-    attacks.push(AttackExecution {
+    engine.add_attack(AttackExecution {
         id: exec_id,
         owner_id,
         target_owner,
@@ -239,12 +229,12 @@ pub(super) fn apply_attack_intent(
             .wrapping_add(intent_index as u64),
     );
     let mut initial_seq = 0;
-    let border_tiles: Vec<_> = self.state.player(player_id).unwrap().border_coords(self.state.map.width).collect();
+    let player = self.state.player(player_id).unwrap();
     let fresh = build_attack_frontier(
         &self.state,
         player_id,
         target_owner,
-        &border_tiles,
+        &player.border_tiles,
         &mut rng,
         &mut initial_seq,
     );
@@ -276,7 +266,7 @@ pub(super) fn apply_attack_intent(
 
     let exec_id = self.state.next_attack_id;
     self.state.next_attack_id = self.state.next_attack_id.wrapping_add(1).max(1);
-    self.attacks.push(AttackExecution {
+    self.add_attack(AttackExecution {
         id: exec_id,
         owner_id: player_id,
         target_owner,

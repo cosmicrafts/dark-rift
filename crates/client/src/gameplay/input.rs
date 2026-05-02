@@ -248,7 +248,8 @@ pub fn player_click(
                     }
                     return;
                 }
-                if resolve_structure_spawn_tile(&engine.state.map, pid, kind, target_tile, &positions)
+                let mut scratch = dark_rift_shared::engine::PlacementScratch::default();
+                if resolve_structure_spawn_tile(&engine.state.map, pid, kind, target_tile, &positions, &mut scratch)
                     .is_some()
                 {
                     let cost = structure_build_cost_gold(kind, pid, &snapshot);

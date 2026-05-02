@@ -97,7 +97,7 @@ pub(super) fn apply_launch_fleet_intent(
     let fid = self.state.next_fleet_id;
     self.state.next_fleet_id = self.state.next_fleet_id.wrapping_add(1).max(1);
 
-    self.fleets.push(WarpFleet::new(
+    self.add_fleet(WarpFleet::new(
         fid,
         player_id,
         target_owner,

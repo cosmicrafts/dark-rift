@@ -81,13 +81,10 @@ pub fn execute_bot_think(&mut self) {
         return;
     }
 
-    let mut buildings_snapshot: Vec<Building> = Vec::new();
     let mut structure_positions = Vec::new();
     if any_structures {
-        buildings_snapshot = self.buildings.clone();
-        buildings_snapshot.sort_unstable_by_key(|b| b.id);
         structure_positions =
-            existing_structure_positions_with_width(buildings_snapshot.iter(), self.state.map.width, None);
+            existing_structure_positions_with_width(self.buildings.iter(), self.state.map.width, None);
     }
     let mut decisions: Vec<BotDecision> = Vec::new();
 
@@ -102,7 +99,7 @@ pub fn execute_bot_think(&mut self) {
             let Some(player) = self.state.player(bot_id) else {
                 continue;
             };
-            let city_count = buildings_snapshot
+            let city_count = self.buildings
                 .iter()
                 .filter(|b| b.owner_id == bot_id && b.kind == BuildingKind::City && !b.under_construction)
                 .count() as u32;
@@ -119,7 +116,7 @@ pub fn execute_bot_think(&mut self) {
                 if !structure_kind_enabled(kind) {
                     continue;
                 }
-                let owned = buildings_snapshot
+                let owned = self.buildings
                     .iter()
                     .filter(|b| b.owner_id == bot_id && b.kind == kind && !b.under_construction)
                     .count() as u32;
@@ -131,7 +128,7 @@ pub fn execute_bot_think(&mut self) {
                 if owned >= target_count {
                     continue;
                 }
-                let cost = structure_build_cost_gold(kind, bot_id, &buildings_snapshot);
+                let cost = structure_build_cost_gold(kind, bot_id, &self.buildings);
                 let mut tile_choice: Option<u32> = None;
                 let map_w = self.state.map.width;
                 let Some(bot_now) = self.state.player_mut(bot_id) else { continue; };
@@ -149,7 +146,7 @@ pub fn execute_bot_think(&mut self) {
                     let raw_idx = bot_now.border_tiles.ones().nth(pick).unwrap();
                     let (bx, by) = (raw_idx % map_w, raw_idx / map_w);
                     let idx = by * map_w + bx;
-                    if resolve_structure_spawn_tile(&self.state.map, bot_id, kind, idx, &structure_positions).is_some() {
+                    if resolve_structure_spawn_tile(&self.state.map, bot_id, kind, idx, &structure_positions, &mut self.placement_scratch).is_some() {
                         tile_choice = Some(idx);
                     }
                 }

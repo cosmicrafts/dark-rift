@@ -20,6 +20,7 @@ pub fn player_has_valid_placement_sampled(
         return false;
     }
     let positions = existing_structure_positions_with_width(buildings.iter(), w, None);
+    let mut scratch = crate::engine::PlacementScratch::default();
     let n = area.min(max_samples.max(1));
     let divisor = n.max(1);
     for k in 0..n {
@@ -28,7 +29,7 @@ pub fn player_has_valid_placement_sampled(
         if map.owner_id(x, y) != owner_id {
             continue;
         }
-        if resolve_structure_spawn_tile(map, owner_id, kind, idx, &positions).is_some() {
+        if resolve_structure_spawn_tile(map, owner_id, kind, idx, &positions, &mut scratch).is_some() {
             return true;
         }
     }

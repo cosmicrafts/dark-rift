@@ -14,6 +14,7 @@ pub enum GamePhase {
 
 /// OpenFront structure types (mirrors `Structures` in OpenFront `Game.ts`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u8)]
 pub enum BuildingKind {
     City,
     Factory,

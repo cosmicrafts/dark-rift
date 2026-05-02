@@ -30,7 +30,7 @@ pub(super) fn apply_build_structure_intent(
     
     let positions = existing_structure_positions_with_width(self.buildings.iter(), w, None);
     let Some(spawn_idx) =
-        resolve_structure_spawn_tile(&self.state.map, player_id, kind, target_tile, &positions)
+        resolve_structure_spawn_tile(&self.state.map, player_id, kind, target_tile, &positions, &mut self.placement_scratch)
     else {
         bevy::log::warn!(
             "apply_build_structure: no valid spawn for {:?} at tile {}",
@@ -52,7 +52,7 @@ pub(super) fn apply_build_structure_intent(
     let dur = kind.construction_duration_ticks();
     let under = dur > 0;
     let ticks = if under { dur } else { 0 };
-    self.buildings.push(Building {
+    self.add_building(Building {
         id,
         owner_id: player_id,
         tile_idx: spawn_idx,
@@ -78,15 +78,10 @@ pub(super) fn apply_upgrade_structure_intent(
     if self.state.phase != GamePhase::Playing {
         return;
     }
-    let mut order: Vec<usize> = (0..self.buildings.len()).collect();
-    order.sort_by_key(|&idx| self.buildings[idx].id);
     let mut found: Option<(usize, BuildingKind, u32)> = None;
-    for &idx in &order {
+    if let Ok(idx) = self.buildings.binary_search_by_key(&building_id, |b| b.id) {
         let b = &self.buildings[idx];
-        if b.id != building_id {
-            continue;
-        }
-        
+        // ID matches since we used binary_search_by_key
         if b.owner_id != player_id {
             return;
         }
@@ -97,7 +92,6 @@ pub(super) fn apply_upgrade_structure_intent(
             return;
         }
         found = Some((idx, b.kind, b.tile_idx));
-        break;
     }
     let Some((idx, kind, tile_idx)) = found else {
         bevy::log::warn!("apply_upgrade_structure: id {} not found", building_id);

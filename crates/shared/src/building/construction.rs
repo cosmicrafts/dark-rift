@@ -8,7 +8,7 @@ impl DarkRiftEngine {
             return;
         }
 
-        self.buildings.sort_by_key(|b| b.id);
+        // buildings are maintained sorted by id on insertion.
 
         for b in &mut self.buildings {
             if !b.under_construction {

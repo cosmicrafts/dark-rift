@@ -51,6 +51,7 @@ pub fn valid_land_structure_indices(
     owner_id: u16,
     click_idx: u32,
     existing: &[(u32, u32)],
+    scratch: &mut crate::engine::PlacementScratch,
 ) -> Vec<u32> {
     let w = map.width;
     let (cx, cy) = idx_xy(click_idx, w);
@@ -65,16 +66,25 @@ pub fn valid_land_structure_indices(
     let cy_i = cy as i64;
     let h = map.height;
     let area = (w * h) as usize;
-    let mut visited = vec![false; area];
-    let mut queue: Vec<u32> = Vec::new();
-    visited[click_idx as usize] = true;
-    queue.push(click_idx);
+    if scratch.visited_stamp.len() < area {
+        scratch.visited_stamp.resize(area, 0);
+    }
+    scratch.stamp = scratch.stamp.wrapping_add(1);
+    if scratch.stamp == 0 {
+        scratch.visited_stamp.fill(0);
+        scratch.stamp = 1;
+    }
+    let stamp = scratch.stamp;
+    
+    scratch.queue.clear();
+    scratch.visited_stamp[click_idx as usize] = stamp;
+    scratch.queue.push(click_idx);
 
     let mut out: Vec<u32> = Vec::new();
 
     let mut qi = 0usize;
-    while qi < queue.len() {
-        let idx = queue[qi];
+    while qi < scratch.queue.len() {
+        let idx = scratch.queue[qi];
         qi += 1;
         let (x, y) = idx_xy(idx, w);
         let xi = x as i64;
@@ -102,7 +112,7 @@ pub fn valid_land_structure_indices(
 
         map.for_each_neighbor(x, y, |nx, ny| {
             let nidx = xy_idx(nx, ny, w) as usize;
-            if visited[nidx] {
+            if scratch.visited_stamp[nidx] == stamp {
                 return;
             }
             let nxi = nx as i64;
@@ -113,8 +123,8 @@ pub fn valid_land_structure_indices(
             if map.owner_id(nx, ny) != owner_id {
                 return;
             }
-            visited[nidx] = true;
-            queue.push(nidx as u32);
+            scratch.visited_stamp[nidx] = stamp;
+            scratch.queue.push(nidx as u32);
         });
     }
 
@@ -139,7 +149,6 @@ pub fn resolve_port_spawn_tile(
     let w = map.width;
     let h = map.height;
     let (cx, cy) = idx_xy(click_idx, w);
-    let valid_set: std::collections::HashSet<u32> = valid_land.iter().copied().collect();
 
     let mut candidates: Vec<u32> = Vec::new();
     let r = PORT_SPAWN_MANHATTAN;
@@ -174,7 +183,7 @@ pub fn resolve_port_spawn_tile(
 
     candidates
         .into_iter()
-        .find(|idx| valid_set.contains(idx))
+        .find(|idx| valid_land.binary_search(idx).is_ok())
 }
 
 /// Resolve final spawn tile index for `kind` at `click_idx`, or `None` if illegal.
@@ -184,6 +193,7 @@ pub fn resolve_structure_spawn_tile(
     kind: BuildingKind,
     click_idx: u32,
     existing: &[(u32, u32)],
+    scratch: &mut crate::engine::PlacementScratch,
 ) -> Option<u32> {
     let w = map.width;
     let h = map.height;
@@ -192,7 +202,7 @@ pub fn resolve_structure_spawn_tile(
         return None;
     }
 
-    let valid = valid_land_structure_indices(map, owner_id, click_idx, existing);
+    let valid = valid_land_structure_indices(map, owner_id, click_idx, existing, scratch);
     if valid.is_empty() {
         return None;
     }

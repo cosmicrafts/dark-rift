@@ -35,6 +35,7 @@ pub fn system_sync_structure_ghost(
     meshes: Option<Res<StructureMarkerMeshes>>,
     mut ghost_parts: ResMut<StructureGhostParts>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    mut scratch: Local<dark_rift_shared::engine::PlacementScratch>,
 ) {
     let despawn_all = |commands: &mut Commands, parts: &mut StructureGhostParts| {
         if let Some(e) = parts.marker.take() {
@@ -106,7 +107,7 @@ pub fn system_sync_structure_ghost(
             };
             (ti, GhostKind::Upgrade, afford)
         } else if let Some(spawn) =
-            resolve_structure_spawn_tile(&engine.state.map, pid, kind, click_idx, &positions)
+            resolve_structure_spawn_tile(&engine.state.map, pid, kind, click_idx, &positions, &mut *scratch)
         {
             (spawn, GhostKind::Place, afford)
         } else {
