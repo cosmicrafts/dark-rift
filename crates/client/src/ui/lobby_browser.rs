@@ -1146,7 +1146,7 @@ pub fn system_handle_coming_soon_click(
                     ComingSoonKind::Ranked => "RANKED MATCH",
                     ComingSoonKind::Secondary => "CREATE/JOIN (stub)",
                 };
-                info!("Menu action not implemented yet: {label}");
+                debug!("Menu action not implemented yet: {label}");
                 *bg = match kind {
                     ComingSoonKind::Ranked => accent_ranked_gold_pressed().into(),
                     ComingSoonKind::Secondary => Color::srgba(0.1, 0.11, 0.14, 1.0).into(),
@@ -1496,7 +1496,7 @@ pub fn system_handle_single_player_click(
         }
         match *interaction {
             Interaction::Pressed => {
-                info!("🎮 Iniciando Single Player...");
+                debug!("Iniciando Single Player...");
                 *bg = accent_solo_cyan_pressed().into();
                 anim.phase = LobbyMenuAnimPhase::Exiting;
                 anim.phase_time = 0.0;
@@ -1520,7 +1520,7 @@ pub fn system_handle_cancel_join(
             joined_lobby.0 = None;
             for mut sender in senders.iter_mut() {
                 let _ = sender.send::<dark_rift_shared::protocol::ReliableChannel>(ClientLeaveMessage);
-                info!("🚫 Cancelled join. Sending ClientLeaveMessage.");
+                debug!("Cancelled join; sending ClientLeaveMessage.");
             }
             anim.play_main_menu_intro_after_cancel = true;
         }
@@ -1533,7 +1533,7 @@ fn insert_mock_single_player_start(commands: &mut Commands, settings: &ClientSet
     if let Ok(content) = std::fs::read_to_string("assets/configs/default_single_player.ron") {
         if let Ok(parsed) = ron::from_str(&content) {
             config = parsed;
-            info!("✅ Loaded Single Player config from .ron template!");
+            debug!("Loaded Single Player config from .ron template");
         } else {
             warn!("⚠️ Failed to parse .ron template, using fallback defaults.");
         }
@@ -1740,7 +1740,7 @@ pub fn system_lobby_main_menu_anim(
                             target_lobby_id: Some(id),
                         };
                         let _ = sender.send::<ReliableChannel>(msg);
-                        info!("✅ Requested to join Lobby ID {} (after menu anim)", id);
+                        debug!("Requested to join lobby {} (after menu anim)", id);
                     }
                     joined.0 = Some(id);
                     apply_lobby_waiting_overlay_layout(&mut q);

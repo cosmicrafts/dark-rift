@@ -224,7 +224,6 @@ pub fn system_cleanup_ingame_entities(
     commands.remove_resource::<LocalIntentBuffer>();
     commands.remove_resource::<crate::ShaderMapData>();
     commands.remove_resource::<dark_rift_shared::water_components::WaterComponents>();
-    commands.remove_resource::<crate::DesyncTracker>();
     // Keep `CombatDockUiScale` present: shell/layout systems use `resource_changed::<CombatDockUiScale>` and must not panic when resource is missing after exit.
     commands.insert_resource(CombatDockUiScale::default());
     commands.remove_resource::<dark_rift_shared::game_config::GameConfig>();

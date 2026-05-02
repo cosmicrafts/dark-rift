@@ -5,26 +5,6 @@ use dark_rift_shared::player::Player;
 use dark_rift_shared::protocol::*;
 
 use crate::*;
-use std::collections::VecDeque;
-
-#[derive(Resource)]
-pub struct DesyncTracker {
-    pub log: VecDeque<TurnLogEntry>,
-}
-
-impl Default for DesyncTracker {
-    fn default() -> Self {
-        Self {
-            log: VecDeque::with_capacity(512),
-        }
-    }
-}
-
-pub struct TurnLogEntry {
-    pub tick: u64,
-    pub checksum: u64,
-    pub intents: Vec<dark_rift_shared::protocol::StampedIntent>,
-}
 
 pub fn start_game_core(
     msg:           ServerStartMessage,
@@ -37,10 +17,10 @@ pub fn start_game_core(
             let hud_s = clamp_ui_scale(params.settings.config.ui.combat_hud_scale);
 
             if let Some(pid) = msg.my_player_id {
-                info!("🎮 Game starting! I am player {}", pid);
+                debug!("Game starting (player {})", pid);
                 params.my_id.0 = pid;
             } else {
-                info!("👁  Game starting! I am an observer");
+                debug!("Game starting (observer)");
                 params.my_id.0 = 0;
             }
 
@@ -103,7 +83,6 @@ pub fn start_game_core(
             commands.insert_resource(engine);
             params.ready.0 = true;
             params.next_state.set(AppState::InGame);
-            commands.insert_resource(DesyncTracker::default());
 
             commands.insert_resource(CombatDockUiScale(hud_s));
             if let Some(s) = &params.shell {
@@ -128,26 +107,43 @@ pub fn start_game_core(
 
 pub fn catchup_fast_forward(world: &mut World) {
     let ready = world.resource::<GameReady>().0;
-    if !ready { return; }
-    
+    if !ready {
+        return;
+    }
+
+    let queue_len = world.resource::<TurnQueue>().0.len();
     let pending = world.resource::<PendingTicks>().0;
-    if pending == 0 { return; }
-    
-    let process_count = pending
-        .min(CLIENT_CATCHUP_MAX_TICKS_PER_FRAME as u32)
-        .max(1) as usize;
-    
+    if pending == 0 && queue_len == 0 {
+        return;
+    }
+
+    // Process up to `max(pending, queue)` ticks: fixes stuck queues when `pending` was decremented
+    // without a matching `pop_turn` (e.g. schedule chain ran `decrement_pending` while `pop_turn`
+    // did not run), and drains backlog when `pending` under-counted turns.
+    let work = (pending as usize).max(queue_len);
+    let process_count = work
+        .min(CLIENT_CATCHUP_MAX_TICKS_PER_FRAME)
+        .max(1);
+
+    // Fixed iteration count avoids repeated `World::resource` lookups per tick; `pop_turn` no-ops
+    // cheaply once queue and pending are drained.
     for _ in 0..process_count {
-        if world.resource::<PendingTicks>().0 == 0 { break; }
         let _ = world.try_run_schedule(SimulationSchedule);
     }
 }
 
+/// One simulation step: optionally applies the next queued turn, then consumes one pending tick slot
+/// when `PendingTicks > 0`. If `pending == 0` but the queue still has turns, applies turns until the
+/// queue is drained (recovers from pending/queue mismatch).
 pub fn pop_turn(
     mut engine: ResMut<DarkRiftEngine>,
     mut queue: ResMut<TurnQueue>,
-    mut desync_tracker: ResMut<DesyncTracker>,
+    mut pending: ResMut<PendingTicks>,
 ) {
+    if pending.0 == 0 && queue.0.is_empty() {
+        return;
+    }
+
     if let Some(turn) = queue.0.pop_front() {
         engine.apply_intents(&turn.intents);
         engine.execute_income();
@@ -156,23 +152,11 @@ pub fn pop_turn(
         engine.execute_combat();
         engine.execute_construction();
         engine.execute_tick();
-        
-        let checksum = engine.checksum();
-        
-        desync_tracker.log.push_back(TurnLogEntry {
-            tick: turn.turn_number,
-            checksum,
-            intents: turn.intents,
-        });
-
-        if desync_tracker.log.len() > 500 {
-            desync_tracker.log.pop_front();
-        }
     }
-}
 
-pub fn decrement_pending(mut pending: ResMut<PendingTicks>) {
-    pending.0 = pending.0.saturating_sub(1);
+    if pending.0 > 0 {
+        pending.0 -= 1;
+    }
 }
 
 pub fn system_single_player_tick(

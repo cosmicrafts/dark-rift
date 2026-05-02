@@ -5,8 +5,9 @@ use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 /// Matches wheel / pinch zoom clamp in [`camera_movement_and_zoom`].
 pub const CAMERA_MIN_SCALE: f32 = 0.1;
 pub const CAMERA_MAX_SCALE: f32 = 20.0;
-/// Five line-scroll zoom-out steps from max zoom-in: `CAMERA_MIN_SCALE * 1.1^5`.
-pub const CAMERA_START_SCALE: f32 = 0.161051;
+/// Match start zoom (tunable). Larger = further from terrain / more map visible; clamped to min/max.
+/// Previous default was `CAMERA_MIN_SCALE * 1.1^5` (~0.16); this is a bit wider.
+pub const CAMERA_START_SCALE: f32 = 0.35;
 
 /// Focus at world XY, fixed Z; orthographic scale set for a close default view when a match starts.
 pub fn reset_game_camera(transform: &mut Transform, projection: &mut Projection, focus: Vec2) {

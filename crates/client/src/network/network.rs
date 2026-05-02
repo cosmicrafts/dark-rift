@@ -74,16 +74,16 @@ pub fn setup_network(mut commands: Commands, cli: Res<Cli>) {
     commands.trigger(lightyear::prelude::client::Connect { entity: client_entity });
 
     #[cfg(target_arch = "wasm32")]
-    info!(
-        "🔌 Connecting (WASM): transport {} | netcode token {:?} (client_id={}, observer={})",
+    debug!(
+        "Connecting (WASM): transport {} | netcode {:?} (client_id={}, observer={})",
         WASM_MULTIPLAYER_WSS_URL,
         server_addr,
         client_id,
         cli.observer
     );
     #[cfg(not(target_arch = "wasm32"))]
-    info!(
-        "🔌 Connecting to ws://{}... (client_id={}, observer={})",
+    debug!(
+        "Connecting ws://{}... (client_id={}, observer={})",
         NATIVE_NETCODE_SOCKET,
         client_id,
         cli.observer
@@ -96,7 +96,7 @@ pub fn handle_connection(
 ) {
     for mut sender in client_q.iter_mut() {
         if cli.bot {
-            info!("🔌 Bot Connected to Transport. Automatically joining Lobby...");
+            debug!("Bot connected to transport; joining lobby...");
             let msg = ClientJoinMessage { 
                 name: format!("HydraBot-{}", rand_client_id() % 1000), 
                 is_observer: cli.observer, 
@@ -104,7 +104,7 @@ pub fn handle_connection(
             };
             let _ = sender.send::<ReliableChannel>(msg);
         } else {
-            info!("🔌 Connected to Transport. Presenting Lobby Browser...");
+            debug!("Connected to transport; lobby browser");
         }
     }
 }

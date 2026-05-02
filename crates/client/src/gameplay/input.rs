@@ -34,25 +34,6 @@ pub fn clear_inputs_on_focus_loss(
     }
 }
 
-pub fn system_dump_desync_tracker(
-    kb: Res<ButtonInput<KeyCode>>,
-    tracker: Option<Res<crate::gameplay::simulation::DesyncTracker>>,
-) {
-    if kb.just_pressed(KeyCode::F8) || kb.just_pressed(KeyCode::Backquote) || kb.just_pressed(KeyCode::Backslash) {
-        let Some(tracker) = tracker else { return };
-        bevy::log::warn!("============================================================");
-        bevy::log::warn!("DUMP TRIGGERED: DUMPING ROLLING DESYNC LOG (LAST {} TICKS)", tracker.log.len());
-        bevy::log::warn!("============================================================");
-        for entry in &tracker.log {
-            bevy::log::warn!(
-                "Tick: {:>6} | Checksum: {} | Intents: {:?}",
-                entry.tick, entry.checksum, entry.intents
-            );
-        }
-        bevy::log::warn!("============================================================");
-    }
-}
-
 pub fn hover_system(
     windows:     Query<&Window, With<bevy::window::PrimaryWindow>>,
     camera_q:    Query<(&Camera, &GlobalTransform), With<Camera2d>>,

@@ -89,7 +89,7 @@ pub fn system_headless_bot_engine(
         return;
     }
 
-    info!("🤖 Headless sent Attack -> Player {} (troops: {})", target_owner, p_send);
+    debug!("Headless bot attack -> player {} (troops: {})", target_owner, p_send);
     let _ = sender_mut.send::<ReliableChannel>(ClientGameplayMessage {
         intent: GameplayIntent::Attack(AttackIntent {
             target_owner,

@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 use bevy::ecs::schedule::common_conditions::resource_changed;
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
+use bevy::log::{Level, LogPlugin, DEFAULT_FILTER};
 use bevy_enoki::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::netcode::Key;
@@ -60,7 +61,7 @@ fn main() {
         let profile_str = std::fs::read_to_string(format!("assets/bots/{profile_path}.ron"))
             .unwrap_or_else(|_| String::from("(attack_interval_ticks: 240, trigger_ratio: 0.6, reserve_ratio: 0.3, expand_ratio: 0.15)"));
         let profile: dark_rift_shared::game_config::BotProfile = ron::from_str(&profile_str).expect("Failed to parse bot profile");
-        info!("🤖 Headless Bot initialized profile='{}' interval_ticks={}", profile_path, profile.attack_interval_ticks);
+        debug!("Headless bot profile='{}' interval_ticks={}", profile_path, profile.attack_interval_ticks);
 
         app.add_plugins(MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(
             std::time::Duration::from_secs_f64(1.0 / 60.0),
@@ -121,6 +122,12 @@ fn main() {
                     prevent_default_event_handling: false,
                     ..default()
                 }),
+                ..default()
+            })
+            // WARN base + `DEFAULT_FILTER` targets (wgpu, etc.); `RUST_LOG` overrides when set.
+            .set(LogPlugin {
+                level: Level::WARN,
+                filter: DEFAULT_FILTER.to_string(),
                 ..default()
             })
             // Disable AudioPlugin: no audio is used, and on WASM it crashes due to
@@ -318,7 +325,6 @@ fn main() {
         ).run_if(in_state(AppState::InGame)));
 
         app.add_systems(Update, (
-            system_dump_desync_tracker,
             system_home_button,
             update_hud
                 .run_if(
@@ -382,7 +388,6 @@ fn main() {
     sim_schedule.add_systems((
         pop_turn,
         system_headless_bot_engine.run_if(|cli: Res<Cli>| cli.bot),
-        decrement_pending,
     ).chain());
     app.add_schedule(sim_schedule);
 

@@ -11,8 +11,7 @@ Welcome to **Dark Rift**, the ECS-driven (Bevy + Lightyear) child of OpenFront.
   - `crates/shared/src/intent/mod.rs` (`combat.rs`, `fleet.rs`, `buildings.rs`, `bot.rs`)
   - `crates/shared/src/building/mod.rs` (`core.rs`, `placement.rs`, `cost.rs`, `construction.rs`, `upgrade.rs`, `hud.rs`)
 - Client lockstep schedule is chained in `crates/client/src/main.rs` under `SimulationSchedule`:
-  `pop_turn -> system_player_income -> system_bot_think -> system_warp_fleet_execution ->
-  system_attack_execution -> system_building_construction -> system_game_tick -> decrement_pending`.
+  `pop_turn` (applies queued `Turn`, advances `PendingTicks`) → optional `system_headless_bot_engine` when `--bot`.
 - Server remains turn-relay only; lobby lifecycle and bot roster injection are handled in
   `crates/server/src/lobby/mod.rs` when a lobby transitions to `Active`.
 

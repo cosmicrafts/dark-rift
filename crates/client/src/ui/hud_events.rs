@@ -89,6 +89,9 @@ pub fn system_update_event_feed(
 
     // New events
     let current_len = game.events.len();
+    if *last_event_idx > current_len {
+        *last_event_idx = 0;
+    }
     if *last_event_idx < current_len {
         let s = clamp_ui_scale(settings.config.ui.combat_hud_scale);
 

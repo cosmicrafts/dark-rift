@@ -143,6 +143,10 @@ pub fn handle_tile_change(
     }
 
     let current_len = engine.state.events.len();
+    // `Local` survives across matches — after a huge map, idx can exceed the new game's event log.
+    if *last_event_idx > current_len {
+        *last_event_idx = 0;
+    }
     if *last_event_idx < current_len {
         if let Some(board_img) = images.get_mut(&shader_map.board_data) {
             if let Some(ref mut data) = board_img.data {

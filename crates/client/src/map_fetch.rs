@@ -83,12 +83,12 @@ impl MapCache {
         {
             wasm_bindgen_futures::spawn_local(async move {
                 let url = format!("assets/maps/{}/map.bin", fetch_name);
-                bevy::log::info!("🗺️  [MapCache] Fetching map via HTTP: {}", url);
+                bevy::log::debug!("🗺️  [MapCache] Fetching map via HTTP: {}", url);
                 let res = gloo_net::http::Request::get(&url).send().await;
                 if let Ok(resp) = res {
                     if resp.ok() {
                         if let Ok(bytes) = resp.binary().await {
-                            bevy::log::info!("🗺️  [MapCache] Received {} bytes", bytes.len());
+                            bevy::log::debug!("🗺️  [MapCache] Received {} bytes", bytes.len());
                             let _ = tx.send(Some(bytes));
                             return;
                         }
@@ -109,24 +109,24 @@ impl MapCache {
                     ip.truncate(idx);
                 }
                 let url = format!("http://{}/assets/maps/{}/map.bin", ip, fetch_name);
-                bevy::log::info!("🗺️  [MapCache] Fetching map via HTTP: {}", url);
+                bevy::log::debug!("🗺️  [MapCache] Fetching map via HTTP: {}", url);
                 if let Ok(resp) = ureq::get(&url).call() {
                     let len = resp.header("Content-Length")
                         .and_then(|s| s.parse::<usize>().ok())
                         .unwrap_or(0);
                     let mut bytes: Vec<u8> = Vec::with_capacity(len);
                     if resp.into_reader().read_to_end(&mut bytes).is_ok() && !bytes.is_empty() {
-                        bevy::log::info!("🗺️  [MapCache] Received {} bytes from server", bytes.len());
+                        bevy::log::debug!("🗺️  [MapCache] Received {} bytes from server", bytes.len());
                         let _ = tx.send(Some(bytes));
                         return;
                     }
                 }
                 // HTTP failed — try local filesystem
-                bevy::log::info!("🗺️  [MapCache] HTTP failed, trying local filesystem for '{}'", fetch_name);
+                bevy::log::debug!("🗺️  [MapCache] HTTP failed, trying local filesystem for '{}'", fetch_name);
                 let bin_path = format!("assets/maps/{}/map.bin", fetch_name);
                 match std::fs::read(&bin_path) {
                     Ok(bytes) if !bytes.is_empty() => {
-                        bevy::log::info!("🗺️  [MapCache] Loaded {} bytes from local file", bytes.len());
+                        bevy::log::debug!("🗺️  [MapCache] Loaded {} bytes from local file", bytes.len());
                         let _ = tx.send(Some(bytes));
                     }
                     _ => {
@@ -207,7 +207,7 @@ pub fn apply_map_to_game(
                 .into_iter()
                 .map(dark_rift_shared::map::MapTile::from_byte)
                 .collect();
-            bevy::log::info!("🗺️  Map loaded from network cache ({} tiles)", expected_size);
+            bevy::log::debug!("🗺️  Map loaded from network cache ({} tiles)", expected_size);
             return true;
         }
         bevy::log::warn!(
@@ -225,7 +225,7 @@ pub fn apply_map_to_game(
         {
             if (map.width * map.height) as usize == expected_size {
                 *(&mut game.map) = map;
-                bevy::log::info!("🗺️  Map loaded from local filesystem fallback");
+                bevy::log::debug!("🗺️  Map loaded from local filesystem fallback");
                 return true;
             }
             bevy::log::warn!("🗺️  Local map dimensions don't match config");
