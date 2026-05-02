@@ -68,7 +68,7 @@ pub fn system_sync_player_labels(
     for (entity, _, _, _, _, label, _) in &q_labels {
         let alive = game.players.iter().any(|p| p.id == label.0 && p.alive);
         if !alive {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 

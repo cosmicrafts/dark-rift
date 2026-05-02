@@ -88,7 +88,7 @@ pub fn system_sync_fleet_visuals(
     let mut existing_ids = std::collections::HashSet::new();
     for (e, vis) in &q_existing {
         if !current_ids.contains(&vis.0) {
-            commands.entity(e).despawn();
+            commands.entity(e).try_despawn();
         } else {
             existing_ids.insert(vis.0);
         }
@@ -147,8 +147,8 @@ pub fn system_sync_fleet_visuals(
 
     for (e, mut fb, mut tf) in boat_q.iter_mut() {
         let Some(f) = engine.fleets.iter().find(|x| x.id == fb.fleet_id) else {
-            commands.entity(fb.wake).despawn();
-            commands.entity(e).despawn();
+            commands.entity(fb.wake).try_despawn();
+            commands.entity(e).try_despawn();
             continue;
         };
         let cur = f.current_tile;
@@ -168,7 +168,7 @@ pub fn system_sync_fleet_visuals(
     }
     for (e, ft, _tf) in target_q.iter_mut() {
         if !engine.fleets.iter().any(|x| x.id == ft.fleet_id) {
-            commands.entity(e).despawn();
+            commands.entity(e).try_despawn();
         }
     }
 }
@@ -198,7 +198,7 @@ pub fn system_animate_attack_command_rings(
         ring.elapsed += dt;
         let t = ring.elapsed;
         if t >= ATTACK_COMMAND_RING_LIFETIME {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
             continue;
         }
 
@@ -340,7 +340,7 @@ pub fn system_sync_attack_vfx_position(
         if let Some(attack) = engine.attacks.iter().find(|a| a.id == vfx.target_exec_id) {
             // Despawn if attack is retreating or queue is empty
             if attack.retreating || attack.to_conquer.is_empty() {
-                commands.entity(vfx_ent).despawn();
+                commands.entity(vfx_ent).try_despawn();
                 continue;
             }
 
@@ -355,7 +355,7 @@ pub fn system_sync_attack_vfx_position(
             }
         } else {
             // Target AttackExecution died/merged/resolved, clean up VFX independent shadow
-            commands.entity(vfx_ent).despawn();
+            commands.entity(vfx_ent).try_despawn();
         }
     }
 }

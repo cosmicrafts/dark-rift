@@ -1445,7 +1445,7 @@ pub fn system_update_lobby_browser(
                     // No lobby found, despawn if exists
                     if let Ok(children) = children_q.get(cards_ent) {
                         for child in children.iter() {
-                            commands.entity(child).despawn();
+                            commands.entity(child).try_despawn();
                         }
                     }
                 }
@@ -1898,7 +1898,7 @@ fn apply_intro_frame(e: f32, q: &mut LobbyMenuAnimVisualQueries) {
 
 pub fn system_cleanup_lobby_browser(mut commands: Commands, q_root: Query<Entity, With<LobbyBrowserRoot>>) {
     if let Some(ent) = q_root.iter().next() {
-        commands.entity(ent).despawn();
+        commands.entity(ent).try_despawn();
     }
     commands.remove_resource::<LobbyMainMenuAnim>();
 }

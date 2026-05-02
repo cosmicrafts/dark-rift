@@ -38,10 +38,10 @@ pub fn system_sync_structure_ghost(
 ) {
     let despawn_all = |commands: &mut Commands, parts: &mut StructureGhostParts| {
         if let Some(e) = parts.marker.take() {
-            commands.entity(e).despawn();
+            commands.entity(e).try_despawn();
         }
         if let Some(e) = parts.range.take() {
-            commands.entity(e).despawn();
+            commands.entity(e).try_despawn();
         }
     };
 
@@ -193,7 +193,7 @@ pub fn system_sync_structure_ghost(
             }
         }
     } else if let Some(re) = ghost_parts.range.take() {
-        commands.entity(re).despawn();
+        commands.entity(re).try_despawn();
     }
 }
 
@@ -223,7 +223,7 @@ pub fn system_sync_building_visuals(
     let mut existing_ids = std::collections::HashSet::new();
     for (e, vis) in &q_existing {
         if !current_ids.contains(&vis.0) {
-            commands.entity(e).despawn();
+            commands.entity(e).try_despawn();
         } else {
             existing_ids.insert(vis.0);
         }

@@ -76,7 +76,7 @@ pub fn system_update_event_feed(
             color.0 = color.0.with_alpha(alpha);
         }
         if alpha <= 0.0 {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 
@@ -208,7 +208,7 @@ pub fn system_animate_outgoing_rows(
                     *border = BorderColor::all(c);
                 }
                 if u >= 1.0 {
-                    commands.entity(entity).despawn();
+                    commands.entity(entity).try_despawn();
                 }
             }
         }
@@ -234,10 +234,10 @@ pub fn system_sync_outgoing_attack_rows(
 
     if my_id.0 == 0 {
         for (_, (row_e, _, _)) in row_map.0.drain() {
-            commands.entity(row_e).despawn();
+            commands.entity(row_e).try_despawn();
         }
         for (_, (row_e, _, _)) in fleet_row_map.0.drain() {
-            commands.entity(row_e).despawn();
+            commands.entity(row_e).try_despawn();
         }
         sync_outgoing_slot_visibility(slot, &children_q, &mut slot_node);
         return;
@@ -419,7 +419,7 @@ pub fn system_sync_outgoing_attack_rows(
     // Outgoing boats (`WarpFleet`) — OpenFront `AttacksDisplay` transport rows + recall.
     if !settings.config.ui.combat_hud_fleet_rows {
         for (_, (row_e, _, _)) in fleet_row_map.0.drain() {
-            commands.entity(row_e).despawn();
+            commands.entity(row_e).try_despawn();
         }
         sync_outgoing_slot_visibility(slot, &children_q, &mut slot_node);
         return;
