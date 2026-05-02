@@ -80,9 +80,9 @@ pub fn system_sync_structure_ghost(
         return;
     }
 
-    let snapshot = engine.buildings.clone();
+    let snapshot = &engine.buildings;
     let positions = existing_structure_positions_with_width(snapshot.iter(), w, None);
-    let cost = structure_build_cost_gold(kind, pid, &snapshot);
+    let cost = structure_build_cost_gold(kind, pid, snapshot);
     let afford = player.gold >= cost && cost.is_finite();
 
     enum GhostKind {
@@ -94,7 +94,7 @@ pub fn system_sync_structure_ghost(
     let (tile_idx, ghost_kind, ok_afford) =
         if let Some(bid) = find_upgrade_target_id(&engine.state.map, pid, kind, click_idx, &snapshot) {
             let mut ti = None;
-            for b in &snapshot {
+            for b in snapshot {
                 if b.id == bid {
                     ti = Some(b.tile_idx);
                     break;

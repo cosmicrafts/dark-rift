@@ -57,6 +57,9 @@ pub struct VisualSettingsConfig {
     pub enable_territory_expansion_animations: bool,
     #[serde(default = "default_true")]
     pub enable_floating_labels: bool,
+    /// GPU water simplex-noise animation. Disable on low-end mobile GPUs for ~30% frag savings.
+    #[serde(default = "default_true")]
+    pub enable_water_animation: bool,
     #[serde(default)]
     pub border: BorderVisualSettings,
 }
@@ -68,6 +71,7 @@ impl Default for VisualSettingsConfig {
             enable_hdr_bloom: true,
             enable_territory_expansion_animations: true,
             enable_floating_labels: true,
+            enable_water_animation: true,
             border: BorderVisualSettings::default(),
         }
     }

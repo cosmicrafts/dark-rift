@@ -43,7 +43,7 @@ pub const TILE_SIZE: f32 = 12.0;
 
 pub const PERF_OVERLAY_FPS_INTERVAL: Duration = Duration::from_millis(250);
 /// Cap simulation turns processed per frame while draining `PendingTicks` (large values help WASM after tab backgrounding).
-pub const CLIENT_CATCHUP_MAX_TICKS_PER_FRAME: usize = 1000;
+pub const CLIENT_CATCHUP_MAX_TICKS_PER_FRAME: usize = 50;
 /// Keyboard T/Y adjustment step for attack fraction slider (`AttackRatio`).
 pub const ATTACK_RATIO_KEYSTEP: f32 = 0.25;
 
@@ -359,7 +359,7 @@ fn main() {
         // handle_tile_change now writes owner IDs into the ShaderStorageBuffer (2 bytes/tile),
         // eliminating the old chunk texture uploads entirely.
         app.add_systems(Update, (
-            handle_tile_change,
+            handle_tile_change.after(system_update_event_feed),
             update_water_animation_time,
         ).run_if(in_state(AppState::InGame)));
 

@@ -127,12 +127,12 @@ pub fn system_loading_map(
 }
 
 pub fn handle_tile_change(
-    engine_opt: Option<Res<DarkRiftEngine>>,
+    mut engine_opt: Option<ResMut<DarkRiftEngine>>,
     shader_map_opt: Option<ResMut<ShaderMapData>>,
     mut images: ResMut<Assets<Image>>,
     mut last_event_idx: Local<usize>,
 ) {
-    let Some(engine) = engine_opt else { return };
+    let Some(ref mut engine) = engine_opt else { return };
     let Some(mut shader_map) = shader_map_opt else { return };
 
     if shader_map.colors_dirty {
@@ -164,6 +164,15 @@ pub fn handle_tile_change(
             }
         }
         *last_event_idx = current_len;
+    }
+
+    // Prevent unbounded event growth: once past 4096 processed events, drain the older half.
+    // This keeps memory bounded while allowing other consumers (hud_events) to catch up.
+    const EVENT_DRAIN_THRESHOLD: usize = 4096;
+    if *last_event_idx >= EVENT_DRAIN_THRESHOLD {
+        let drain_count = *last_event_idx;
+        engine.state.events.drain(..drain_count);
+        *last_event_idx = 0;
     }
 }
 
@@ -245,7 +254,7 @@ pub fn spawn_shader_map(
             border_thickness: Vec4::new(neighbor, 0.0, 0.0, 0.0),
             texture_size: Vec4::new(width as f32, height as f32, 0.0, 0.0),
             time: Vec4::new(0.0, 0.0, 0.0, 0.0),
-            enable_water_animation: UVec4::new(1, 0, 0, 0),
+            enable_water_animation: UVec4::new(if visuals.enable_water_animation { 1 } else { 0 }, 0, 0, 0),
             enable_players: UVec4::new(1, 0, 0, 0),
         },
         player_colors: colors_handle.clone(),
