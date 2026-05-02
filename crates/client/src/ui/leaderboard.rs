@@ -146,6 +146,7 @@ pub fn setup_leaderboard(
 
 pub fn system_update_leaderboard(
     engine_opt: Option<Res<DarkRiftEngine>>,
+    q_panel: Query<&Node, With<LeaderboardContent>>,
     mut q_rank: Query<(&LbCellRank, &mut Text), (Without<LbCellName>, Without<LbCellOwned>, Without<LbCellGold>, Without<LbCellMax>)>,
     mut q_name: Query<(&LbCellName, &mut Text, &mut TextColor), (Without<LbCellRank>, Without<LbCellOwned>, Without<LbCellGold>, Without<LbCellMax>)>,
     mut q_owned: Query<(&LbCellOwned, &mut Text), (Without<LbCellRank>, Without<LbCellName>, Without<LbCellGold>, Without<LbCellMax>)>,
@@ -154,17 +155,25 @@ pub fn system_update_leaderboard(
     my_id: Option<Res<crate::MyPlayerId>>,
     mut cached_land: Local<Option<f32>>,
 ) {
-    let Some(engine) = engine_opt else { return };
+    let Some(engine) = engine_opt.as_deref() else { return };
+    let game = &engine.state;
+    let panel_hidden = q_panel
+        .iter()
+        .next()
+        .map_or(true, |n| n.display == Display::None);
+    if panel_hidden {
+        return;
+    }
     let my_player_id = my_id.map(|r| r.0).unwrap_or(0);
     
     // Sort players by tile count
-    let mut sorted_players: Vec<_> = engine.state.players.iter().filter(|p| p.alive).collect();
+    let mut sorted_players: Vec<_> = game.players.iter().filter(|p| p.alive).collect();
     sorted_players.sort_by(|a, b| b.tile_count.cmp(&a.tile_count));
     
     let total_land = match *cached_land {
         Some(val) => val,
         None => {
-            let val = engine.state.map.terrain.iter().filter(|t| t.is_land()).count().max(1) as f32;
+            let val = game.map.terrain.iter().filter(|t| t.is_land()).count().max(1) as f32;
             *cached_land = Some(val);
             val
         }
@@ -190,14 +199,39 @@ pub fn system_update_leaderboard(
             None => (String::new(), String::new(), String::new(), String::new(), String::new(), false)
         };
 
-        if let Some((_, mut text)) = q_rank.iter_mut().find(|(c, _)| c.0 == idx) { text.0 = rank_str; }
-        if let Some((_, mut text, mut color)) = q_name.iter_mut().find(|(c, _, _)| c.0 == idx) { 
-            text.0 = name_str; 
-            color.0 = if is_me { accent_primary() } else { Color::WHITE };
+        if let Some((_, mut text)) = q_rank.iter_mut().find(|(c, _)| c.0 == idx) {
+            if text.0 != rank_str {
+                text.0 = rank_str;
+            }
         }
-        if let Some((_, mut text)) = q_owned.iter_mut().find(|(c, _)| c.0 == idx) { text.0 = owned_str; }
-        if let Some((_, mut text)) = q_gold.iter_mut().find(|(c, _)| c.0 == idx) { text.0 = gold_str; }
-        if let Some((_, mut text)) = q_max.iter_mut().find(|(c, _)| c.0 == idx) { text.0 = max_str; }
+        if let Some((_, mut text, mut color)) = q_name.iter_mut().find(|(c, _, _)| c.0 == idx) {
+            if text.0 != name_str {
+                text.0 = name_str;
+            }
+            let nc = if is_me {
+                accent_primary()
+            } else {
+                Color::WHITE
+            };
+            if color.0 != nc {
+                color.0 = nc;
+            }
+        }
+        if let Some((_, mut text)) = q_owned.iter_mut().find(|(c, _)| c.0 == idx) {
+            if text.0 != owned_str {
+                text.0 = owned_str;
+            }
+        }
+        if let Some((_, mut text)) = q_gold.iter_mut().find(|(c, _)| c.0 == idx) {
+            if text.0 != gold_str {
+                text.0 = gold_str;
+            }
+        }
+        if let Some((_, mut text)) = q_max.iter_mut().find(|(c, _)| c.0 == idx) {
+            if text.0 != max_str {
+                text.0 = max_str;
+            }
+        }
     };
 
     for i in 0..15 {

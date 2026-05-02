@@ -190,6 +190,10 @@ pub fn system_cleanup_ingame_entities(
     mut build_mode: ResMut<BuildStructureMode>,
     mut ghost_parts: ResMut<StructureGhostParts>,
     mut build_hud: ResMut<BuildableHudState>,
+    mut drag_state: ResMut<CameraDragState>,
+    mut pinch_state: ResMut<PinchState>,
+    mut touch_gesture: ResMut<TouchGestureState>,
+    mut cam_q: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     q_ingame: Query<Entity, With<InGameEntity>>,
 ) {
     ready.0 = false;
@@ -203,8 +207,17 @@ pub fn system_cleanup_ingame_entities(
     *ghost_parts = StructureGhostParts::default();
     *build_hud = BuildableHudState::default();
 
+    *drag_state = CameraDragState::default();
+    *pinch_state = PinchState::default();
+    *touch_gesture = TouchGestureState::default();
+
+    for (mut transform, mut projection) in cam_q.iter_mut() {
+        reset_lobby_camera(&mut transform, &mut projection);
+    }
+
+    // `try_despawn`: hierarchy may already have removed children when a parent was hit first — avoids Bevy 0.18 warnings.
     for e in q_ingame.iter() {
-        commands.entity(e).despawn();
+        commands.entity(e).try_despawn();
     }
     commands.remove_resource::<DarkRiftEngine>();
     commands.remove_resource::<SinglePlayerState>();
@@ -212,6 +225,7 @@ pub fn system_cleanup_ingame_entities(
     commands.remove_resource::<crate::ShaderMapData>();
     commands.remove_resource::<dark_rift_shared::water_components::WaterComponents>();
     commands.remove_resource::<crate::DesyncTracker>();
-    commands.remove_resource::<crate::ui::CombatDockUiScale>();
+    // Keep `CombatDockUiScale` present: shell/layout systems use `resource_changed::<CombatDockUiScale>` and must not panic when resource is missing after exit.
+    commands.insert_resource(CombatDockUiScale::default());
     commands.remove_resource::<dark_rift_shared::game_config::GameConfig>();
 }

@@ -27,6 +27,8 @@ impl Default for OverlayDiagnostics { fn default() -> Self { Self { status_line:
 #[derive(Component)] pub struct FleetVisual(pub u64);
 #[derive(Component)] pub struct BuildingVisualDone;
 #[derive(Component)] pub struct BuildingMapVisualRoot;
+/// Level / construction badge root on building map visuals (`system_sync_building_map_labels`).
+#[derive(Component)] pub struct BuildingMapBadgeRoot(pub u64);
 #[derive(Component)] pub struct StructureGhostRoot;
 #[derive(Resource, Default)] pub struct BuildStructureMode(pub Option<BuildingKind>);
 #[derive(Resource, Default)] pub struct FreshlyPaintedTiles { pub tiles: HashMap<(u32, u32), f32> }

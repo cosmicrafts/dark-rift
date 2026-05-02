@@ -1,6 +1,5 @@
 use crate::game::{GameEvent, GamePhase};
 use crate::engine::DarkRiftEngine;
-use super::core::Building;
 /// Advance construction timers; emits [`GameEvent::StructureReady`].
 /// Split out for unit tests (`advance_building_construction_tick`).
 impl DarkRiftEngine {

@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use dark_rift_shared::engine::DarkRiftEngine;
 use dark_rift_shared::game::GameState;
+use dark_rift_shared::player::Player;
 use dark_rift_shared::protocol::*;
 
 use crate::*;
@@ -27,7 +28,7 @@ pub struct TurnLogEntry {
 
 pub fn start_game_core(
     msg:           ServerStartMessage,
-    cam_q:         &mut Query<&mut Transform, With<Camera2d>>,
+    cam_q:         &mut Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     commands:      &mut Commands,
     params:        &mut StartGameParams,
 ) {
@@ -80,11 +81,19 @@ pub fn start_game_core(
                 }
             }
 
-            if let Ok(mut cam) = cam_q.single_mut() {
-                cam.translation = Vec3::new(cx, cy, 999.0);
+            if let Ok((mut transform, mut projection)) = cam_q.single_mut() {
+                reset_game_camera(&mut transform, &mut projection, Vec2::new(cx, cy));
             }
             if let Some(images_res) = params.images.as_mut() {
-                let grid = spawn_shader_map(commands, &game, images_res, params.materials.as_mut().unwrap(), params.meshes.as_mut().unwrap(), true);
+                let grid = spawn_shader_map(
+                    commands,
+                    &game,
+                    images_res,
+                    params.materials.as_mut().unwrap(),
+                    params.meshes.as_mut().unwrap(),
+                    true,
+                    &params.settings.config.visuals,
+                );
                 commands.insert_resource(grid);
             }
 
@@ -187,24 +196,5 @@ pub fn system_single_player_tick(
             pending.0 += 1;
             highest.0 = Some(highest.0.unwrap_or(0).max(st.current_turn));
         }
-    }
-}
-
-pub fn system_mock_single_player_start(
-    mock:      Option<ResMut<MockSinglePlayerStart>>,
-    mut cam_q:     Query<&mut Transform, With<Camera2d>>,
-    mut commands:  Commands,
-    mut params:    StartGameParams,
-) {
-    if let Some(m) = mock {
-        commands.insert_resource(SinglePlayerState {
-            timer: Timer::from_seconds(0.040, TimerMode::Repeating),
-            current_turn: 0,
-        });
-        commands.insert_resource(LocalIntentBuffer::default());
-        start_game_core(
-            m.0.clone(), &mut cam_q, &mut commands, &mut params
-        );
-        commands.remove_resource::<MockSinglePlayerStart>();
     }
 }

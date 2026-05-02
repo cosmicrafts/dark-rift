@@ -273,6 +273,29 @@ pub fn system_sync_building_visuals(
                 Visibility::default(),
             ));
             ch.spawn((
+                BuildingMapBadgeRoot(b.id),
+                Visibility::Hidden,
+                Transform::from_xyz(0.0, TILE_SIZE * 0.42, 2.0),
+                GlobalTransform::default(),
+            ))
+            .with_children(|badge| {
+                badge.spawn((
+                    InGameEntity,
+                    Text2d::new(String::new()),
+                    TextFont {
+                        font: font.clone(),
+                        font_size: 11.0,
+                        weight: FontWeight::SEMIBOLD,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                    TextLayout::new_with_justify(Justify::Center),
+                    Transform::default(),
+                    GlobalTransform::default(),
+                    Visibility::default(),
+                ));
+            });
+            ch.spawn((
                 InGameEntity,
                 BuildingLabelTarget(e),
                 Text2d::new(format!(
@@ -288,7 +311,7 @@ pub fn system_sync_building_visuals(
                 },
                 TextColor(Color::WHITE),
                 TextLayout::new_with_justify(Justify::Center),
-                Transform::from_xyz(0.0, TILE_SIZE * 0.42, 2.0),
+                Transform::from_xyz(0.0, TILE_SIZE * 0.42, 3.0),
             ));
         });
     }

@@ -9,13 +9,11 @@ pub use core::*;
 pub use cost::*;
 pub use placement::*;
 pub use upgrade::*;
-pub use construction::*;
 pub use hud::*;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::prelude::{Entity, Query, ResMut, World};
     use crate::game::BuildingKind;
     use crate::map::{GameMap, MapTile};
 
@@ -104,10 +102,11 @@ mod tests {
 
     #[test]
     fn construction_tick_emits_structure_ready() {
-        use bevy::ecs::system::SystemState;
+        use crate::engine::DarkRiftEngine;
         use crate::game::{GameEvent, GamePhase, GameState};
         use crate::player::Player;
-        let mut world = World::new();
+        use crate::water_components::WaterComponents;
+
         let mut game = GameState::new(3, 5, 1, crate::game_config::GameConfig::default());
         game.phase = GamePhase::Playing;
         let (map, owner) = tiny_owned_map();
@@ -115,8 +114,9 @@ mod tests {
         game.players.push(Player::new_human(owner, "c".into(), [1.0, 0.0, 0.0], &crate::game_config::GameConfig::default()));
         game.player_lookup.resize(owner as usize + 1, None);
         game.player_lookup[owner as usize] = Some(0);
-        world.insert_resource(game);
-        world.spawn(Building {
+        let water = WaterComponents::compute(&game.map);
+        let mut engine = DarkRiftEngine::new(game, water);
+        engine.buildings.push(Building {
             id: 7,
             owner_id: owner,
             tile_idx: 2,
@@ -125,17 +125,9 @@ mod tests {
             under_construction: true,
             ticks_until_complete: 1,
         });
-
-        {
-            let mut state =
-                SystemState::<(ResMut<GameState>, Query<(Entity, &mut Building)>)>::new(&mut world);
-            let (mut game, mut q) = state.get_mut(&mut world);
-            advance_building_construction_tick(&mut game, &mut q);
-        }
-        world.flush();
-
-        let game = world.resource::<GameState>();
-        assert!(game
+        engine.execute_construction();
+        assert!(engine
+            .state
             .events
             .iter()
             .any(|e| matches!(e, GameEvent::StructureReady { id: 7, .. })));
@@ -143,10 +135,11 @@ mod tests {
 
     #[test]
     fn construction_ready_events_sorted_by_building_id() {
-        use bevy::ecs::system::SystemState;
+        use crate::engine::DarkRiftEngine;
         use crate::game::{GameEvent, GamePhase, GameState};
         use crate::player::Player;
-        let mut world = World::new();
+        use crate::water_components::WaterComponents;
+
         let mut game = GameState::new(4, 5, 1, crate::game_config::GameConfig::default());
         game.phase = GamePhase::Playing;
         let (map, owner) = tiny_owned_map();
@@ -154,8 +147,9 @@ mod tests {
         game.players.push(Player::new_human(owner, "d".into(), [1.0, 0.0, 0.0], &crate::game_config::GameConfig::default()));
         game.player_lookup.resize(owner as usize + 1, None);
         game.player_lookup[owner as usize] = Some(0);
-        world.insert_resource(game);
-        world.spawn(Building {
+        let water = WaterComponents::compute(&game.map);
+        let mut engine = DarkRiftEngine::new(game, water);
+        engine.buildings.push(Building {
             id: 2,
             owner_id: owner,
             tile_idx: 1,
@@ -164,7 +158,7 @@ mod tests {
             under_construction: true,
             ticks_until_complete: 1,
         });
-        world.spawn(Building {
+        engine.buildings.push(Building {
             id: 1,
             owner_id: owner,
             tile_idx: 3,
@@ -173,17 +167,9 @@ mod tests {
             under_construction: true,
             ticks_until_complete: 1,
         });
-
-        {
-            let mut state =
-                SystemState::<(ResMut<GameState>, Query<(Entity, &mut Building)>)>::new(&mut world);
-            let (mut game, mut q) = state.get_mut(&mut world);
-            advance_building_construction_tick(&mut game, &mut q);
-        }
-        world.flush();
-
-        let game = world.resource::<GameState>();
-        let ready_ids: Vec<u64> = game
+        engine.execute_construction();
+        let ready_ids: Vec<u64> = engine
+            .state
             .events
             .iter()
             .filter_map(|e| match e {

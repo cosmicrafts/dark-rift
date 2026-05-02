@@ -343,6 +343,8 @@ The `run_cluster.py` script has been supercharged to act as an all-in-one orches
 
 ## Cleanup Items (Tracked)
 
+- Rail/train client rendering (`bak-client` mesh + sprites) stays deferred until `DarkRiftEngine` / shared expose the same rail snapshot the old `GameState`-centric client used.
+- `warp_fleet_tests` (library integration tests) was removed: it targeted pre-`DarkRiftEngine` Bevy systems such as `system_warp_fleet_execution`. Re-add fleet/routing coverage as unit tests around `resolve_fleet_route` / `DarkRiftEngine` when a small harness exists.
 - `crates/shared/src/test_bevy.rs` appears to be scratch code and should be removed in a cleanup pass.
 - `scripts/deploy_cloud.sh` still rewrites `crates/client/src/main.rs` to patch IPs, while runtime networking constants now live in `crates/client/src/network/network.rs`; this should be migrated to avoid stale deploy behavior.
 - `TURN_INTERVAL_MS` in `crates/server/src/core/mod.rs` is currently `10.0` while the nearby comment describes `100ms = 10 turns/sec`; align comment and value semantics.

@@ -9,8 +9,6 @@ use crate::engine::DarkRiftEngine;
 pub mod income;
 pub mod combat;
 
-pub use income::*;
-pub use combat::*;
 
 /// Fraction of refunded troops lost when retreating from an attack on another player (OpenFront parity).
 pub const RETREAT_PENALTY_VS_PLAYER: f64 = 0.25;

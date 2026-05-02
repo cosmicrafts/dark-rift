@@ -1,6 +1,7 @@
 //! Dark Rift Client — Networked (Lightyear WebSocket + Netcode)
 
 use bevy::prelude::*;
+use bevy::ecs::schedule::common_conditions::resource_changed;
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy_enoki::prelude::*;
 use lightyear::prelude::client::*;
@@ -12,7 +13,6 @@ use clap::Parser;
 use dark_rift_shared::config;
 use dark_rift_shared::building::*;
 use dark_rift_shared::game::GameEvent;
-use dark_rift_shared::player::Player;
 
 use dark_rift_shared::pathfinding::WaterPathfinderScratch;
 use dark_rift_shared::protocol::*;
@@ -37,11 +37,13 @@ pub use network::*;
 pub use rendering::*;
 pub use ui::*;
 
+/// World units per map tile edge. Kept at 12 for current HUD/shader map layout (older snapshots used 8).
 pub const TILE_SIZE: f32 = 12.0;
 
-
 pub const PERF_OVERLAY_FPS_INTERVAL: Duration = Duration::from_millis(250);
+/// Cap simulation turns processed per frame while draining `PendingTicks` (large values help WASM after tab backgrounding).
 pub const CLIENT_CATCHUP_MAX_TICKS_PER_FRAME: usize = 1000;
+/// Keyboard T/Y adjustment step for attack fraction slider (`AttackRatio`).
 pub const ATTACK_RATIO_KEYSTEP: f32 = 0.25;
 
 fn main() {
@@ -102,7 +104,6 @@ fn main() {
            .add_systems(Startup, setup_network)
            .add_systems(Update, (
                handle_server_start,
-               system_mock_single_player_start,
                handle_connection,
            ).chain())
            .add_systems(Update, (
@@ -144,6 +145,7 @@ fn main() {
         .init_resource::<CameraDragState>()
         .init_resource::<PinchState>()
         .init_resource::<TouchGestureState>()
+        .init_resource::<DesktopCameraPanSmooth>()
         .init_resource::<FreshlyPaintedTiles>()
             .init_resource::<AttackRatio>()
             .init_resource::<OutgoingAttackRowMap>()
@@ -156,7 +158,8 @@ fn main() {
         .init_resource::<WaterComponents>()
         .init_resource::<BuildStructureMode>()
         .init_resource::<StructureGhostParts>()
-        .init_resource::<BuildableHudState>();
+        .init_resource::<BuildableHudState>()
+        .init_resource::<BuildableHudDirty>();
 
         // Insert ClientSettings BEFORE app.run() so it exists when OnEnter(LobbyBrowser) fires.
         // Font handle is Handle::default() here; init_client_font patches it in Startup.
@@ -220,7 +223,16 @@ fn main() {
                     .chain()
                     .run_if(|cli: Res<Cli>| !cli.bot),
             )
-            .add_systems(OnEnter(AppState::LobbyBrowser), setup_lobby_browser.run_if(|cli: Res<Cli>| !cli.bot))
+            .add_systems(
+                OnEnter(AppState::LobbyBrowser),
+                (
+                    setup_lobby_browser,
+                    lobby_browser::system_apply_lobby_layout_responsive,
+                    lobby_browser::system_apply_lobby_controls_responsive,
+                )
+                    .chain()
+                    .run_if(|cli: Res<Cli>| !cli.bot),
+            )
             .add_systems(OnExit(AppState::LobbyBrowser), system_cleanup_lobby_browser.run_if(|cli: Res<Cli>| !cli.bot))
             .add_systems(OnEnter(AppState::InGame), leaderboard::setup_leaderboard.run_if(|cli: Res<Cli>| !cli.bot))
             .add_systems(OnExit(AppState::InGame), system_cleanup_ingame_entities.run_if(|cli: Res<Cli>| !cli.bot))
@@ -234,21 +246,39 @@ fn main() {
                 lobby_browser::system_nickname_keyboard_when_focused,
                 lobby_browser::system_nickname_cursor_blink,
                 lobby_browser::system_nickname_autosave_tick,
-                system_lobby_main_menu_anim,
                 system_update_lobby_browser,
             ).run_if(|state: Res<State<AppState>>, cli: Res<Cli>| *state.get() == AppState::LobbyBrowser && !cli.bot))
+            .add_systems(
+                Update,
+                system_lobby_main_menu_anim
+                    .run_if(|state: Res<State<AppState>>, cli: Res<Cli>| {
+                        *state.get() == AppState::LobbyBrowser && !cli.bot
+                    })
+                    .run_if(|anim: Option<Res<LobbyMainMenuAnim>>| {
+                        if let Some(a) = anim {
+                            !a.is_idle() || a.play_main_menu_intro_after_cancel
+                        } else {
+                            false
+                        }
+                    }),
+            )
             .add_systems(
                 Update,
                 (
                     lobby_browser::system_apply_lobby_layout_responsive,
                     lobby_browser::system_apply_lobby_controls_responsive,
                 )
-                    .run_if(|state: Res<State<AppState>>, cli: Res<Cli>| *state.get() == AppState::LobbyBrowser && !cli.bot)
+                    .run_if(|state: Res<State<AppState>>, cli: Res<Cli>| {
+                        *state.get() == AppState::LobbyBrowser && !cli.bot
+                    })
+                    .run_if(
+                        resource_changed::<UiShellState>
+                            .or(resource_changed::<ClientSettings>),
+                    )
                     .before(system_lobby_main_menu_anim),
             )
             .add_systems(Update, (
                 handle_server_start,
-                system_mock_single_player_start,
                 handle_connection,
             ).chain())
             .add_systems(Update, (
@@ -267,18 +297,22 @@ fn main() {
     } // end if !cli.bot
 
     if !cli.bot {
-        app.add_systems(Update, (system_update_ui_shell_state, system_apply_ui_shell_layout, system_update_perf_overlay).run_if(|cli: Res<Cli>| !cli.bot));
+        app.add_systems(Update, (
+            system_update_ui_shell_state,
+            system_apply_ui_shell_layout
+                .run_if(resource_changed::<UiShellState>.or(resource_changed::<CombatDockUiScale>)),
+            system_update_perf_overlay,
+        ).run_if(|cli: Res<Cli>| !cli.bot));
 
         app.add_systems(Update, (
             hover_system,
-            system_refresh_buildable_hud,
-            system_apply_buildable_hud.after(system_refresh_buildable_hud),
+            (system_refresh_buildable_hud, system_apply_buildable_hud).chain(),
             system_buildpill_interactions,
             system_build_structure_hotkeys,
             system_sync_structure_ghost,
             system_attack_ratio_keyboard,
             system_attack_ratio_slider_drag,
-            player_click,
+            (player_click, system_animate_attack_command_rings).chain(),
             system_force_boat_key,
             system_exit_button,
         ).run_if(in_state(AppState::InGame)));
@@ -286,12 +320,24 @@ fn main() {
         app.add_systems(Update, (
             system_dump_desync_tracker,
             system_home_button,
-            update_hud,
-            system_apply_responsive_hud_layout,
+            update_hud
+                .run_if(
+                    resource_changed::<OverlayDiagnostics>
+                        .or(resource_changed::<HighestReceivedTurn>)
+                        .or(resource_changed::<BuildStructureMode>),
+                ),
+            system_apply_responsive_hud_layout
+                .run_if(resource_changed::<UiShellState>.or(resource_changed::<CombatDockUiScale>).or(resource_changed::<ClientSettings>)),
+            system_apply_responsive_hud_icons_and_hotkeys
+                .run_if(resource_changed::<UiShellState>.or(resource_changed::<CombatDockUiScale>).or(resource_changed::<ClientSettings>)),
+            system_apply_action_dock_layout
+                .run_if(resource_changed::<UiShellState>.or(resource_changed::<CombatDockUiScale>).or(resource_changed::<ClientSettings>)),
             system_sync_bottom_combat_hud,
+            system_sync_bottom_troops_bar,
+            system_settings_toggle_devstats,
             system_update_event_feed,
             system_update_scroll_position,
-            system_sync_outgoing_attack_rows,
+            (system_sync_outgoing_attack_rows, system_animate_outgoing_rows).chain(),
             system_handle_cancel_click,
             system_handle_recall_fleet_click,
         ).run_if(in_state(AppState::InGame)));
@@ -310,13 +356,6 @@ fn main() {
             handle_tile_change,
             update_water_animation_time,
         ).run_if(in_state(AppState::InGame)));
-        
-        app.add_systems(
-            Update,
-            system_animate_attack_command_rings
-                .after(player_click)
-                .run_if(in_state(AppState::InGame)),
-        );
 
         app.add_systems(
             Update,

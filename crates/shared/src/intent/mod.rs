@@ -3,7 +3,6 @@ pub mod combat;
 pub mod buildings;
 pub mod fleet;
 
-pub use bot::*;
 pub use combat::*;
 
 

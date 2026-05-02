@@ -17,6 +17,34 @@ fn default_hud_scale_2() -> f32 {
     2.0
 }
 
+fn default_border_darken() -> f32 {
+    0.6
+}
+
+fn default_border_neighbor_tiles() -> f32 {
+    1.0
+}
+
+/// GPU map border styling (`BorderMaterial` / `border.wgsl`), merged from legacy `visuals.border.{band,tint}`.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct BorderVisualSettings {
+    /// Cardinal neighbor sample offset in **tile** units (fragment shader converts to `i32`).
+    #[serde(default = "default_border_neighbor_tiles")]
+    pub neighbor_offset_tiles: f32,
+    /// RGB multiplier along territory borders (lower = darker band; legacy tint ~0.25).
+    #[serde(default = "default_border_darken")]
+    pub darken: f32,
+}
+
+impl Default for BorderVisualSettings {
+    fn default() -> Self {
+        Self {
+            neighbor_offset_tiles: 1.0,
+            darken: 0.6,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct VisualSettingsConfig {
     /// Reserved for a future particle path; Enoki was removed (despawn races + perf).
@@ -29,6 +57,8 @@ pub struct VisualSettingsConfig {
     pub enable_territory_expansion_animations: bool,
     #[serde(default = "default_true")]
     pub enable_floating_labels: bool,
+    #[serde(default)]
+    pub border: BorderVisualSettings,
 }
 
 impl Default for VisualSettingsConfig {
@@ -38,6 +68,7 @@ impl Default for VisualSettingsConfig {
             enable_hdr_bloom: true,
             enable_territory_expansion_animations: true,
             enable_floating_labels: true,
+            border: BorderVisualSettings::default(),
         }
     }
 }
@@ -83,6 +114,9 @@ pub struct UiSettingsConfig {
     /// Bottom combat HUD: fonts, row paddings, slider, gaps (`spawn_bottom_combat_hud` + row sync).
     #[serde(default = "default_hud_scale_2")]
     pub combat_hud_scale: f32,
+    /// Compact / mobile breakpoint: scale for dock + combat HUD (see `system_update_ui_shell_state`).
+    #[serde(default = "default_hud_scale_2")]
+    pub mobile_hud_scale: f32,
     /// Show outgoing `WarpFleet` payload rows with recall (OpenFront `AttacksDisplay` transport list).
     #[serde(default = "default_true")]
     pub combat_hud_fleet_rows: bool,
@@ -103,6 +137,7 @@ impl Default for UiSettingsConfig {
             fleet_target_ring_scale: 2.0,
             fleet_wake_scale: 2.0,
             combat_hud_scale: 2.0,
+            mobile_hud_scale: 2.0,
             combat_hud_fleet_rows: true,
         }
     }

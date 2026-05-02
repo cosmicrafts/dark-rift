@@ -14,7 +14,5 @@ pub mod water_components;
 pub mod checksum;
 pub mod engine;
 
-#[cfg(test)]
-mod warp_fleet_tests;
 pub mod game_config;
 pub mod map_loader;

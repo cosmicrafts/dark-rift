@@ -1,4 +1,5 @@
 use crate::Cli;
+use crate::ui::write_guard::assign_if_ne;
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use instant::Instant;
 use crate::ClientSettings;
@@ -8,6 +9,12 @@ use dark_rift_shared::game::*;
 use crate::gameplay::buildings::building_kind_icon_path;
 use crate::state::*;
 use crate::ui::*;
+
+#[derive(Component)]
+pub struct BuildPillIcon;
+
+#[derive(Component)]
+pub struct BuildPillHotkey;
 
 pub fn spawn_action_dock(
     commands: &mut Commands,
@@ -37,9 +44,16 @@ pub fn spawn_action_dock(
             vis,
             Node {
                 flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
                 justify_content: JustifyContent::FlexEnd,
                 align_items: AlignItems::FlexEnd,
                 column_gap: Val::Px(SPACE_2),
+                row_gap: Val::Px(SPACE_2),
+                ..default()
+            },
+            TextFont {
+                font: font.clone(),
+                font_size: 16.0,
                 ..default()
             },
         ))
@@ -47,9 +61,12 @@ pub fn spawn_action_dock(
             dock.spawn((
                 BuildPillRow,
                 Node {
-                    width: Val::Px(outer_w),
-                    flex_direction: FlexDirection::Column,
+                    max_width: Val::Px(outer_w),
+                    flex_direction: FlexDirection::Row,
+                    flex_wrap: FlexWrap::Wrap,
+                    justify_content: JustifyContent::Center,
                     row_gap: Val::Px(gap),
+                    column_gap: Val::Px(gap),
                     padding: UiRect::all(Val::Px(pad)),
                     border: UiRect::all(Val::Px(frame)),
                     border_radius: BorderRadius::all(Val::Px(6.0 * s)),
@@ -59,91 +76,79 @@ pub fn spawn_action_dock(
                 BorderColor::all(panel_border()),
             ))
             .with_children(|grid| {
-                for row_i in 0..2 {
+                for idx in 0..6 {
+                    let kind = BuildingKind::ALL[idx];
+                    let hk = (idx + 1).to_string();
                     grid.spawn((
+                        Button,
+                        BuildPillButton(kind),
                         Node {
-                            width: Val::Percent(100.0),
-                            flex_direction: FlexDirection::Row,
-                            justify_content: JustifyContent::Center,
-                            column_gap: Val::Px(gap),
+                            width: Val::Px(cell),
+                            height: Val::Px(cell),
+                            flex_direction: FlexDirection::Column,
+                            padding: UiRect::all(Val::Px(3.0 * s)),
+                            justify_content: JustifyContent::FlexStart,
+                            row_gap: Val::Px(1.0 * s),
+                            border_radius: BorderRadius::all(Val::Px(4.0 * s)),
+                            border: UiRect::all(Val::Px(1.0 * s)),
                             ..default()
                         },
+                        BackgroundColor(panel_bg()),
+                        BorderColor::all(panel_border()),
                     ))
-                    .with_children(|row| {
-                        for c in 0..3 {
-                            let idx = row_i * 3 + c;
-                            let kind = BuildingKind::ALL[idx];
-                            let hk = (idx + 1).to_string();
-                            row.spawn((
-                                Button,
-                                BuildPillButton(kind),
-                                Node {
-                                    width: Val::Px(cell),
-                                    height: Val::Px(cell),
-                                    flex_direction: FlexDirection::Column,
-                                    padding: UiRect::all(Val::Px(3.0 * s)),
-                                    justify_content: JustifyContent::FlexStart,
-                                    row_gap: Val::Px(1.0 * s),
-                                    border_radius: BorderRadius::all(Val::Px(4.0 * s)),
-                                    border: UiRect::all(Val::Px(1.0 * s)),
+                    .with_children(|cell_ui| {
+                        cell_ui.spawn((
+                            Node {
+                                width: Val::Percent(100.0),
+                                flex_direction: FlexDirection::Row,
+                                justify_content: JustifyContent::FlexEnd,
+                                min_height: Val::Px(11.0 * s),
+                                ..default()
+                            },
+                        ))
+                        .with_children(|hk_row| {
+                            hk_row.spawn((
+                                BuildPillHotkey,
+                                Text::new(hk),
+                                BuildPillLabel { slot: 3, kind },
+                                TextFont {
+                                    font: font.clone(),
+                                    font_size: 10.0 * s,
                                     ..default()
                                 },
-                                BackgroundColor(panel_bg()),
-                                BorderColor::all(panel_border()),
-                            ))
-                            .with_children(|cell_ui| {
-                                cell_ui.spawn((
-                                    Node {
-                                        width: Val::Percent(100.0),
-                                        flex_direction: FlexDirection::Row,
-                                        justify_content: JustifyContent::FlexEnd,
-                                        min_height: Val::Px(11.0 * s),
-                                        ..default()
-                                    },
-                                ))
-                                .with_children(|hk_row| {
-                                    hk_row.spawn((
-                                        Text::new(hk),
-                                        BuildPillLabel { slot: 3, kind },
-                                        TextFont {
-                                            font: font.clone(),
-                                            font_size: 10.0 * s,
-                                            ..default()
-                                        },
-                                        TextColor(Color::srgb(0.55, 0.62, 0.72)),
-                                    ));
-                                });
-                                cell_ui.spawn((
-                                    ImageNode::new(asset_server.load(building_kind_icon_path(kind))),
-                                    Node {
-                                        width: Val::Px(icon),
-                                        height: Val::Px(icon),
-                                        align_self: AlignSelf::Center,
-                                        ..default()
-                                    },
-                                ));
-                                cell_ui.spawn((
-                                    Text::new("0"),
-                                    BuildPillLabel { slot: 1, kind },
-                                    TextFont {
-                                        font: font.clone(),
-                                        font_size: 10.0 * s,
-                                        ..default()
-                                    },
-                                    TextColor(Color::srgb(0.85, 0.9, 1.0)),
-                                ));
-                                cell_ui.spawn((
-                                    Text::new("0"),
-                                    BuildPillLabel { slot: 2, kind },
-                                    TextFont {
-                                        font: font.clone(),
-                                        font_size: 9.5 * s,
-                                        ..default()
-                                    },
-                                    TextColor(Color::srgb(0.75, 0.78, 0.82)),
-                                ));
-                            });
-                        }
+                                TextColor(Color::srgb(0.55, 0.62, 0.72)),
+                            ));
+                        });
+                        cell_ui.spawn((
+                            BuildPillIcon,
+                            ImageNode::new(asset_server.load(building_kind_icon_path(kind))),
+                            Node {
+                                width: Val::Px(icon),
+                                height: Val::Px(icon),
+                                align_self: AlignSelf::Center,
+                                ..default()
+                            },
+                        ));
+                        cell_ui.spawn((
+                            Text::new("0"),
+                            BuildPillLabel { slot: 1, kind },
+                            TextFont {
+                                font: font.clone(),
+                                font_size: 10.0 * s,
+                                ..default()
+                            },
+                            TextColor(Color::srgb(0.85, 0.9, 1.0)),
+                        ));
+                        cell_ui.spawn((
+                            Text::new("0"),
+                            BuildPillLabel { slot: 2, kind },
+                            TextFont {
+                                font: font.clone(),
+                                font_size: 9.5 * s,
+                                ..default()
+                            },
+                            TextColor(Color::srgb(0.75, 0.78, 0.82)),
+                        ));
                     });
                 }
             });
@@ -188,7 +193,7 @@ pub fn spawn_bottom_combat_hud(
     } else {
         Visibility::Visible
     };
-    spawn_action_dock(commands, shell, observer, hud_scale, asset_server, font);
+    spawn_action_dock(commands, shell, observer, hud_scale, asset_server, font.clone());
     commands
         .spawn((
             ChildOf(shell.bottom_sheet),
@@ -206,6 +211,11 @@ pub fn spawn_bottom_combat_hud(
                 row_gap: Val::Px(4.0 * s),
                 ..default()
             },
+            TextFont {
+                font: font.clone(),
+                font_size: 16.0,
+                ..default()
+            },
         ));
 
     commands
@@ -216,37 +226,31 @@ pub fn spawn_bottom_combat_hud(
             RelativeCursorPosition::default(),
             vis,
             Node {
-                width: Val::Percent(100.0),
-                align_items: AlignItems::Center,
+                position_type: PositionType::Relative,
+                width: Val::Auto,
+                max_width: Val::Percent(100.0),
+                align_items: AlignItems::FlexStart,
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(12.0 * s),
                 padding: UiRect::bottom(Val::Px(16.0 * s)),
                 ..default()
             },
+            BackgroundColor(Color::NONE), // dynamically set to black-transparent on compact
+            TextFont {
+                font: font.clone(),
+                font_size: 16.0,
+                ..default()
+            },
         ))
         .with_children(|root| {
             root.spawn((
-                OutgoingRowsContainer,
+                crate::ui::hud_combat::BottomHudPanel,
                 Node {
-                    width: Val::Percent(96.0),
-                    min_width: Val::Px(280.0 * s),
-                    max_width: Val::Px(800.0 * s),
-                    flex_direction: FlexDirection::Row,
-                    flex_wrap: FlexWrap::Wrap,
-                    align_content: AlignContent::FlexStart,
-                    row_gap: Val::Px(8.0 * s),
-                    column_gap: Val::Px(8.0 * s),
-                    max_height: Val::Px(280.0 * s),
-                    overflow: Overflow::scroll_y(),
-                    ..default()
-                },
-                bevy::ui::ScrollPosition::default(),
-            ));
-
-            root.spawn((
-                Node {
-                    width: Val::Percent(96.0),
-                    max_width: Val::Px(800.0 * s),
+                    flex_shrink: 0.0,
+                    width: Val::Auto,
+                    min_width: Val::Px(300.0 * s),
+                    max_width: Val::Px(560.0 * s),
+                    align_self: AlignSelf::FlexStart,
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::Stretch,
                     row_gap: Val::Px(8.0 * s),
@@ -255,129 +259,129 @@ pub fn spawn_bottom_combat_hud(
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.1, 0.1, 0.15, 0.85)),
+                BorderColor::all(Color::NONE), // placeholder for uniform tuple size
             ))
             .with_children(|panel| {
-                // Top row: Economy (Cap | Gold | Troops)
+                // Top row: Simplified Economy + Readout
                 panel.spawn((
                     Node {
                         width: Val::Percent(100.0),
                         flex_direction: FlexDirection::Row,
                         justify_content: JustifyContent::SpaceBetween,
-                        column_gap: Val::Px(8.0 * s),
+                        align_items: AlignItems::Center,
                         ..default()
                     },
                 )).with_children(|eco_row| {
-                    // Capacity Pill
+                    // Left: Troops / Cap Loading Bar
                     eco_row.spawn((
+                        crate::ui::hud_combat::TroopsBarShell,
                         Node {
+                            width: Val::Px(180.0 * s),
+                            height: Val::Px(28.0 * s),
                             flex_direction: FlexDirection::Row,
                             align_items: AlignItems::Center,
-                            padding: UiRect::axes(Val::Px(12.0 * s), Val::Px(6.0 * s)),
-                            border_radius: BorderRadius::all(Val::Px(8.0 * s)),
-                            column_gap: Val::Px(6.0 * s),
+                            justify_content: JustifyContent::Center,
+                            overflow: Overflow::clip(),
+                            border_radius: BorderRadius::all(Val::Px(6.0 * s)),
+                            border: UiRect::all(Val::Px(1.5 * s)),
                             ..default()
                         },
-                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.04)), // OpenFront bg-white/4
-                    )).with_children(|pill| {
-                        pill.spawn((
-                            ImageNode::new(asset_server.load("icons/capacity.png")),
-                            Node { width: Val::Px(16.0 * s), height: Val::Px(16.0 * s), ..default() }
+                        BackgroundColor(Color::srgba(0.1, 0.1, 0.15, 0.9)),
+                        BorderColor::all(Color::BLACK),
+                    )).with_children(|bar| {
+                        // Damage/Heal animation layer (lerps slowly)
+                        bar.spawn((
+                            crate::ui::hud_combat::TroopsBarDamage,
+                            Node {
+                                position_type: PositionType::Absolute,
+                                left: Val::Px(0.0),
+                                width: Val::Percent(0.0),
+                                height: Val::Percent(100.0),
+                                ..default()
+                            },
+                            BackgroundColor(Color::WHITE),
+                            ZIndex(0),
                         ));
-                        pill.spawn((
-                            BottomHudCap,
-                            Text::new("0"),
-                            TextFont { font_size: 16.0 * s, ..default() },
-                            TextColor(Color::WHITE),
+
+                        // Actual fill layer (visual interpolation follows current troops state)
+                        bar.spawn((
+                            crate::ui::hud_combat::TroopsBarFill,
+                            Node {
+                                position_type: PositionType::Absolute,
+                                left: Val::Px(0.0),
+                                width: Val::Percent(0.0),
+                                height: Val::Percent(100.0),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgb(0.4, 0.9, 0.4)), // will be dynamically colored
+                            ZIndex(1),
                         ));
-                        pill.spawn((
-                            Text::new("Cap"),
-                            TextFont { font_size: 14.0 * s, ..default() },
-                            TextColor(Color::srgb(0.8, 0.8, 0.8)),
-                        ));
+
+                        // Text and Icon container (above fills)
+                        bar.spawn((
+                            Node {
+                                flex_direction: FlexDirection::Row,
+                                align_items: AlignItems::Center,
+                                column_gap: Val::Px(6.0 * s),
+                                ..default()
+                            },
+                            ZIndex(2),
+                        )).with_children(|group| {
+                            group.spawn((
+                                ImageNode::new(asset_server.load("icons/troops.png")),
+                                Node { width: Val::Px(18.0 * s), height: Val::Px(18.0 * s), ..default() }
+                            ));
+                            group.spawn((
+                                BottomHudTroops,
+                                Text::new("0 / 0"),
+                                TextFont { font_size: 16.0 * s, ..default() },
+                                TextColor(Color::WHITE),
+                            ));
+                        });
                     });
 
-                    // Gold Pill
+                    // Center: Gold
                     eco_row.spawn((
                         Node {
                             flex_direction: FlexDirection::Row,
                             align_items: AlignItems::Center,
-                            padding: UiRect::axes(Val::Px(12.0 * s), Val::Px(6.0 * s)),
-                            border_radius: BorderRadius::all(Val::Px(8.0 * s)),
                             column_gap: Val::Px(6.0 * s),
                             ..default()
                         },
-                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.04)),
-                    )).with_children(|pill| {
-                        pill.spawn((
+                    )).with_children(|group| {
+                        group.spawn((
                             ImageNode::new(asset_server.load("icons/gold.png")),
-                            Node { width: Val::Px(16.0 * s), height: Val::Px(16.0 * s), ..default() }
+                            Node { width: Val::Px(20.0 * s), height: Val::Px(20.0 * s), ..default() }
                         ));
-                        pill.spawn((
+                        group.spawn((
                             BottomHudGold,
                             Text::new("0"),
                             TextFont { font_size: 16.0 * s, ..default() },
                             TextColor(Color::WHITE),
                         ));
-                        pill.spawn((
-                            Text::new("Gold"),
-                            TextFont { font_size: 14.0 * s, ..default() },
-                            TextColor(Color::srgb(0.8, 0.8, 0.8)),
-                        ));
                     });
 
-                    // Troops Pill
+                    // Right: Slider readout
                     eco_row.spawn((
-                        Node {
-                            flex_direction: FlexDirection::Row,
-                            align_items: AlignItems::Center,
-                            padding: UiRect::axes(Val::Px(12.0 * s), Val::Px(6.0 * s)),
-                            border_radius: BorderRadius::all(Val::Px(8.0 * s)),
-                            column_gap: Val::Px(6.0 * s),
+                        AttackRatioReadout,
+                        Text::new(""),
+                        TextFont {
+                            font_size: 16.0 * s,
                             ..default()
                         },
-                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.04)), // OpenFront bg-white/4
-                    )).with_children(|pill| {
-                        pill.spawn((
-                            ImageNode::new(asset_server.load("icons/troops.png")),
-                            Node { width: Val::Px(16.0 * s), height: Val::Px(16.0 * s), ..default() }
-                        ));
-                        pill.spawn((
-                            BottomHudTroops,
-                            Text::new("0"),
-                            TextFont { font_size: 16.0 * s, ..default() },
-                            TextColor(Color::WHITE),
-                        ));
-                        pill.spawn((
-                            Text::new("Troops"),
-                            TextFont { font_size: 14.0 * s, ..default() },
-                            TextColor(Color::srgb(0.8, 0.8, 0.8)),
-                        ));
-                    });
+                        TextColor(Color::WHITE),
+                    ));
                 });
 
-                // Bottom row: Attack Slider
+                // Bottom row: Attack Slider (Full Width)
                 panel.spawn((
                     Node {
                         width: Val::Percent(100.0),
                         flex_direction: FlexDirection::Row,
                         align_items: AlignItems::Center,
-                        column_gap: Val::Px(16.0 * s),
                         ..default()
                     },
                 )).with_children(|slider_row| {
-                    slider_row.spawn((
-                        AttackRatioReadout,
-                        Text::new(""),
-                        TextFont {
-                            font_size: 18.0 * s,
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                        Node {
-                            width: Val::Px(180.0 * s),
-                            ..default()
-                        },
-                    ));
 
                     slider_row.spawn((
                         Button,
@@ -423,9 +427,44 @@ pub fn spawn_bottom_combat_hud(
                                     BackgroundColor(Color::srgb(0.2, 0.2, 0.25)),
                                 ));
                             });
+                            
+                        track.spawn((
+                            crate::ui::hud_combat::AttackRatioHandle,
+                            Node {
+                                position_type: PositionType::Absolute,
+                                width: Val::Px(24.0 * s),
+                                height: Val::Px(24.0 * s),
+                                border_radius: BorderRadius::all(Val::Px(12.0 * s)),
+                                left: Val::Percent(20.0),
+                                margin: UiRect::left(Val::Px(-12.0 * s)), // center the handle
+                                ..default()
+                            },
+                            BackgroundColor(Color::WHITE),
+                            BorderColor::all(Color::BLACK),
+                        ));
                     });
                 });
             });
+
+            root.spawn((
+                OutgoingRowsContainer,
+                Node {
+                    position_type: PositionType::Absolute,
+                    bottom: Val::Percent(100.0),
+                    left: Val::Px(0.0),
+                    right: Val::Px(0.0),
+                    margin: UiRect::bottom(Val::Px(8.0 * s)),
+                    // DOM order is oldest→newest; reverse column so the latest outgoing row is on top.
+                    flex_direction: FlexDirection::ColumnReverse,
+                    align_items: AlignItems::Center,
+                    row_gap: Val::Px(8.0 * s),
+                    max_height: Val::Px(220.0 * s),
+                    overflow: Overflow::scroll_y(),
+                    display: Display::None,
+                    ..default()
+                },
+                bevy::ui::ScrollPosition::default(),
+            ));
         });
 }
 
@@ -510,16 +549,17 @@ pub fn system_update_perf_overlay(
 
     if refresh_fps {
         throttle.last_fps_refresh = Some(now);
-        overlay.fps_value = diagnostics
+        let next = diagnostics
             .get(&FrameTimeDiagnosticsPlugin::FPS)
             .and_then(|v| v.value())
             .map(|f| format!("{f:.1}"))
             .unwrap_or_else(|| "—".to_string());
+        assign_if_ne(&mut overlay.fps_value, next);
     }
 
     if refresh_net {
         throttle.last_net_refresh = Some(now);
-        overlay.ping_value = if cli.replay.is_some() {
+        let next = if cli.replay.is_some() {
             "Offline".to_string()
         } else if net.handshake_ms.is_none() && net.connect_started.is_some() {
             "Connecting…".to_string()
@@ -529,6 +569,7 @@ pub fn system_update_perf_overlay(
         } else {
             "…".to_string()
         };
+        assign_if_ne(&mut overlay.ping_value, next);
     }
 
     if !(refresh_fps || refresh_net) {
