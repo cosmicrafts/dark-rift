@@ -249,6 +249,12 @@ impl BuildingGrid {
                 self.cells[(cy * grid_w + cx) as usize].push((bx, by));
             }
         }
+        // Determinism: `iter_in_range` walks cells in fixed order but yields multiple
+        // structures per cell in vector order. Sort so order does not depend on
+        // building insertion / id order (human vs bot intents same tick).
+        for cell in self.cells.iter_mut().take(num_cells) {
+            cell.sort_unstable();
+        }
         self.dirty = false;
     }
 
@@ -273,6 +279,9 @@ impl BuildingGrid {
             if cx < grid_w && cy < grid_h {
                 self.cells[(cy * grid_w + cx) as usize].push((bx, by));
             }
+        }
+        for cell in self.cells.iter_mut().take(num_cells) {
+            cell.sort_unstable();
         }
         self.dirty = false;
     }
