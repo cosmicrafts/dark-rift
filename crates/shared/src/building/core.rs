@@ -123,7 +123,7 @@ impl DefenseGrid {
     /// Rebuild the grid with the specified player's defense posts.
     /// This is allocation-free after the first few calls because the `cells` array
     /// simply clears its internal `Vec`s without dropping capacity.
-    pub fn rebuild(&mut self, buildings: &[Building], map_width: u32, map_height: u32, cell_size: u32, target_owner: u16) {
+    pub fn rebuild(&mut self, buildings: &[Building], map_width: u32, map_height: u32, cell_size: u32) {
         let grid_w = (map_width + cell_size - 1) / cell_size;
         let grid_h = (map_height + cell_size - 1) / cell_size;
         
@@ -140,7 +140,7 @@ impl DefenseGrid {
         }
         
         for &b in buildings {
-            if b.owner_id == target_owner && b.kind == BuildingKind::DefensePost && !b.under_construction {
+            if b.kind == BuildingKind::DefensePost && !b.under_construction {
                 let bx = b.tile_idx % map_width;
                 let by = b.tile_idx / map_width;
                 let cx = bx / cell_size;
@@ -154,7 +154,7 @@ impl DefenseGrid {
     
     /// Calculate priority bonus querying only cells within `DEFENSE_POST_RANGE`.
     #[inline]
-    pub fn priority_bonus(&self, tile_x: u32, tile_y: u32, map_width: u32) -> i64 {
+    pub fn priority_bonus(&self, tile_x: u32, tile_y: u32, map_width: u32, target_owner: u16) -> i64 {
         let mut bonus: i64 = 0;
         let range = config::DEFENSE_POST_RANGE as u32;
         
@@ -170,6 +170,7 @@ impl DefenseGrid {
             for cx in cx_min..=cx_max {
                 let idx = (cy * self.grid_w + cx) as usize;
                 for b in &self.cells[idx] {
+                    if b.owner_id != target_owner { continue; }
                     let bx = b.tile_idx % map_width;
                     let by = b.tile_idx / map_width;
                     let d = manhattan(tile_x as i32, tile_y as i32, bx as i32, by as i32);

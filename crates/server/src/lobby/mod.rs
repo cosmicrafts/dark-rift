@@ -99,12 +99,15 @@ pub fn system_master_lobby(
                     
                     // Spawn Tribal Bots locally in the server
                     let bot_count = meta.config.bot_count;
-                    if bot_count > 0 {
-                        info!("🤖 Spawning {} Tribal Bots into Lobby {}...", bot_count, lobby.id);
+                    let nation_count = meta.config.nation_count;
+                    if bot_count > 0 || nation_count > 0 {
+                        info!("🤖 Spawning {} Tribes and {} Nations into Lobby {}...", bot_count, nation_count, lobby.id);
                         let prefixes = ["Akkadian", "Scythian", "Roman", "Greek", "Spartan", "Persian", "Minoan", "Etruscan", "Celtic", "Gallic", "Thracian", "Dacian", "Sumerian"];
                         let suffixes = ["Tribe", "Empire", "Kingdom", "Horde", "Clan", "Legion"];
                         
-                        for _i in 0..bot_count {
+                        let total_ai = bot_count + nation_count;
+                        for i in 0..total_ai {
+                            let is_nation = i < nation_count;
                             let player_id = roster.0.iter().map(|p| p.id).max().unwrap_or(0) + 1;
                             let color = dark_rift_shared::player::bot_territory_color(meta.seed, player_id);
                             
@@ -112,17 +115,23 @@ pub fn system_master_lobby(
                             use dark_rift_shared::rng::NextIntExt;
                             let p_idx = rng.next_int(0, prefixes.len() as i32) as usize;
                             let s_idx = rng.next_int(0, suffixes.len() as i32) as usize;
-                            let mut bot_name = format!("👤 {} {}", prefixes[p_idx], suffixes[s_idx]);
+                            let mut bot_name = format!("{} {} {}", if is_nation { "🏛️" } else { "👤" }, prefixes[p_idx], suffixes[s_idx]);
                             
                             let (sx, sy, nation_opt) = pick_spawn(&roster, player_id, meta);
                             if let Some(nation_name) = nation_opt {
-                                bot_name = nation_name;
+                                bot_name = nation_name; // Use manifest name if available
                             }
+                            
+                            let player_type = if is_nation {
+                                dark_rift_shared::player::PlayerType::Nation
+                            } else {
+                                dark_rift_shared::player::PlayerType::Bot
+                            };
                             
                             roster.0.push(PlayerInfo {
                                 id: player_id,
                                 name: bot_name,
-                                player_type: dark_rift_shared::player::PlayerType::Bot,
+                                player_type,
                                 color,
                                 spawn_x: sx,
                                 spawn_y: sy,

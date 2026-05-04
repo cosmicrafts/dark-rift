@@ -35,6 +35,9 @@ pub fn start_game_core(
                     dark_rift_shared::player::PlayerType::Bot => {
                         Player::new_bot(info.id, info.name.clone(), info.color, &msg.config)
                     }
+                    dark_rift_shared::player::PlayerType::Nation => {
+                        Player::new_nation(info.id, info.name.clone(), info.color, &msg.config)
+                    }
                 };
                 game.spawn_player(player, info.spawn_x, info.spawn_y);
             }
@@ -147,7 +150,8 @@ pub fn pop_turn(
     if let Some(turn) = queue.0.pop_front() {
         engine.apply_intents(&turn.intents);
         engine.execute_income();
-        engine.execute_bot_think();
+        engine.execute_bot_think(); // Tribes
+        engine.execute_nation_think(); // Nations
         engine.execute_fleets();
         engine.execute_combat();
         engine.execute_construction();

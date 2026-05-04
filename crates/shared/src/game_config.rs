@@ -31,6 +31,7 @@ impl Default for BotProfile {
 pub struct GameConfig {
     pub max_players: u32,
     pub bot_count: u32,
+    pub nation_count: u32,
     pub bot_difficulty: BotDifficulty,
 
     // Map Config
@@ -62,7 +63,8 @@ impl Default for GameConfig {
     fn default() -> Self {
         Self {
             max_players: 12,
-            bot_count: 200,
+            bot_count: 150, // Tribes (Bots)
+            nation_count: 50, // Nations (Complex AI)
             bot_difficulty: BotDifficulty::Vanilla,
             map_name: "europe".to_string(),
             map_width: 2904,
@@ -73,8 +75,8 @@ impl Default for GameConfig {
             attack_cost_neutral: 1.0,
             bot_attack_interval_ticks: 24,
             starting_troops: 100.0,
-            starting_gold: 250.0,
-            gold_base_income: 1.25,
+            starting_gold: 5.0,
+            gold_base_income: 0.1,
             troop_base_income: 2.0,
             troop_per_tile: 0.05,
             max_troops_base: 100.0,
@@ -82,7 +84,7 @@ impl Default for GameConfig {
             city_max_troops_per_level: 2000.0,
             factory_income_bonus_per_level: 0.10,
             factory_income_bonus_cap: 1.50,
-            gold_income_per_city_level: 0.35,
+            gold_income_per_city_level: 0.0,
         }
     }
 }

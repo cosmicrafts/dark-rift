@@ -1,4 +1,5 @@
 pub mod bot;
+pub mod nation;
 pub mod combat;
 pub mod buildings;
 pub mod fleet;

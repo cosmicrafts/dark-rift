@@ -1,31 +1,9 @@
 use crate::engine::DarkRiftEngine;
-use crate::game::BuildingKind;
 use crate::protocol::{GameplayIntent, StampedIntent, AttackIntent};
-use crate::building::{aggregate_buildings_per_player, structure_kind_enabled, structure_build_cost_gold, resolve_structure_spawn_tile};
 use crate::rng::{NextIntExt, WyRand, SeedableRng};
-fn bot_structure_target_count(
-    kind: BuildingKind,
-    city_equivalent: u32,
-    difficulty: crate::game_config::BotDifficulty,
-) -> u32 {
-    let sam_ratio = match difficulty {
-        crate::game_config::BotDifficulty::BrainDead => 0.15,
-        crate::game_config::BotDifficulty::Vanilla => 0.20,
-        crate::game_config::BotDifficulty::Terminator => 0.30,
-    };
-    match kind {
-        BuildingKind::DefensePost => ((city_equivalent as f64) * 0.25).floor() as u32,
-        BuildingKind::Port => ((city_equivalent as f64) * 0.75).floor() as u32,
-        BuildingKind::Factory => ((city_equivalent as f64) * 0.75).floor() as u32,
-        BuildingKind::SamLauncher => ((city_equivalent as f64) * sam_ratio).floor() as u32,
-        BuildingKind::MissileSilo => ((city_equivalent as f64) * 0.2).floor() as u32,
-        BuildingKind::City => city_equivalent.saturating_add(1),
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 enum BotDecisionKind {
-    Build = 0,
     Attack = 1,
 }
 
@@ -42,19 +20,17 @@ pub fn execute_bot_think(&mut self) {
         return;
     }
 
-    let config = self.state.config.clone();
     let tick = self.state.tick;
-    let (attack_interval_base, trigger_ratio, reserve_ratio, expand_ratio, random_attack_div) =
-        match config.bot_difficulty {
-            crate::game_config::BotDifficulty::BrainDead => (500, 0.9, 0.8, 0.12, 8),
-            crate::game_config::BotDifficulty::Vanilla => (250, 0.6, 0.3, 0.15, 5),
-            crate::game_config::BotDifficulty::Terminator => (125, 0.4, 0.1, 0.18, 3),
-        };
+    // Tribes are generally passive, they just expand and occasionally attack
+    let attack_interval_base = 250;
+    let trigger_ratio = 0.6;
+    let reserve_ratio = 0.3;
+    let expand_ratio = 0.15;
+    let random_attack_div = 5;
 
     let mut schedule: Vec<(u16, u64, u64)> = Vec::new();
-    let mut any_structures = false;
     for p in self.state.players.iter() {
-        if p.is_human() || !p.alive {
+        if p.player_type != crate::player::PlayerType::Bot || !p.alive {
             continue;
         }
         let bot_id = p.id;
@@ -66,93 +42,17 @@ pub fn execute_bot_think(&mut self) {
             .max(1) as u64;
         let offset = sched_rng.next_int(0, interval as i32) as u64;
         schedule.push((bot_id, interval, offset));
-        
-        let phase = tick % interval;
-        let one_third = (offset + interval / 3) % interval;
-        let two_thirds = (offset + (interval * 2) / 3) % interval;
-        let do_attack = phase == offset;
-        let do_structures = do_attack || phase == one_third || phase == two_thirds;
-        if do_structures {
-            any_structures = true;
-        }
     }
     schedule.sort_unstable_by_key(|(bot_id, _, _)| *bot_id);
     if schedule.is_empty() {
         return;
     }
 
-    let max_pid = self.state.players.iter().map(|p| p.id as usize).max().unwrap_or(0);
-    let aggs = aggregate_buildings_per_player(self.buildings.iter().copied(), max_pid);
-
-    if any_structures {
-        self.refresh_building_grid();
-    }
     let mut decisions: Vec<BotDecision> = Vec::new();
 
     for (bot_id, interval, offset) in schedule {
         let phase = tick % interval;
-        let one_third = (offset + interval / 3) % interval;
-        let two_thirds = (offset + (interval * 2) / 3) % interval;
         let do_attack = phase == offset;
-        let do_structures = do_attack || phase == one_third || phase == two_thirds;
-
-        if do_structures {
-            let Some(player) = self.state.player(bot_id) else {
-                continue;
-            };
-            let agg = aggs.get(bot_id as usize).copied().unwrap_or_default();
-            let city_equivalent =
-                agg.ready_city_count.max((player.tile_count / 2000).max(1));
-            let build_order = [
-                BuildingKind::DefensePost,
-                BuildingKind::Port,
-                BuildingKind::Factory,
-                BuildingKind::SamLauncher,
-                BuildingKind::MissileSilo,
-                BuildingKind::City,
-            ];
-            for kind in build_order {
-                if !structure_kind_enabled(kind) {
-                    continue;
-                }
-                let owned = agg.total_structures_of_kind(kind);
-                let target_count =
-                    bot_structure_target_count(kind, city_equivalent, config.bot_difficulty);
-                if kind == BuildingKind::MissileSilo && owned >= 3 {
-                    continue;
-                }
-                if owned >= target_count {
-                    continue;
-                }
-                let cost = structure_build_cost_gold(kind, bot_id, &self.buildings);
-                let mut tile_choice: Option<u32> = None;
-                let map_w = self.state.map.width;
-                let Some(bot_now) = self.state.player_mut(bot_id) else { continue; };
-                if bot_now.gold < cost {
-                    continue;
-                }
-
-                let border_len = bot_now.border_tiles.count_ones();
-                if border_len > 0 {
-                    let pick = bot_now.bot_rng.next_int(0, border_len as i32) as usize;
-                    let raw_idx = bot_now.border_tiles.ones().nth(pick).unwrap();
-                    let (bx, by) = (raw_idx % map_w, raw_idx / map_w);
-                    let idx = by * map_w + bx;
-                    if resolve_structure_spawn_tile(&self.state.map, bot_id, kind, idx, &self.building_grid, &mut self.placement_scratch).is_some() {
-                        tile_choice = Some(idx);
-                    }
-                }
-                let Some(target_tile) = tile_choice else {
-                    continue;
-                };
-                decisions.push(BotDecision {
-                    bot_id,
-                    kind: BotDecisionKind::Build,
-                    intent: GameplayIntent::BuildStructure { kind, target_tile },
-                });
-                break;
-            }
-        }
 
         if !do_attack {
             continue;
@@ -232,40 +132,4 @@ pub fn execute_bot_think(&mut self) {
         );
     }
 }
-}
-
-#[cfg(test)]
-mod bot_ratio_tests {
-    use super::bot_structure_target_count;
-    use crate::game::BuildingKind;
-    use crate::game_config::BotDifficulty;
-
-    #[test]
-    fn bot_structure_ratio_targets_follow_openfront_like_values() {
-        let city_equivalent = 10;
-        let sam_vanilla = bot_structure_target_count(
-            BuildingKind::SamLauncher,
-            city_equivalent,
-            BotDifficulty::Vanilla,
-        );
-        let sam_terminator = bot_structure_target_count(
-            BuildingKind::SamLauncher,
-            city_equivalent,
-            BotDifficulty::Terminator,
-        );
-        let ports = bot_structure_target_count(
-            BuildingKind::Port,
-            city_equivalent,
-            BotDifficulty::Terminator,
-        );
-        let silos = bot_structure_target_count(
-            BuildingKind::MissileSilo,
-            city_equivalent,
-            BotDifficulty::Terminator,
-        );
-        assert_eq!(sam_vanilla, 2);
-        assert_eq!(sam_terminator, 3);
-        assert_eq!(ports, 7);
-        assert_eq!(silos, 2);
-    }
 }

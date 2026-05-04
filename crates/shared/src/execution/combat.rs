@@ -18,6 +18,10 @@ impl DarkRiftEngine {
         let map_h = self.state.map.height;
 
         let tick_now = self.state.tick;
+
+        // Pre-filter all active defense posts globally ONCE per tick (replaces per-attack O(N^2) rebuilding bottleneck)
+        self.defense_grid.rebuild(&self.buildings, map_w, map_h, 16);
+
         // attacks are sorted on insertion
 
         let mut to_remove = Vec::new();
@@ -26,9 +30,6 @@ impl DarkRiftEngine {
             // Need to borrow state and buildings mutably but not the entire self array
             // Actually, we can borrow state and defense grid and attacks[i] simultaneously
             let execution = &mut self.attacks[i];
-
-            // Pre-filter defense posts into a spatial grid to crush the O(N^2) scan down to O(1)
-            self.defense_grid.rebuild(&self.buildings, map_w, map_h, 16, execution.target_owner);
 
         if execution.retreating {
             let refund = execution.troops.max(0.0);
@@ -135,6 +136,7 @@ impl DarkRiftEngine {
                         target_tile.x,
                         target_tile.y,
                         map_w,
+                        execution.target_owner,
                     );
                     let dp_multiplier = 1.0 + (dp_bonus as f64 / 10.0); // Approximation of defense buff
 
@@ -172,6 +174,7 @@ impl DarkRiftEngine {
                         nx,
                         ny,
                         map_w,
+                        execution.target_owner,
                     );
                     let seq = execution.insert_seq_counter;
                     execution.insert_seq_counter = execution.insert_seq_counter.wrapping_add(1);
@@ -205,6 +208,36 @@ impl DarkRiftEngine {
                 }
                 to_remove.push(i);
                 break;
+            }
+        }
+
+        // Conquer Gold Mechanic: Check elimination ONCE per attack, outside the tile loop
+        let execution_ref = &self.attacks[i];
+        if execution_ref.target_owner != 0 {
+            let mut defeated_gold = 0.0;
+            let mut is_eliminated = false;
+            let mut transfer_ratio = 1.0;
+
+            if let Some(target_player) = self.state.player(execution_ref.target_owner) {
+                if target_player.tile_count == 0 && target_player.alive {
+                    is_eliminated = true;
+                    defeated_gold = target_player.gold.max(0.0);
+                    if target_player.is_human() {
+                        transfer_ratio = 0.5;
+                    }
+                }
+            }
+
+            if is_eliminated {
+                // 1. Zero out defeated player
+                if let Some(target_player) = self.state.player_mut(execution_ref.target_owner) {
+                    target_player.gold = 0.0;
+                    target_player.alive = false;
+                }
+                // 2. Transfer gold to conqueror
+                if let Some(attacker) = self.state.player_mut(execution_ref.owner_id) {
+                    attacker.gold += defeated_gold * transfer_ratio;
+                }
             }
         }
     }

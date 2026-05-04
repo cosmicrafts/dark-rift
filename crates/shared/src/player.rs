@@ -14,8 +14,10 @@ pub type PlayerId = u16;
 pub enum PlayerType {
     /// A human player connected via the network.
     Human,
-    /// An AI bot.
+    /// A simple AI bot (Tribe) that expands but does not build structures.
     Bot,
+    /// A complex AI (Nation) that builds structures and plays like a human.
+    Nation,
 }
 
 fn default_player_gold() -> f64 {
@@ -85,7 +87,7 @@ impl Player {
         }
     }
 
-    /// Create a new bot player.
+    /// Create a new bot player (Tribe).
     pub fn new_bot(id: u16, name: String, color: [f32; 3], config: &crate::game_config::GameConfig) -> Self {
         Self {
             id,
@@ -93,8 +95,30 @@ impl Player {
             player_type: PlayerType::Bot,
             name,
             color,
-            troops: 10000.0,
+            troops: config.starting_troops,
             max_troops: config.max_troops_base / 3.0,
+            gold: 0.0,
+            has_spawned: false,
+            sum_x: 0,
+            sum_y: 0,
+            tile_count: 0,
+            border_tiles: crate::bitset::DenseBitSet::new(),
+            bot_rng: WyRand::seed_from_u64(id as u64),
+            factories: 0,
+            cities: 0,
+        }
+    }
+
+    /// Create a new nation player.
+    pub fn new_nation(id: u16, name: String, color: [f32; 3], config: &crate::game_config::GameConfig) -> Self {
+        Self {
+            id,
+            alive: true,
+            player_type: PlayerType::Nation,
+            name,
+            color,
+            troops: config.starting_troops,
+            max_troops: config.max_troops_base * 0.75, // Medium difficulty OpenFront equivalent
             gold: config.starting_gold,
             has_spawned: false,
             sum_x: 0,

@@ -43,6 +43,8 @@ impl DarkRiftEngine {
             + agg.city_levels as f64 * config.city_max_troops_per_level;
         if player.player_type == crate::player::PlayerType::Bot {
             player.max_troops /= 3.0;
+        } else if player.player_type == crate::player::PlayerType::Nation {
+            player.max_troops *= 0.75; // Medium difficulty
         }
 
         // safe_troops^0.75 = safe_troops^(1/2) * safe_troops^(1/4)
@@ -58,13 +60,19 @@ impl DarkRiftEngine {
         let mut income = raw_income * ratio * factory_mult;
         
         if player.player_type == crate::player::PlayerType::Bot {
-            income *= 0.6;
+            income *= 0.5;
         }
 
         player.troops = (safe_troops + income).min(player.max_troops);
 
         let safe_gold = player.gold.max(0.0);
-        let gold_income = config.gold_base_income
+        
+        let mut gold_base = config.gold_base_income;
+        if player.player_type == crate::player::PlayerType::Bot {
+            gold_base *= 0.5; // Tribes generate 50% less gold than Nations/Humans
+        }
+
+        let gold_income = gold_base
             + agg.city_levels as f64 * config.gold_income_per_city_level;
         player.gold = safe_gold + gold_income;
         }
