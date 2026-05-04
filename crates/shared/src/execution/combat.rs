@@ -245,9 +245,9 @@ impl DarkRiftEngine {
         }
     }
 
-    // Remove dead attacks in reverse order to maintain indices
+    // Remove dead attacks in reverse order to maintain indices and sorting
     for i in to_remove.into_iter().rev() {
-        self.attacks.swap_remove(i);
+        self.attacks.remove(i);
     }
 }
 
@@ -366,7 +366,7 @@ pub fn execute_fleets(&mut self) {
     }
 
     for i in to_remove.into_iter().rev() {
-        self.fleets.swap_remove(i);
+        self.fleets.remove(i);
     }
 }
 }

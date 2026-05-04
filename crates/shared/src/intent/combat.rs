@@ -212,7 +212,7 @@ pub(super) fn apply_attack_intent(
     // Sort reverse so we can remove safely
     to_remove.sort_unstable_by(|a, b| b.cmp(a));
     for i in to_remove {
-        self.attacks.swap_remove(i);
+        self.attacks.remove(i);
     }
 
     if remaining < self.state.config.attack_cost_neutral {
