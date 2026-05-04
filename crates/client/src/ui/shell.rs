@@ -89,18 +89,19 @@ pub struct HudBottomSheetRegion;
 #[derive(Component)]
 pub struct HudActionDockRegion;
 
-/// Spawns [`HudShellRoot`] at [`crate::ui_layers::HUD_SHELL`]. Child order under each region is
-/// paint order for that region only; cross-menu stacking uses `GlobalZIndex` in `ui_layers.rs`.
+#[derive(Component)]
+pub struct HudBottomRowRegion;
+
 pub fn setup_hud_shell(mut commands: Commands) {
     let root = commands
         .spawn((
             HudShellRoot,
             Node {
                 position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                right: Val::Px(0.0),
-                top: Val::Px(0.0),
-                bottom: Val::Px(0.0),
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
+                justify_content: JustifyContent::SpaceBetween,
                 ..default()
             },
             GlobalZIndex(HUD_SHELL),
@@ -112,28 +113,50 @@ pub fn setup_hud_shell(mut commands: Commands) {
             ChildOf(root),
             HudTopBarRegion,
             Node {
-                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Row,
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::FlexStart,
                 ..default()
             },
         ))
         .id();
-    let bottom_sheet = commands
+
+    let bottom_row = commands
         .spawn((
             ChildOf(root),
+            HudBottomRowRegion,
+            Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Row,
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::FlexEnd,
+                ..default()
+            },
+        ))
+        .id();
+
+    let bottom_sheet = commands
+        .spawn((
+            ChildOf(bottom_row),
             HudBottomSheetRegion,
             Node {
-                position_type: PositionType::Absolute,
+                flex_direction: FlexDirection::Column,
+                justify_content: JustifyContent::FlexEnd,
                 ..default()
             },
             ZIndex(50),
         ))
         .id();
+
     let action_dock = commands
         .spawn((
-            ChildOf(root),
+            ChildOf(bottom_row),
             HudActionDockRegion,
             Node {
-                position_type: PositionType::Absolute,
+                flex_direction: FlexDirection::Row,
+                justify_content: JustifyContent::FlexEnd,
+                align_items: AlignItems::FlexEnd,
                 ..default()
             },
             ZIndex(100),
@@ -194,88 +217,49 @@ pub fn system_apply_ui_shell_layout(
     state: Res<UiShellState>,
     dock_scale: Res<CombatDockUiScale>,
     mut regions: ParamSet<(
+        Query<&mut Node, With<HudShellRoot>>,
         Query<&mut Node, With<HudTopBarRegion>>,
-        Query<&mut Node, With<HudBottomSheetRegion>>,
+        Query<&mut Node, With<HudBottomRowRegion>>,
         Query<&mut Node, With<HudActionDockRegion>>,
     )>,
 ) {
-    {
-        let mut top_q = regions.p0();
-        let Ok(mut top) = top_q.single_mut() else { return };
-        // Full-width top strip: diagnostics left, EXIT right (children use SpaceBetween).
-        top.left = Val::Px(state.inset_left);
-        top.right = Val::Px(state.inset_right);
-        top.top = Val::Px(state.inset_top);
-        top.flex_direction = FlexDirection::Row;
-        top.justify_content = JustifyContent::SpaceBetween;
-        top.align_items = AlignItems::FlexStart;
-        top.column_gap = Val::Px(SPACE_2);
+    // Apply insets globally via padding on the root FlexColumn
+    if let Ok(mut root) = regions.p0().single_mut() {
+        assign_if_ne(&mut root.padding.left, Val::Px(state.inset_left));
+        assign_if_ne(&mut root.padding.right, Val::Px(state.inset_right));
+        assign_if_ne(&mut root.padding.top, Val::Px(state.inset_top));
+        assign_if_ne(&mut root.padding.bottom, Val::Px(state.inset_bottom));
     }
 
-    {
-        let mut bottom_q = regions.p1();
-        let Ok(mut bottom) = bottom_q.single_mut() else { return };
-        let compact = matches!(state.breakpoint, UiBreakpoint::Compact);
+    if let Ok(mut top) = regions.p1().single_mut() {
+        assign_if_ne(&mut top.column_gap, Val::Px(SPACE_2));
+    }
 
-        assign_if_ne(&mut bottom.left, Val::Px(state.inset_left));
+    let compact = matches!(state.breakpoint, UiBreakpoint::Compact);
+
+    if let Ok(mut bottom_row) = regions.p2().single_mut() {
         if compact {
-            // Full width: combat HUD stacks above the bottom action dock.
-            assign_if_ne(&mut bottom.right, Val::Px(state.inset_right));
-            let dock_reserve_h = action_dock_grid_layout_sizes(dock_scale.0).0 + 8.0 * dock_scale.0;
-            assign_if_ne(
-                &mut bottom.bottom,
-                Val::Px(state.inset_bottom + dock_reserve_h),
-            );
-            if bottom.align_items != AlignItems::Center {
-                bottom.align_items = AlignItems::Center;
-            }
+            bottom_row.flex_direction = FlexDirection::Column;
+            bottom_row.align_items = AlignItems::Center;
+            assign_if_ne(&mut bottom_row.row_gap, Val::Px(SPACE_2));
         } else {
-            // Leave a horizontal lane for the bottom-right action dock so HUD does not overlap it.
-            let dock_lane = action_dock_content_reserve_width(state.breakpoint, dock_scale.0);
-            assign_if_ne(
-                &mut bottom.right,
-                Val::Px(state.inset_right + dock_lane),
-            );
-            assign_if_ne(&mut bottom.bottom, Val::Px(state.inset_bottom));
-            if bottom.align_items != AlignItems::FlexStart {
-                bottom.align_items = AlignItems::FlexStart;
-            }
+            bottom_row.flex_direction = FlexDirection::Row;
+            bottom_row.align_items = AlignItems::FlexEnd;
+            assign_if_ne(&mut bottom_row.row_gap, Val::Px(0.0));
         }
-
-        bottom.flex_direction = FlexDirection::Column;
-        bottom.justify_content = JustifyContent::FlexEnd;
     }
 
-    {
-        let mut dock_q = regions.p2();
-        let Ok(mut dock) = dock_q.single_mut() else { return };
-        let compact = matches!(state.breakpoint, UiBreakpoint::Compact);
+    if let Ok(mut dock) = regions.p3().single_mut() {
         if compact {
-            assign_if_ne(&mut dock.left, Val::Px(state.inset_left));
-            assign_if_ne(&mut dock.right, Val::Px(state.inset_right));
-            assign_if_ne(&mut dock.bottom, Val::Px(state.inset_bottom));
-            dock.flex_direction = FlexDirection::Row;
-            if dock.justify_content != JustifyContent::Center {
-                dock.justify_content = JustifyContent::Center;
-            }
-            if dock.align_items != AlignItems::FlexEnd {
-                dock.align_items = AlignItems::FlexEnd;
-            }
             assign_if_ne(&mut dock.column_gap, Val::Px(SPACE_2));
             assign_if_ne(&mut dock.row_gap, Val::Px(0.0));
+            dock.justify_content = JustifyContent::Center;
+            dock.align_items = AlignItems::Center;
         } else {
-            assign_if_ne(&mut dock.left, Val::Auto);
-            assign_if_ne(&mut dock.right, Val::Px(state.inset_right));
-            assign_if_ne(&mut dock.bottom, Val::Px(state.inset_bottom));
-            dock.flex_direction = FlexDirection::Row;
-            if dock.justify_content != JustifyContent::FlexEnd {
-                dock.justify_content = JustifyContent::FlexEnd;
-            }
-            if dock.align_items != AlignItems::FlexEnd {
-                dock.align_items = AlignItems::FlexEnd;
-            }
             assign_if_ne(&mut dock.column_gap, Val::Px(SPACE_2));
             assign_if_ne(&mut dock.row_gap, Val::Px(SPACE_2));
+            dock.justify_content = JustifyContent::FlexEnd;
+            dock.align_items = AlignItems::FlexEnd;
         }
     }
 }

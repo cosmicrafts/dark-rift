@@ -201,13 +201,12 @@ pub fn spawn_bottom_combat_hud(
             InGameEntity,
             vis,
             Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(16.0 * s),
-                bottom: Val::Px(16.0 * s),
+                position_type: PositionType::Relative,
                 width: Val::Px(300.0 * s),
                 height: Val::Px(200.0 * s),
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::FlexEnd,
+                margin: UiRect::bottom(Val::Px(4.0 * s)),
                 row_gap: Val::Px(4.0 * s),
                 ..default()
             },

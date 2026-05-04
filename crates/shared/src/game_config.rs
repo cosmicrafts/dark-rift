@@ -76,7 +76,7 @@ impl Default for GameConfig {
             bot_attack_interval_ticks: 24,
             starting_troops: 100.0,
             starting_gold: 5.0,
-            gold_base_income: 0.1,
+            gold_base_income: 1.5,
             troop_base_income: 2.0,
             troop_per_tile: 0.05,
             max_troops_base: 100.0,
@@ -84,7 +84,7 @@ impl Default for GameConfig {
             city_max_troops_per_level: 2000.0,
             factory_income_bonus_per_level: 0.10,
             factory_income_bonus_cap: 1.50,
-            gold_income_per_city_level: 0.0,
+            gold_income_per_city_level: 0.5,
         }
     }
 }

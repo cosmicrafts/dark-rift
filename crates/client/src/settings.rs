@@ -125,8 +125,8 @@ impl Default for UiSettingsConfig {
             fleet_boat_scale: 2.0,
             fleet_target_ring_scale: 2.0,
             fleet_wake_scale: 2.0,
-            combat_hud_scale: 2.0,
-            mobile_hud_scale: 2.0,
+            combat_hud_scale: 1.2,
+            mobile_hud_scale: 1.2,
             combat_hud_fleet_rows: true,
         }
     }

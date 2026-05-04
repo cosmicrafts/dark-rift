@@ -222,6 +222,9 @@ impl DarkRiftEngine {
                 if target_player.tile_count == 0 && target_player.alive {
                     is_eliminated = true;
                     defeated_gold = target_player.gold.max(0.0);
+                    if target_player.player_type == crate::player::PlayerType::Bot {
+                        defeated_gold += 25.0; // Fixed bounty for eating a Tribe
+                    }
                     if target_player.is_human() {
                         transfer_ratio = 0.5;
                     }

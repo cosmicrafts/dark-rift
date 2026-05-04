@@ -21,8 +21,8 @@
         fleet_boat_scale: 2.0,
         fleet_target_ring_scale: 2.0,
         fleet_wake_scale: 2.0,
-        combat_hud_scale: 2.0,
-        mobile_hud_scale: 2.0,
+        combat_hud_scale: 1.2,
+        mobile_hud_scale: 1.2,
         combat_hud_fleet_rows: true,
     ),
     profile: (
@@ -42,7 +42,7 @@
         bot_attack_interval_ticks: 24,
         starting_troops: 100.0,
         starting_gold: 250.0,
-        gold_base_income: 1.25,
+        gold_base_income: 1.5,
         troop_base_income: 2.0,
         troop_per_tile: 0.05,
         max_troops_base: 100.0,
@@ -50,6 +50,6 @@
         city_max_troops_per_level: 2000.0,
         factory_income_bonus_per_level: 0.1,
         factory_income_bonus_cap: 1.5,
-        gold_income_per_city_level: 0.35,
+        gold_income_per_city_level: 0.5,
     ),
 )
