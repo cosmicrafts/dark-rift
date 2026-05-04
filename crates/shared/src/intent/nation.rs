@@ -165,7 +165,7 @@ pub fn execute_nation_think(&mut self) {
                     let mut tile_choice: Option<u32> = None;
                     if border_len > 0 {
                         let pick = bot_now.bot_rng.next_int(0, border_len as i32) as usize;
-                        // Collect a small sample around the pick point instead of nth(pick)
+                        // `next_int` is half-open [0, border_len): pick is always a valid ordinal index.
                         let mut count = 0usize;
                         let mut chosen_idx = 0u32;
                         for idx in bot_now.border_tiles.ones() {
@@ -175,12 +175,19 @@ pub fn execute_nation_think(&mut self) {
                             }
                             count += 1;
                         }
-                        if count == pick {
-                            let (bx, by) = (chosen_idx % map_w, chosen_idx / map_w);
-                            let idx = by * map_w + bx;
-                            if resolve_structure_spawn_tile(&self.state.map, bot_id, kind, idx, &self.building_grid, &mut self.placement_scratch).is_some() {
-                                tile_choice = Some(idx);
-                            }
+                        let (bx, by) = (chosen_idx % map_w, chosen_idx / map_w);
+                        let idx = by * map_w + bx;
+                        if resolve_structure_spawn_tile(
+                            &self.state.map,
+                            bot_id,
+                            kind,
+                            idx,
+                            &self.building_grid,
+                            &mut self.placement_scratch,
+                        )
+                        .is_some()
+                        {
+                            tile_choice = Some(idx);
                         }
                     }
                     let Some(target_tile) = tile_choice else {
