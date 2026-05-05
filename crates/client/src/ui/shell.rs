@@ -215,7 +215,7 @@ pub fn system_update_ui_shell_state(
 
 pub fn system_apply_ui_shell_layout(
     state: Res<UiShellState>,
-    dock_scale: Res<CombatDockUiScale>,
+    _dock_scale: Res<CombatDockUiScale>,
     mut regions: ParamSet<(
         Query<&mut Node, With<HudShellRoot>>,
         Query<&mut Node, With<HudTopBarRegion>>,

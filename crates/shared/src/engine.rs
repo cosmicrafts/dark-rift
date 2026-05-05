@@ -24,6 +24,8 @@ pub struct DarkRiftEngine {
     pub path_scratch: WaterPathfinderScratch,
     pub placement_scratch: PlacementScratch,
     pub defense_grid: crate::building::DefenseGrid,
+    /// When true, [`DefenseGrid::rebuild`] must run before combat queries (new/changed defense posts).
+    pub defense_grid_dirty: bool,
     pub building_grid: BuildingGrid,
 }
 
@@ -38,6 +40,7 @@ impl DarkRiftEngine {
             path_scratch: WaterPathfinderScratch::default(),
             placement_scratch: PlacementScratch::default(),
             defense_grid: crate::building::DefenseGrid::default(),
+            defense_grid_dirty: true,
             building_grid: BuildingGrid::default(),
         }
     }
@@ -54,9 +57,14 @@ impl DarkRiftEngine {
 
     #[inline]
     pub fn add_building(&mut self, b: Building) {
+        let is_ready_defense =
+            b.kind == crate::game::BuildingKind::DefensePost && !b.under_construction;
         let pos = self.buildings.partition_point(|x| x.id < b.id);
         self.buildings.insert(pos, b);
         self.building_grid.mark_dirty();
+        if is_ready_defense {
+            self.defense_grid_dirty = true;
+        }
     }
 
     #[inline]

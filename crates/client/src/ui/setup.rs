@@ -478,7 +478,7 @@ pub fn update_hud(
         let show_build_line =
             build_mode.0.is_some() && !overlay.build_hint.is_empty();
         let tick = highest.0.unwrap_or(0);
-        let fps_str = if show_build_line {
+        let mut fps_str = if show_build_line {
             format!(
                 "{}  |  Ping: {}  |  {} FPS  |  Tick: {}  |  {}",
                 overlay.status_line,
@@ -493,6 +493,10 @@ pub fn update_hud(
                 overlay.status_line, overlay.ping_value, overlay.fps_value, tick
             )
         };
+        if !overlay.sim_perf_line.is_empty() {
+            fps_str.push_str(" | ");
+            fps_str.push_str(&overlay.sim_perf_line);
+        }
         if **fps_text != fps_str {
             **fps_text = fps_str;
         }

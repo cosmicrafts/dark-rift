@@ -178,6 +178,11 @@ pub fn system_handle_go_back(
     }
 }
 
+/// Clears FPS spike diagnostics line when leaving a match (overlay resource persists in lobby).
+pub fn system_clear_sim_perf_line(mut overlay: ResMut<OverlayDiagnostics>) {
+    overlay.sim_perf_line.clear();
+}
+
 pub fn system_cleanup_ingame_entities(
     mut commands: Commands,
     mut ready: ResMut<GameReady>,

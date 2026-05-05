@@ -135,11 +135,12 @@ pub fn system_sync_fleet_visuals(
     }
 
     for (e, mut fb, mut tf) in boat_q.iter_mut() {
-        let Some(f) = engine.fleets.iter().find(|x| x.id == fb.fleet_id) else {
+        let Ok(fi) = engine.fleets.binary_search_by_key(&fb.fleet_id, |x| x.id) else {
             commands.entity(fb.wake).try_despawn();
             commands.entity(e).try_despawn();
             continue;
         };
+        let f = &engine.fleets[fi];
         let cur = f.current_tile;
         let p = tile_idx_to_world(cur, mw, mh);
         tf.translation = Vec3::new(p.x, p.y, 272.0);
@@ -156,7 +157,11 @@ pub fn system_sync_fleet_visuals(
         }
     }
     for (e, ft, _tf) in target_q.iter_mut() {
-        if !engine.fleets.iter().any(|x| x.id == ft.fleet_id) {
+        if engine
+            .fleets
+            .binary_search_by_key(&ft.fleet_id, |x| x.id)
+            .is_err()
+        {
             commands.entity(e).try_despawn();
         }
     }

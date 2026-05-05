@@ -89,7 +89,8 @@ fn main() {
             .init_resource::<OutgoingFleetRowMap>()
             .init_resource::<WaterPathfinderScratch>()
             .init_resource::<WaterComponents>()
-            .init_resource::<CombatDockUiScale>();
+            .init_resource::<CombatDockUiScale>()
+            .init_resource::<SimPerfDiagnostics>();
 
         // `StartGameParams` includes `ClientSettings` (HUD scale / attack ratio); headless still runs `start_game_core`.
         app.insert_resource(ClientSettings {
@@ -157,7 +158,8 @@ fn main() {
             .init_resource::<OutgoingAttackRowMap>()
             .init_resource::<OutgoingFleetRowMap>()
             .init_resource::<NetTiming>()
-        .init_resource::<OverlayDiagnostics>()
+            .init_resource::<OverlayDiagnostics>()
+            .init_resource::<SimPerfDiagnostics>()
         .init_resource::<UiShellState>()
         .init_resource::<CombatDockUiScale>()
         .init_resource::<WaterPathfinderScratch>()
@@ -238,7 +240,15 @@ fn main() {
             )
             .add_systems(OnExit(AppState::LobbyBrowser), system_cleanup_lobby_browser.run_if(|cli: Res<Cli>| !cli.bot))
             .add_systems(OnEnter(AppState::InGame), leaderboard::setup_leaderboard.run_if(|cli: Res<Cli>| !cli.bot))
-            .add_systems(OnExit(AppState::InGame), system_cleanup_ingame_entities.run_if(|cli: Res<Cli>| !cli.bot))
+            .add_systems(
+                OnExit(AppState::InGame),
+                (
+                    system_clear_sim_perf_line,
+                    system_cleanup_ingame_entities,
+                )
+                    .chain()
+                    .run_if(|cli: Res<Cli>| !cli.bot),
+            )
             .add_systems(Update, (
                 system_handle_join_clicks,
                 system_handle_cancel_join,
@@ -354,8 +364,11 @@ fn main() {
         // ── GPU shader map rendering ──
         // handle_tile_change now writes owner IDs into the ShaderStorageBuffer (2 bytes/tile),
         // eliminating the old chunk texture uploads entirely.
+        app.add_systems(Update, system_sim_perf_reset.run_if(in_state(AppState::InGame)));
         app.add_systems(Update, (
-            handle_tile_change.after(system_update_event_feed),
+            handle_tile_change
+                .after(system_sim_perf_reset)
+                .after(system_update_event_feed),
             update_water_animation_time,
         ).run_if(in_state(AppState::InGame)));
 
@@ -388,7 +401,14 @@ fn main() {
     ).chain());
     app.add_schedule(sim_schedule);
 
-    app.add_systems(Update, catchup_fast_forward);
+    if !cli.bot {
+        app.add_systems(Update, (
+            catchup_fast_forward,
+            system_sync_sim_perf_overlay.after(catchup_fast_forward),
+        ).run_if(in_state(AppState::InGame)));
+    } else {
+        app.add_systems(Update, catchup_fast_forward);
+    }
 
     app.run();
 }

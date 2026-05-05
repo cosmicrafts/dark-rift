@@ -131,6 +131,7 @@ pub fn handle_tile_change(
     shader_map_opt: Option<ResMut<ShaderMapData>>,
     mut images: ResMut<Assets<Image>>,
     mut last_event_idx: Local<usize>,
+    mut sim_perf: ResMut<crate::SimPerfDiagnostics>,
 ) {
     let Some(ref mut engine) = engine_opt else { return };
     let Some(mut shader_map) = shader_map_opt else { return };
@@ -148,11 +149,17 @@ pub fn handle_tile_change(
         *last_event_idx = 0;
     }
     if *last_event_idx < current_len {
+        let scanned = current_len.saturating_sub(*last_event_idx);
+        sim_perf.tile_handler_events_scanned = sim_perf
+            .tile_handler_events_scanned
+            .saturating_add(scanned);
         if let Some(board_img) = images.get_mut(&shader_map.board_data) {
             if let Some(ref mut data) = board_img.data {
+                let mut cap_writes = 0u32;
                 for i in *last_event_idx..current_len {
                     let ev = &engine.state.events[i];
                     if let GameEvent::TileCaptured { x, y, new_owner: owner, .. } = ev {
+                        cap_writes = cap_writes.saturating_add(1);
                         // Update single owner ID at (x, y)
                         let linear_index = (*y as usize * engine.state.map.width as usize) + *x as usize;
                         let byte_offset = linear_index * 2;
@@ -161,6 +168,9 @@ pub fn handle_tile_change(
                         }
                     }
                 }
+                sim_perf.tile_captured_writes = sim_perf
+                    .tile_captured_writes
+                    .saturating_add(cap_writes);
             }
         }
         *last_event_idx = current_len;
@@ -272,7 +282,7 @@ pub fn spawn_shader_map(
 
     let mut ecmd = commands.spawn((
         Mesh2d(mesh.into()),
-        bevy::sprite_render::MeshMaterial2d(material_handle),
+        bevy::sprite_render::MeshMaterial2d(material_handle.clone()),
         Transform::from_xyz(offset_x, offset_y, 0.0),
     ));
     if in_game {
@@ -283,6 +293,7 @@ pub fn spawn_shader_map(
         board_data: board_handle,
         player_colors: colors_handle,
         colors_dirty: false,
+        border_material: material_handle,
     }
 }
 
@@ -304,10 +315,18 @@ pub fn sync_player_colors(game: &GameState, image: &mut Image) {
 
 pub fn update_water_animation_time(
     time: Res<Time>,
+    settings: Res<ClientSettings>,
+    shader_map: Option<Res<ShaderMapData>>,
     mut materials: ResMut<Assets<crate::rendering::BorderMaterial>>,
 ) {
-    for (_, material) in materials.iter_mut() {
-        material.uniforms.time.x = time.elapsed_secs();
+    if !settings.config.visuals.enable_water_animation {
+        return;
+    }
+    let t = time.elapsed_secs();
+    if let Some(sm) = shader_map.as_ref() {
+        if let Some(m) = materials.get_mut(&sm.border_material) {
+            m.uniforms.time.x = t;
+        }
     }
 }
 

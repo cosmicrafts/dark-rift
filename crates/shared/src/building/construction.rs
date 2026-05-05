@@ -1,4 +1,4 @@
-use crate::game::{GameEvent, GamePhase};
+use crate::game::{BuildingKind, GameEvent, GamePhase};
 use crate::engine::DarkRiftEngine;
 /// Advance construction timers; emits [`GameEvent::StructureReady`].
 /// Split out for unit tests (`advance_building_construction_tick`).
@@ -19,6 +19,9 @@ impl DarkRiftEngine {
             }
             if b.ticks_until_complete == 0 {
                 b.under_construction = false;
+                if b.kind == BuildingKind::DefensePost {
+                    self.defense_grid_dirty = true;
+                }
                 self.state.events.push(GameEvent::StructureReady {
                     id: b.id,
                     tile_idx: b.tile_idx,

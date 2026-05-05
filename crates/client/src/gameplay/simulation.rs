@@ -3,6 +3,7 @@ use dark_rift_shared::engine::DarkRiftEngine;
 use dark_rift_shared::game::GameState;
 use dark_rift_shared::player::Player;
 use dark_rift_shared::protocol::*;
+use instant::Instant;
 
 use crate::*;
 
@@ -108,6 +109,11 @@ pub fn start_game_core(
             }
 }
 
+#[inline]
+fn dur_us(d: std::time::Duration) -> u64 {
+    d.as_micros().min(u128::from(u64::MAX)) as u64
+}
+
 pub fn catchup_fast_forward(world: &mut World) {
     let ready = world.resource::<GameReady>().0;
     if !ready {
@@ -128,10 +134,19 @@ pub fn catchup_fast_forward(world: &mut World) {
         .min(CLIENT_CATCHUP_MAX_TICKS_PER_FRAME)
         .max(1);
 
-    // Fixed iteration count avoids repeated `World::resource` lookups per tick; `pop_turn` no-ops
-    // cheaply once queue and pending are drained.
+    let t0 = Instant::now();
     for _ in 0..process_count {
         let _ = world.try_run_schedule(SimulationSchedule);
+    }
+    let wall_us = dur_us(t0.elapsed());
+
+    let pending_after = world.resource::<PendingTicks>().0;
+    let queue_len_after = world.resource::<TurnQueue>().0.len();
+    if let Some(mut diag) = world.get_resource_mut::<SimPerfDiagnostics>() {
+        diag.catchup_schedule_iters = process_count as u32;
+        diag.catchup_wall_us = wall_us;
+        diag.pending_after_catchup = pending_after;
+        diag.queue_len_after_catchup = queue_len_after;
     }
 }
 
@@ -142,24 +157,96 @@ pub fn pop_turn(
     mut engine: ResMut<DarkRiftEngine>,
     mut queue: ResMut<TurnQueue>,
     mut pending: ResMut<PendingTicks>,
+    mut diag: ResMut<SimPerfDiagnostics>,
 ) {
+    diag.pop_turn_calls = diag.pop_turn_calls.saturating_add(1);
     if pending.0 == 0 && queue.0.is_empty() {
+        diag.pop_turn_early_returns = diag.pop_turn_early_returns.saturating_add(1);
         return;
     }
 
     if let Some(turn) = queue.0.pop_front() {
+        diag.turns_applied = diag.turns_applied.saturating_add(1);
+
+        let t = Instant::now();
         engine.apply_intents(&turn.intents);
+        diag.us_apply_intents = diag.us_apply_intents.saturating_add(dur_us(t.elapsed()));
+
+        let t = Instant::now();
         engine.execute_income();
+        diag.us_income = diag.us_income.saturating_add(dur_us(t.elapsed()));
+
+        let t = Instant::now();
         engine.execute_bot_think(); // Tribes
+        diag.us_bot = diag.us_bot.saturating_add(dur_us(t.elapsed()));
+
+        let t = Instant::now();
         engine.execute_nation_think(); // Nations
+        diag.us_nation = diag.us_nation.saturating_add(dur_us(t.elapsed()));
+
+        let t = Instant::now();
         engine.execute_fleets();
+        diag.us_fleets = diag.us_fleets.saturating_add(dur_us(t.elapsed()));
+
+        let t = Instant::now();
         engine.execute_combat();
+        diag.us_combat = diag.us_combat.saturating_add(dur_us(t.elapsed()));
+
+        let t = Instant::now();
         engine.execute_construction();
+        diag.us_construction = diag.us_construction.saturating_add(dur_us(t.elapsed()));
+
+        let t = Instant::now();
         engine.execute_tick();
+        diag.us_tick = diag.us_tick.saturating_add(dur_us(t.elapsed()));
     }
 
     if pending.0 > 0 {
         pending.0 -= 1;
+    }
+}
+
+/// Clears per-frame sim perf counters before [`handle_tile_change`] and other [`Update`] systems run.
+pub fn system_sim_perf_reset(mut diag: ResMut<SimPerfDiagnostics>) {
+    diag.reset_frame();
+}
+
+/// Writes compact diagnostics into [`OverlayDiagnostics::sim_perf_line`] for HUD / correlation with FPS.
+pub fn system_sync_sim_perf_overlay(
+    diag: Res<SimPerfDiagnostics>,
+    engine: Option<Res<DarkRiftEngine>>,
+    mut overlay: ResMut<OverlayDiagnostics>,
+) {
+    let (atk, fl, bd) = engine
+        .as_ref()
+        .map(|e| (e.attacks.len(), e.fleets.len(), e.buildings.len()))
+        .unwrap_or((0, 0, 0));
+    let sim_phase_us = diag
+        .us_apply_intents
+        .saturating_add(diag.us_income)
+        .saturating_add(diag.us_bot)
+        .saturating_add(diag.us_nation)
+        .saturating_add(diag.us_fleets)
+        .saturating_add(diag.us_combat)
+        .saturating_add(diag.us_construction)
+        .saturating_add(diag.us_tick);
+    let line = format!(
+        "sim:{}µs cu:{}@{}µs ta:{} idle:{} pend:{} q:{} tc:{} ev:{} atk:{} fl:{} bd:{}",
+        sim_phase_us,
+        diag.catchup_schedule_iters,
+        diag.catchup_wall_us,
+        diag.turns_applied,
+        diag.pop_turn_early_returns,
+        diag.pending_after_catchup,
+        diag.queue_len_after_catchup,
+        diag.tile_captured_writes,
+        diag.tile_handler_events_scanned,
+        atk,
+        fl,
+        bd,
+    );
+    if overlay.sim_perf_line != line {
+        overlay.sim_perf_line = line;
     }
 }
 
