@@ -42,9 +42,9 @@ pub const TILE_SIZE: f32 = 12.0;
 
 pub const PERF_OVERLAY_FPS_INTERVAL: Duration = Duration::from_millis(250);
 /// Cap simulation turns processed per frame while draining `PendingTicks` (large values help WASM after tab backgrounding).
-pub const CLIENT_CATCHUP_MAX_TICKS_PER_FRAME: usize = 50;
+pub const CLIENT_CATCHUP_MAX_TICKS_PER_FRAME: usize = 1;
 /// Keyboard T/Y adjustment step for attack fraction slider (`AttackRatio`).
-pub const ATTACK_RATIO_KEYSTEP: f32 = 0.25;
+pub const ATTACK_RATIO_KEYSTEP: f32 = 0.15;
 
 fn main() {
     let cli = Cli::parse();

@@ -44,7 +44,7 @@ pub fn system_master_lobby(
             warn!("⚠️ Could not read assets/settings.ron, using defaults");
         }
         
-        let maps = ["europe", "world"];
+        let maps = ["world", "mediterranean", "hawaii"];
         use rand::Rng;
         let mut rng = rand::thread_rng();
         config.map_name = maps[rng.gen_range(0..maps.len())].to_string();
@@ -54,6 +54,12 @@ pub fn system_master_lobby(
             Some((map, manifest)) => {
                 config.map_width = manifest.map.width;
                 config.map_height = manifest.map.height;
+                
+                // Dynamically scale bots based on map area relative to the World map
+                let area_ratio = (config.map_width * config.map_height) as f64 / (2904.0 * 1672.0);
+                config.bot_count = (150.0 * area_ratio).clamp(5.0, 150.0) as u32;
+                config.nation_count = (50.0 * area_ratio).clamp(2.0, 50.0) as u32;
+
                 (Some(map), Some(manifest))
             },
             None => (None, None),
