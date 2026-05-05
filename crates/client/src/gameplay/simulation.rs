@@ -134,19 +134,25 @@ pub fn catchup_fast_forward(world: &mut World) {
         .min(CLIENT_CATCHUP_MAX_TICKS_PER_FRAME)
         .max(1);
 
-    let t0 = Instant::now();
-    for _ in 0..process_count {
-        let _ = world.try_run_schedule(SimulationSchedule);
-    }
-    let wall_us = dur_us(t0.elapsed());
-
-    let pending_after = world.resource::<PendingTicks>().0;
-    let queue_len_after = world.resource::<TurnQueue>().0.len();
-    if let Some(mut diag) = world.get_resource_mut::<SimPerfDiagnostics>() {
-        diag.catchup_schedule_iters = process_count as u32;
-        diag.catchup_wall_us = wall_us;
-        diag.pending_after_catchup = pending_after;
-        diag.queue_len_after_catchup = queue_len_after;
+    let sim_hud = world.resource::<SimPerfHudEnabled>().0;
+    if sim_hud {
+        let t0 = Instant::now();
+        for _ in 0..process_count {
+            let _ = world.try_run_schedule(SimulationSchedule);
+        }
+        let wall_us = dur_us(t0.elapsed());
+        let pending_after = world.resource::<PendingTicks>().0;
+        let queue_len_after = world.resource::<TurnQueue>().0.len();
+        if let Some(mut diag) = world.get_resource_mut::<SimPerfDiagnostics>() {
+            diag.catchup_schedule_iters = process_count as u32;
+            diag.catchup_wall_us = wall_us;
+            diag.pending_after_catchup = pending_after;
+            diag.queue_len_after_catchup = queue_len_after;
+        }
+    } else {
+        for _ in 0..process_count {
+            let _ = world.try_run_schedule(SimulationSchedule);
+        }
     }
 }
 
@@ -158,47 +164,66 @@ pub fn pop_turn(
     mut queue: ResMut<TurnQueue>,
     mut pending: ResMut<PendingTicks>,
     mut diag: ResMut<SimPerfDiagnostics>,
+    sim_hud: Res<SimPerfHudEnabled>,
 ) {
-    diag.pop_turn_calls = diag.pop_turn_calls.saturating_add(1);
+    let timed = sim_hud.0;
+    if timed {
+        diag.pop_turn_calls = diag.pop_turn_calls.saturating_add(1);
+    }
     if pending.0 == 0 && queue.0.is_empty() {
-        diag.pop_turn_early_returns = diag.pop_turn_early_returns.saturating_add(1);
+        if timed {
+            diag.pop_turn_early_returns = diag.pop_turn_early_returns.saturating_add(1);
+        }
         return;
     }
 
     if let Some(turn) = queue.0.pop_front() {
-        diag.turns_applied = diag.turns_applied.saturating_add(1);
+        if timed {
+            diag.turns_applied = diag.turns_applied.saturating_add(1);
+        }
 
-        let t = Instant::now();
-        engine.apply_intents(&turn.intents);
-        diag.us_apply_intents = diag.us_apply_intents.saturating_add(dur_us(t.elapsed()));
+        if timed {
+            let t = Instant::now();
+            engine.apply_intents(&turn.intents);
+            diag.us_apply_intents = diag.us_apply_intents.saturating_add(dur_us(t.elapsed()));
 
-        let t = Instant::now();
-        engine.execute_income();
-        diag.us_income = diag.us_income.saturating_add(dur_us(t.elapsed()));
+            let t = Instant::now();
+            engine.execute_income();
+            diag.us_income = diag.us_income.saturating_add(dur_us(t.elapsed()));
 
-        let t = Instant::now();
-        engine.execute_bot_think(); // Tribes
-        diag.us_bot = diag.us_bot.saturating_add(dur_us(t.elapsed()));
+            let t = Instant::now();
+            engine.execute_bot_think(); // Tribes
+            diag.us_bot = diag.us_bot.saturating_add(dur_us(t.elapsed()));
 
-        let t = Instant::now();
-        engine.execute_nation_think(); // Nations
-        diag.us_nation = diag.us_nation.saturating_add(dur_us(t.elapsed()));
+            let t = Instant::now();
+            engine.execute_nation_think(); // Nations
+            diag.us_nation = diag.us_nation.saturating_add(dur_us(t.elapsed()));
 
-        let t = Instant::now();
-        engine.execute_fleets();
-        diag.us_fleets = diag.us_fleets.saturating_add(dur_us(t.elapsed()));
+            let t = Instant::now();
+            engine.execute_fleets();
+            diag.us_fleets = diag.us_fleets.saturating_add(dur_us(t.elapsed()));
 
-        let t = Instant::now();
-        engine.execute_combat();
-        diag.us_combat = diag.us_combat.saturating_add(dur_us(t.elapsed()));
+            let t = Instant::now();
+            engine.execute_combat();
+            diag.us_combat = diag.us_combat.saturating_add(dur_us(t.elapsed()));
 
-        let t = Instant::now();
-        engine.execute_construction();
-        diag.us_construction = diag.us_construction.saturating_add(dur_us(t.elapsed()));
+            let t = Instant::now();
+            engine.execute_construction();
+            diag.us_construction = diag.us_construction.saturating_add(dur_us(t.elapsed()));
 
-        let t = Instant::now();
-        engine.execute_tick();
-        diag.us_tick = diag.us_tick.saturating_add(dur_us(t.elapsed()));
+            let t = Instant::now();
+            engine.execute_tick();
+            diag.us_tick = diag.us_tick.saturating_add(dur_us(t.elapsed()));
+        } else {
+            engine.apply_intents(&turn.intents);
+            engine.execute_income();
+            engine.execute_bot_think();
+            engine.execute_nation_think();
+            engine.execute_fleets();
+            engine.execute_combat();
+            engine.execute_construction();
+            engine.execute_tick();
+        }
     }
 
     if pending.0 > 0 {

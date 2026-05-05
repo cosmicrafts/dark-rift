@@ -8,8 +8,12 @@ impl DarkRiftEngine {
             return;
         }
 
-        let max_pid = self.state.players.iter().map(|p| p.id as usize).max().unwrap_or(0);
-        let aggs = aggregate_buildings_per_player(self.buildings.iter().copied(), max_pid);
+        if self.building_aggregates_dirty {
+            let max_pid = self.state.players.iter().map(|p| p.id as usize).max().unwrap_or(0);
+            self.building_aggregates = aggregate_buildings_per_player(self.buildings.iter().copied(), max_pid);
+            self.building_aggregates_dirty = false;
+        }
+        let aggs = &self.building_aggregates;
 
         let config = self.state.config.clone();
         let GameState { map: _, players, .. } = &mut self.state;

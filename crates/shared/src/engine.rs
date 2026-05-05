@@ -1,7 +1,7 @@
 use crate::game::GameState;
 use crate::execution::AttackExecution;
 use crate::warp_fleet::WarpFleet;
-use crate::building::{Building, BuildingGrid};
+use crate::building::{Building, BuildingGrid, BuildingAggregate};
 use crate::pathfinding::WaterPathfinderScratch;
 use crate::water_components::WaterComponents;
 
@@ -12,6 +12,7 @@ pub struct PlacementScratch {
     pub visited_stamp: Vec<u32>,
     pub stamp: u32,
     pub queue: Vec<u32>,
+    pub border_scratch: Vec<(u32, u32)>,
 }
 
 #[derive(Clone, Resource)]
@@ -27,6 +28,8 @@ pub struct DarkRiftEngine {
     /// When true, [`DefenseGrid::rebuild`] must run before combat queries (new/changed defense posts).
     pub defense_grid_dirty: bool,
     pub building_grid: BuildingGrid,
+    pub building_aggregates: Vec<BuildingAggregate>,
+    pub building_aggregates_dirty: bool,
 }
 
 impl DarkRiftEngine {
@@ -42,6 +45,8 @@ impl DarkRiftEngine {
             defense_grid: crate::building::DefenseGrid::default(),
             defense_grid_dirty: true,
             building_grid: BuildingGrid::default(),
+            building_aggregates: Vec::new(),
+            building_aggregates_dirty: true,
         }
     }
 
@@ -62,6 +67,7 @@ impl DarkRiftEngine {
         let pos = self.buildings.partition_point(|x| x.id < b.id);
         self.buildings.insert(pos, b);
         self.building_grid.mark_dirty();
+        self.building_aggregates_dirty = true;
         if is_ready_defense {
             self.defense_grid_dirty = true;
         }

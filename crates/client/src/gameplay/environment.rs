@@ -131,6 +131,7 @@ pub fn handle_tile_change(
     shader_map_opt: Option<ResMut<ShaderMapData>>,
     mut images: ResMut<Assets<Image>>,
     mut last_event_idx: Local<usize>,
+    sim_hud: Res<crate::SimPerfHudEnabled>,
     mut sim_perf: ResMut<crate::SimPerfDiagnostics>,
 ) {
     let Some(ref mut engine) = engine_opt else { return };
@@ -149,17 +150,21 @@ pub fn handle_tile_change(
         *last_event_idx = 0;
     }
     if *last_event_idx < current_len {
-        let scanned = current_len.saturating_sub(*last_event_idx);
-        sim_perf.tile_handler_events_scanned = sim_perf
-            .tile_handler_events_scanned
-            .saturating_add(scanned);
+        if sim_hud.0 {
+            let scanned = current_len.saturating_sub(*last_event_idx);
+            sim_perf.tile_handler_events_scanned = sim_perf
+                .tile_handler_events_scanned
+                .saturating_add(scanned);
+        }
         if let Some(board_img) = images.get_mut(&shader_map.board_data) {
             if let Some(ref mut data) = board_img.data {
                 let mut cap_writes = 0u32;
                 for i in *last_event_idx..current_len {
                     let ev = &engine.state.events[i];
                     if let GameEvent::TileCaptured { x, y, new_owner: owner, .. } = ev {
-                        cap_writes = cap_writes.saturating_add(1);
+                        if sim_hud.0 {
+                            cap_writes = cap_writes.saturating_add(1);
+                        }
                         // Update single owner ID at (x, y)
                         let linear_index = (*y as usize * engine.state.map.width as usize) + *x as usize;
                         let byte_offset = linear_index * 2;
@@ -168,9 +173,11 @@ pub fn handle_tile_change(
                         }
                     }
                 }
-                sim_perf.tile_captured_writes = sim_perf
-                    .tile_captured_writes
-                    .saturating_add(cap_writes);
+                if sim_hud.0 {
+                    sim_perf.tile_captured_writes = sim_perf
+                        .tile_captured_writes
+                        .saturating_add(cap_writes);
+                }
             }
         }
         *last_event_idx = current_len;

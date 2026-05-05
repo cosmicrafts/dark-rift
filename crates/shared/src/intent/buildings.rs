@@ -113,6 +113,7 @@ pub(super) fn apply_upgrade_structure_intent(
     let b = &mut self.buildings[idx];
     b.level = b.level.saturating_add(1);
     let new_level = b.level;
+    self.building_aggregates_dirty = true;
     if kind == BuildingKind::DefensePost {
         self.defense_grid_dirty = true;
     }

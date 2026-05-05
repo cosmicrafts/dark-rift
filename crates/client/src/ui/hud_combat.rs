@@ -790,13 +790,14 @@ pub fn system_handle_recall_fleet_click(
     }
 }
 
-/// Toggle dev stats pill visibility when the Settings button is pressed.
+/// Toggle dev stats pill visibility when the Settings button is pressed; enables sim perf HUD/diagnostics when pill is shown.
 pub fn system_settings_toggle_devstats(
     mut interaction_q: Query<
         &Interaction,
         (Changed<Interaction>, With<SettingsButton>),
     >,
     mut q_pill: Query<&mut Node, With<DevStatsPill>>,
+    mut sim_hud: ResMut<crate::SimPerfHudEnabled>,
 ) {
     for interaction in interaction_q.iter_mut() {
         if *interaction == Interaction::Pressed {
@@ -806,6 +807,11 @@ pub fn system_settings_toggle_devstats(
                     _ => Display::None,
                 };
             }
+            sim_hud.0 = q_pill
+                .iter()
+                .next()
+                .map(|n| !matches!(n.display, Display::None))
+                .unwrap_or(false);
         }
     }
 }

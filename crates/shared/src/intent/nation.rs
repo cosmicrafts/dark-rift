@@ -98,14 +98,14 @@ pub fn execute_nation_think(&mut self) {
         return;
     }
 
-    let max_pid = self.state.players.iter().map(|p| p.id as usize).max().unwrap_or(0);
-    
-    let aggs = if any_structures {
+    if any_structures {
         self.refresh_building_grid();
-        aggregate_buildings_per_player(self.buildings.iter().copied(), max_pid)
-    } else {
-        Vec::new()
-    };
+        if self.building_aggregates_dirty {
+            let max_pid = self.state.players.iter().map(|p| p.id as usize).max().unwrap_or(0);
+            self.building_aggregates = aggregate_buildings_per_player(self.buildings.iter().copied(), max_pid);
+            self.building_aggregates_dirty = false;
+        }
+    }
     let mut decisions: Vec<BotDecision> = Vec::new();
 
     for (bot_id, interval, offset) in schedule {
@@ -125,7 +125,7 @@ pub fn execute_nation_think(&mut self) {
                 // Still need to advance RNG for determinism if we would have done attack logic
                 // (attack section below handles its own RNG)
             } else {
-                let agg = aggs.get(bot_id as usize).copied().unwrap_or_default();
+                let agg = self.building_aggregates.get(bot_id as usize).copied().unwrap_or_default();
                 let city_equivalent =
                     agg.ready_city_count.max((player.tile_count / 2000).max(1));
                 let build_order = [
@@ -192,25 +192,32 @@ pub fn execute_nation_think(&mut self) {
         if !do_attack {
             continue;
         }
-        let (troops, max_troops, border_tiles) = {
+        let (troops, max_troops) = {
             let Some(player) = self.state.player(bot_id) else {
                 continue;
             };
-            (player.troops, player.max_troops, player.border_coords(self.state.map.width).collect::<Vec<_>>())
+            (player.troops, player.max_troops)
         };
-        if border_tiles.is_empty() {
+        
+        self.placement_scratch.border_scratch.clear();
+        if let Some(player) = self.state.player(bot_id) {
+            self.placement_scratch.border_scratch.extend(player.border_coords(self.state.map.width));
+        }
+        
+        if self.placement_scratch.border_scratch.is_empty() {
             continue;
         }
+        let border_len = self.placement_scratch.border_scratch.len();
         let mut has_neutral = false;
         let mut player_targets = Vec::new();
-        let max_scan = border_tiles.len().min(256);
+        let max_scan = border_len.min(256);
         let start_idx = {
              let p_mut = self.state.player_mut(bot_id).unwrap();
-             p_mut.bot_rng.next_int(0, border_tiles.len() as i32) as usize
+             p_mut.bot_rng.next_int(0, border_len as i32) as usize
         };
         for i in 0..max_scan {
-            let b_idx = (start_idx + i) % border_tiles.len();
-            let (bx, by) = border_tiles[b_idx];
+            let b_idx = (start_idx + i) % border_len;
+            let (bx, by) = self.placement_scratch.border_scratch[b_idx];
             self.state.map.for_each_neighbor(bx, by, |nx, ny| {
                 let owner = self.state.map.owner_id(nx, ny);
                 if owner != bot_id {

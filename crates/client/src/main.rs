@@ -90,7 +90,8 @@ fn main() {
             .init_resource::<WaterPathfinderScratch>()
             .init_resource::<WaterComponents>()
             .init_resource::<CombatDockUiScale>()
-            .init_resource::<SimPerfDiagnostics>();
+            .init_resource::<SimPerfDiagnostics>()
+            .init_resource::<SimPerfHudEnabled>();
 
         // `StartGameParams` includes `ClientSettings` (HUD scale / attack ratio); headless still runs `start_game_core`.
         app.insert_resource(ClientSettings {
@@ -160,6 +161,7 @@ fn main() {
             .init_resource::<NetTiming>()
             .init_resource::<OverlayDiagnostics>()
             .init_resource::<SimPerfDiagnostics>()
+            .init_resource::<SimPerfHudEnabled>()
         .init_resource::<UiShellState>()
         .init_resource::<CombatDockUiScale>()
         .init_resource::<WaterPathfinderScratch>()
@@ -336,7 +338,8 @@ fn main() {
                 .run_if(
                     resource_changed::<OverlayDiagnostics>
                         .or(resource_changed::<HighestReceivedTurn>)
-                        .or(resource_changed::<BuildStructureMode>),
+                        .or(resource_changed::<BuildStructureMode>)
+                        .or(resource_changed::<SimPerfHudEnabled>),
                 ),
             system_apply_responsive_hud_layout
                 .run_if(resource_changed::<UiShellState>.or(resource_changed::<CombatDockUiScale>).or(resource_changed::<ClientSettings>)),
@@ -364,7 +367,12 @@ fn main() {
         // ── GPU shader map rendering ──
         // handle_tile_change now writes owner IDs into the ShaderStorageBuffer (2 bytes/tile),
         // eliminating the old chunk texture uploads entirely.
-        app.add_systems(Update, system_sim_perf_reset.run_if(in_state(AppState::InGame)));
+        app.add_systems(
+            Update,
+            system_sim_perf_reset
+                .run_if(in_state(AppState::InGame))
+                .run_if(|sim: Res<SimPerfHudEnabled>| sim.0),
+        );
         app.add_systems(Update, (
             handle_tile_change
                 .after(system_sim_perf_reset)
@@ -402,10 +410,14 @@ fn main() {
     app.add_schedule(sim_schedule);
 
     if !cli.bot {
-        app.add_systems(Update, (
-            catchup_fast_forward,
-            system_sync_sim_perf_overlay.after(catchup_fast_forward),
-        ).run_if(in_state(AppState::InGame)));
+        app.add_systems(Update, catchup_fast_forward.run_if(in_state(AppState::InGame)));
+        app.add_systems(
+            Update,
+            system_sync_sim_perf_overlay
+                .after(catchup_fast_forward)
+                .run_if(in_state(AppState::InGame))
+                .run_if(|sim: Res<SimPerfHudEnabled>| sim.0),
+        );
     } else {
         app.add_systems(Update, catchup_fast_forward);
     }

@@ -469,6 +469,7 @@ pub fn spawn_bottom_combat_hud(
 
 pub fn update_hud(
     overlay: Res<OverlayDiagnostics>,
+    sim_hud: Res<SimPerfHudEnabled>,
     build_mode: Res<BuildStructureMode>,
     highest: Res<HighestReceivedTurn>,
     mut fps_q: Query<&mut Text, (With<FpsText>, Without<GameTimerText>)>,
@@ -493,7 +494,7 @@ pub fn update_hud(
                 overlay.status_line, overlay.ping_value, overlay.fps_value, tick
             )
         };
-        if !overlay.sim_perf_line.is_empty() {
+        if sim_hud.0 && !overlay.sim_perf_line.is_empty() {
             fps_str.push_str(" | ");
             fps_str.push_str(&overlay.sim_perf_line);
         }
