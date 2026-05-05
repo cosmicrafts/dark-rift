@@ -698,7 +698,7 @@ pub fn system_exit_button(
                     jl.0 = None;
                 }
                 for mut sender in senders.iter_mut() {
-                    let _ = sender.send::<ReliableChannel>(ClientLeaveMessage);
+                    sender.send::<ReliableChannel>(ClientLeaveMessage);
                 }
                 next_state.set(AppState::LobbyBrowser);
             }
@@ -763,7 +763,7 @@ pub fn system_handle_cancel_click(
         }
         let attack_id = btn.0;
         for mut sender in senders.iter_mut() {
-            let _ = sender.send::<ReliableChannel>(ClientGameplayMessage {
+            sender.send::<ReliableChannel>(ClientGameplayMessage {
                 intent: GameplayIntent::CancelAttack { attack_id },
             });
         }
@@ -783,7 +783,7 @@ pub fn system_handle_recall_fleet_click(
         }
         let fleet_id = btn.0;
         for mut sender in senders.iter_mut() {
-            let _ = sender.send::<ReliableChannel>(ClientGameplayMessage {
+            sender.send::<ReliableChannel>(ClientGameplayMessage {
                 intent: GameplayIntent::RecallFleet { fleet_id },
             });
         }
@@ -852,11 +852,10 @@ pub fn system_sync_bottom_troops_bar(
         Color::srgb(0.9, 0.3, 0.3) // Red
     };
 
-    if let Ok(mut bc) = q_shell.single_mut() {
-        if bc.top != color {
+    if let Ok(mut bc) = q_shell.single_mut()
+        && bc.top != color {
             *bc = BorderColor::all(color);
         }
-    }
 
     if let Ok((mut fill_node, mut bg)) = q_fill.single_mut() {
         let fill_pct = *display_troops * 100.0;

@@ -224,7 +224,7 @@ pub fn apply_map_to_game(
             dark_rift_shared::map_loader::load_openfront_map(map_name)
         {
             if (map.width * map.height) as usize == expected_size {
-                *(&mut game.map) = map;
+                game.map = map;
                 bevy::log::debug!("🗺️  Map loaded from local filesystem fallback");
                 return true;
             }

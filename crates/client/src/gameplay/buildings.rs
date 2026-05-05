@@ -94,7 +94,7 @@ pub fn system_sync_structure_ghost(
     }
 
     let (tile_idx, ghost_kind, ok_afford) =
-        if let Some(bid) = find_upgrade_target_id(&engine.state.map, pid, kind, click_idx, &snapshot) {
+        if let Some(bid) = find_upgrade_target_id(&engine.state.map, pid, kind, click_idx, snapshot) {
             let mut ti = None;
             for b in snapshot {
                 if b.id == bid {
@@ -108,7 +108,7 @@ pub fn system_sync_structure_ghost(
             };
             (ti, GhostKind::Upgrade, afford)
         } else if let Some(spawn) =
-            resolve_structure_spawn_tile(&engine.state.map, pid, kind, click_idx, &engine.building_grid, &mut *scratch)
+            resolve_structure_spawn_tile(&engine.state.map, pid, kind, click_idx, &engine.building_grid, &mut scratch)
         {
             (spawn, GhostKind::Place, afford)
         } else {

@@ -577,7 +577,6 @@ pub fn system_update_perf_overlay(
     }
 
     if !(refresh_fps || refresh_net) {
-        return;
     }
 }
 

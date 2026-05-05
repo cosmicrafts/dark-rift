@@ -124,7 +124,7 @@ pub fn system_force_boat_key(
     let Some(intent) = try_launch_fleet_intent(
         &engine.state,
         wc,
-        &mut *ctx.path_scratch,
+        &mut ctx.path_scratch,
         pid,
         target_owner,
         target_tile,
@@ -331,7 +331,7 @@ pub fn player_click(
         try_launch_fleet_intent(
             &engine.state,
             wc,
-            &mut *ctx.path_scratch,
+            &mut ctx.path_scratch,
             pid,
             target_owner,
             target_tile,
@@ -350,7 +350,7 @@ pub fn player_click(
         try_launch_fleet_intent(
             &engine.state,
             wc,
-            &mut *ctx.path_scratch,
+            &mut ctx.path_scratch,
             pid,
             target_owner,
             target_tile,

@@ -137,12 +137,11 @@ pub fn handle_tile_change(
     let Some(ref mut engine) = engine_opt else { return };
     let Some(mut shader_map) = shader_map_opt else { return };
 
-    if shader_map.colors_dirty {
-        if let Some(colors_img) = images.get_mut(&shader_map.player_colors) {
+    if shader_map.colors_dirty
+        && let Some(colors_img) = images.get_mut(&shader_map.player_colors) {
             sync_player_colors(&engine.state, colors_img);
             shader_map.colors_dirty = false;
         }
-    }
 
     let current_len = engine.state.events.len();
     // `Local` survives across matches — after a huge map, idx can exceed the new game's event log.
@@ -156,8 +155,8 @@ pub fn handle_tile_change(
                 .tile_handler_events_scanned
                 .saturating_add(scanned);
         }
-        if let Some(board_img) = images.get_mut(&shader_map.board_data) {
-            if let Some(ref mut data) = board_img.data {
+        if let Some(board_img) = images.get_mut(&shader_map.board_data)
+            && let Some(ref mut data) = board_img.data {
                 let mut cap_writes = 0u32;
                 for i in *last_event_idx..current_len {
                     let ev = &engine.state.events[i];
@@ -179,7 +178,6 @@ pub fn handle_tile_change(
                         .saturating_add(cap_writes);
                 }
             }
-        }
         *last_event_idx = current_len;
     }
 
@@ -209,7 +207,7 @@ pub fn spawn_shader_map(
     let mut board_data = vec![0u8; (width * height * 2) as usize];
     for y in 0..height {
         for x in 0..width {
-            let owner = game.map.owner_id(x, y) as u16;
+            let owner = game.map.owner_id(x, y);
             let idx = ((y * width) + x) as usize * 2;
             board_data[idx..idx+2].copy_from_slice(&owner.to_ne_bytes());
         }
@@ -288,7 +286,7 @@ pub fn spawn_shader_map(
     let offset_y = screen_h / 2.0 - TILE_SIZE / 2.0;
 
     let mut ecmd = commands.spawn((
-        Mesh2d(mesh.into()),
+        Mesh2d(mesh),
         bevy::sprite_render::MeshMaterial2d(material_handle.clone()),
         Transform::from_xyz(offset_x, offset_y, 0.0),
     ));
@@ -330,11 +328,10 @@ pub fn update_water_animation_time(
         return;
     }
     let t = time.elapsed_secs();
-    if let Some(sm) = shader_map.as_ref() {
-        if let Some(m) = materials.get_mut(&sm.border_material) {
+    if let Some(sm) = shader_map.as_ref()
+        && let Some(m) = materials.get_mut(&sm.border_material) {
             m.uniforms.time.x = t;
         }
-    }
 }
 
 pub fn system_update_scroll_position(

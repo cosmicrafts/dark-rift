@@ -58,12 +58,11 @@ pub fn start_game_core(
             let mut cx = map_w * TILE_SIZE / 2.0;
             let mut cy = map_h * TILE_SIZE / 2.0;
 
-            if params.my_id.0 != 0 {
-                if let Some(me) = msg.players.iter().find(|p| p.id == params.my_id.0) {
+            if params.my_id.0 != 0
+                && let Some(me) = msg.players.iter().find(|p| p.id == params.my_id.0) {
                     cx = me.spawn_x as f32 * TILE_SIZE;
                     cy = (game.map.height as f32 - 1.0 - me.spawn_y as f32) * TILE_SIZE;
                 }
-            }
 
             if let Ok((mut transform, mut projection)) = cam_q.single_mut() {
                 reset_game_camera(&mut transform, &mut projection, Vec2::new(cx, cy));

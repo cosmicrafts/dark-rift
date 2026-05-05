@@ -160,7 +160,7 @@ pub fn system_update_leaderboard(
     let panel_hidden = q_panel
         .iter()
         .next()
-        .map_or(true, |n| n.display == Display::None);
+        .is_none_or(|n| n.display == Display::None);
     if panel_hidden {
         return;
     }
@@ -199,11 +199,10 @@ pub fn system_update_leaderboard(
             None => (String::new(), String::new(), String::new(), String::new(), String::new(), false)
         };
 
-        if let Some((_, mut text)) = q_rank.iter_mut().find(|(c, _)| c.0 == idx) {
-            if text.0 != rank_str {
+        if let Some((_, mut text)) = q_rank.iter_mut().find(|(c, _)| c.0 == idx)
+            && text.0 != rank_str {
                 text.0 = rank_str;
             }
-        }
         if let Some((_, mut text, mut color)) = q_name.iter_mut().find(|(c, _, _)| c.0 == idx) {
             if text.0 != name_str {
                 text.0 = name_str;
@@ -217,21 +216,18 @@ pub fn system_update_leaderboard(
                 color.0 = nc;
             }
         }
-        if let Some((_, mut text)) = q_owned.iter_mut().find(|(c, _)| c.0 == idx) {
-            if text.0 != owned_str {
+        if let Some((_, mut text)) = q_owned.iter_mut().find(|(c, _)| c.0 == idx)
+            && text.0 != owned_str {
                 text.0 = owned_str;
             }
-        }
-        if let Some((_, mut text)) = q_gold.iter_mut().find(|(c, _)| c.0 == idx) {
-            if text.0 != gold_str {
+        if let Some((_, mut text)) = q_gold.iter_mut().find(|(c, _)| c.0 == idx)
+            && text.0 != gold_str {
                 text.0 = gold_str;
             }
-        }
-        if let Some((_, mut text)) = q_max.iter_mut().find(|(c, _)| c.0 == idx) {
-            if text.0 != max_str {
+        if let Some((_, mut text)) = q_max.iter_mut().find(|(c, _)| c.0 == idx)
+            && text.0 != max_str {
                 text.0 = max_str;
             }
-        }
     };
 
     for i in 0..15 {

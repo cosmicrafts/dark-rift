@@ -7,19 +7,12 @@ use crate::core::BuildStructureMode;
 use crate::ui::theme::*;
 
 #[derive(Resource)]
+#[derive(Default)]
 pub struct BuildableHudState {
     entries: Vec<BuildableEntry>,
     pub placement_scratch: PlacementScratch,
 }
 
-impl Default for BuildableHudState {
-    fn default() -> Self {
-        Self {
-            entries: Vec::new(),
-            placement_scratch: PlacementScratch::default(),
-        }
-    }
-}
 
 /// Set by [`system_refresh_buildable_hud`] when buildable entries change; consumed by apply.
 #[derive(Resource, Default)]
@@ -93,7 +86,7 @@ pub fn system_refresh_buildable_hud(
     };
 
     let current_len = engine.buildings.len();
-    let buildings_changed = last_buildings_len.map_or(true, |l| l != current_len);
+    let buildings_changed = last_buildings_len.is_none_or(|l| l != current_len);
     let gold_changed = last_gold.map(|g| (player_gold - g).abs() > 0.5).unwrap_or(true);
 
     if buildings_changed || state.entries.len() != BuildingKind::ALL.len() {
@@ -175,21 +168,21 @@ pub fn system_apply_buildable_hud(
         let sel = mode.0 == Some(btn.0);
         let (target_bg, target_border) = if disabled {
             (
-                Color::srgba(0.1, 0.11, 0.13, 0.38).into(),
+                Color::srgba(0.1, 0.11, 0.13, 0.38),
                 BorderColor::all(Color::srgba(0.3, 0.32, 0.36, 0.35)),
             )
         } else if sel {
             (
-                accent_primary().with_alpha(0.42).into(),
+                accent_primary().with_alpha(0.42),
                 BorderColor::all(accent_primary()),
             )
         } else if *interaction == Interaction::Hovered {
             (
-                panel_bg().with_alpha(0.92).into(),
+                panel_bg().with_alpha(0.92),
                 BorderColor::all(panel_border()),
             )
         } else {
-            (panel_bg().into(), BorderColor::all(panel_border()))
+            (panel_bg(), BorderColor::all(panel_border()))
         };
         // Avoid writing identical colors every frame — native UI relayouts on any Node/BackgroundColor touch.
         if bg.0 != target_bg {

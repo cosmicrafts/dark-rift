@@ -17,11 +17,10 @@ pub fn handle_server_start(
             commands.insert_resource(PendingServerStart(msg.clone()));
             next_state.set(AppState::LoadingMap);
             
-            if net.handshake_ms.is_none() {
-                if let Some(t0) = net.connect_started.take() {
+            if net.handshake_ms.is_none()
+                && let Some(t0) = net.connect_started.take() {
                     net.handshake_ms = Some(t0.elapsed().as_secs_f32() * 1000.0);
                 }
-            }
         }
     }
 }
@@ -38,11 +37,10 @@ pub fn handle_server_turns(
 
     for mut receiver in receivers.iter_mut() {
         for msg in receiver.receive() {
-            if let Some(h) = highest.0 {
-                if msg.turn.turn_number <= h {
+            if let Some(h) = highest.0
+                && msg.turn.turn_number <= h {
                     continue; // Drop overlapping buffered turns already processed via missed_turns!
                 }
-            }
             highest.0 = Some(msg.turn.turn_number);
 
             let now = Instant::now();
@@ -88,8 +86,8 @@ pub fn system_evaluate_game_over(
         victory = false;
     }
 
-    if show_panel {
-        if let Some(settings) = settings {
+    if show_panel
+        && let Some(settings) = settings {
             let font = settings.font.clone();
         let title = if victory { "VICTORY" } else { "DEFEAT" };
         let title_color = if victory { theme::accent_primary() } else { theme::accent_danger() };
@@ -148,7 +146,6 @@ pub fn system_evaluate_game_over(
             });
         });
         }
-    }
 }
 
 pub fn system_handle_go_back(
@@ -164,7 +161,7 @@ pub fn system_handle_go_back(
                     jl.0 = None;
                 }
                 for mut sender in senders.iter_mut() {
-                    let _ = sender.send::<dark_rift_shared::protocol::ReliableChannel>(ClientLeaveMessage);
+                    sender.send::<dark_rift_shared::protocol::ReliableChannel>(ClientLeaveMessage);
                 }
                 next_state.set(AppState::LobbyBrowser);
             }

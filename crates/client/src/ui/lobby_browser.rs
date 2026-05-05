@@ -885,7 +885,7 @@ pub fn system_apply_lobby_controls_responsive(
     if let Ok(mut nick) = q.nodes.p1().single_mut() {
         assign_if_ne(
             &mut nick.min_height,
-            Val::Px((touch_h + 22.0).max(52.0) as f32),
+            Val::Px((touch_h + 22.0).max(52.0)),
         );
         let np = UiRect::axes(Val::Px(16.0), Val::Px(12.0));
         if nick.padding != np {
@@ -904,7 +904,7 @@ pub fn system_apply_lobby_controls_responsive(
     for mut cancel in &mut q.nodes.p4() {
         assign_if_ne(
             &mut cancel.min_height,
-            Val::Px((touch_h + 24.0).max(54.0) as f32),
+            Val::Px((touch_h + 24.0).max(54.0)),
         );
     }
     for mut card in &mut q.nodes.p5() {
@@ -1003,7 +1003,7 @@ pub fn system_clear_lobby_nickname_focus(
         for mut b in &mut nick_border {
             *b = BorderColor::all(nickname_field_border());
         }
-        flush_save(&*settings, &mut auto);
+        flush_save(&settings, &mut auto);
     }
 }
 
@@ -1030,7 +1030,7 @@ pub fn system_nickname_keyboard_when_focused(
             for mut b in &mut nick_border {
                 *b = BorderColor::all(nickname_field_border());
             }
-            flush_save(&*settings, &mut auto);
+            flush_save(&settings, &mut auto);
             continue;
         }
 
@@ -1039,7 +1039,7 @@ pub fn system_nickname_keyboard_when_focused(
             for mut b in &mut nick_border {
                 *b = BorderColor::all(nickname_field_border());
             }
-            flush_save(&*settings, &mut auto);
+            flush_save(&settings, &mut auto);
             continue;
         }
 
@@ -1054,8 +1054,8 @@ pub fn system_nickname_keyboard_when_focused(
             continue;
         }
 
-        if let Some(inserted) = ev.text.as_ref() {
-            if inserted.chars().all(is_printable_char) {
+        if let Some(inserted) = ev.text.as_ref()
+            && inserted.chars().all(is_printable_char) {
                 if focus.select_all {
                     settings.config.profile.nickname.clear();
                     focus.select_all = false;
@@ -1068,7 +1068,6 @@ pub fn system_nickname_keyboard_when_focused(
                 }
                 changed = true;
             }
-        }
     }
 
     if changed {
@@ -1519,7 +1518,7 @@ pub fn system_handle_cancel_join(
         if *interaction == Interaction::Pressed {
             joined_lobby.0 = None;
             for mut sender in senders.iter_mut() {
-                let _ = sender.send::<dark_rift_shared::protocol::ReliableChannel>(ClientLeaveMessage);
+                sender.send::<dark_rift_shared::protocol::ReliableChannel>(ClientLeaveMessage);
                 debug!("Cancelled join; sending ClientLeaveMessage.");
             }
             anim.play_main_menu_intro_after_cancel = true;
@@ -1739,7 +1738,7 @@ pub fn system_lobby_main_menu_anim(
                             is_observer: cli.observer,
                             target_lobby_id: Some(id),
                         };
-                        let _ = sender.send::<ReliableChannel>(msg);
+                        sender.send::<ReliableChannel>(msg);
                         debug!("Requested to join lobby {} (after menu anim)", id);
                     }
                     joined.0 = Some(id);

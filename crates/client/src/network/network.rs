@@ -102,7 +102,7 @@ pub fn handle_connection(
                 is_observer: cli.observer, 
                 target_lobby_id: None, // Joins any available lobby or seeds a new one
             };
-            let _ = sender.send::<ReliableChannel>(msg);
+            sender.send::<ReliableChannel>(msg);
         } else {
             debug!("Connected to transport; lobby browser");
         }
@@ -193,7 +193,7 @@ pub fn send_gameplay_intent(
         });
     } else {
         for mut sender in senders.iter_mut() {
-            let _ = sender.send::<ReliableChannel>(ClientGameplayMessage { intent: intent.clone() });
+            sender.send::<ReliableChannel>(ClientGameplayMessage { intent: intent.clone() });
         }
     }
 }

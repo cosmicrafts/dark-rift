@@ -50,13 +50,9 @@ impl Default for SimPerfDiagnostics {
 
 /// When true (Settings → dev stats pill), collect sim timings/counters and show [`OverlayDiagnostics::sim_perf_line`].
 #[derive(Resource)]
+#[derive(Default)]
 pub struct SimPerfHudEnabled(pub bool);
 
-impl Default for SimPerfHudEnabled {
-    fn default() -> Self {
-        Self(false)
-    }
-}
 
 impl SimPerfDiagnostics {
     const RESET: Self = Self {

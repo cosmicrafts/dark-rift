@@ -41,11 +41,10 @@ pub fn system_sync_building_map_labels(
             *vis = next_vis;
         }
         for child in children.iter() {
-            if let Ok(mut text) = q_text.get_mut(child) {
-                if text.0 != line {
+            if let Ok(mut text) = q_text.get_mut(child)
+                && text.0 != line {
                     text.0 = line.clone();
                 }
-            }
         }
     }
 }

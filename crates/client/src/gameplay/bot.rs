@@ -47,7 +47,7 @@ pub fn system_headless_bot_engine(
     let mut has_neutral = false;
     let mut player_targets = Vec::new();
     let max_scan = border_tiles.len().min(256);
-    let mut bot_rng = WyRand::seed_from_u64(engine.state.seed.wrapping_add(engine.state.tick as u64).wrapping_add(1999));
+    let mut bot_rng = WyRand::seed_from_u64(engine.state.seed.wrapping_add(engine.state.tick).wrapping_add(1999));
     let start_idx = bot_rng.next_int(0, border_tiles.len() as i32) as usize;
 
     for i in 0..max_scan {
@@ -85,12 +85,12 @@ pub fn system_headless_bot_engine(
     let reserve = player.max_troops * active_reserve_ratio;
     let p_send = (player.troops - reserve).max(0.0);
     
-    if p_send < GameConfig::default().attack_cost_neutral as f64 {
+    if p_send < GameConfig::default().attack_cost_neutral {
         return;
     }
 
     debug!("Headless bot attack -> player {} (troops: {})", target_owner, p_send);
-    let _ = sender_mut.send::<ReliableChannel>(ClientGameplayMessage {
+    sender_mut.send::<ReliableChannel>(ClientGameplayMessage {
         intent: GameplayIntent::Attack(AttackIntent {
             target_owner,
             troops: Some(p_send),

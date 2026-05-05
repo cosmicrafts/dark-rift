@@ -138,18 +138,12 @@ fn default_empty_string() -> String {
 
 /// Player-chosen display name (menu + `ClientJoinMessage.name`). Persisted in `settings.ron` on native only.
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Default)]
 pub struct ProfileConfig {
     #[serde(default = "default_empty_string")]
     pub nickname: String,
 }
 
-impl Default for ProfileConfig {
-    fn default() -> Self {
-        Self {
-            nickname: String::new(),
-        }
-    }
-}
 
 impl ProfileConfig {
     pub const NICKNAME_MAX_CHARS: usize = 24;

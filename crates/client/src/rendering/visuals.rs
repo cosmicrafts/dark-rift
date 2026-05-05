@@ -145,14 +145,13 @@ pub fn system_sync_fleet_visuals(
         let p = tile_idx_to_world(cur, mw, mh);
         tf.translation = Vec3::new(p.x, p.y, 272.0);
         if let Ok((_, mut wtf, mut vis)) = wake_q.get_mut(fb.wake) {
-            if let Some(prev) = fb.prev_tile {
-                if prev != cur {
+            if let Some(prev) = fb.prev_tile
+                && prev != cur {
                     let wp = tile_idx_to_world(prev, mw, mh);
                     wtf.translation = Vec3::new(wp.x, wp.y, 269.0);
                     wtf.scale = Vec3::ONE;
                     *vis = Visibility::Visible;
                 }
-            }
             fb.prev_tile = Some(cur);
         }
     }
@@ -209,11 +208,10 @@ pub fn system_animate_attack_command_rings(
         let [r, g, b] = ring.rgb;
 
         for child in children.iter() {
-            if let Ok(mat_h) = mesh_q.get(child) {
-                if let Some(mat) = materials.get_mut(&mat_h.0) {
+            if let Ok(mat_h) = mesh_q.get(child)
+                && let Some(mat) = materials.get_mut(&mat_h.0) {
                     mat.color = Color::srgba(r, g, b, 0.97 * fade);
                 }
-            }
             if let Ok(mut tc) = text_color_q.get_mut(child) {
                 *tc = TextColor(Color::srgba(
                     1.0,
