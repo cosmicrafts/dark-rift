@@ -99,11 +99,13 @@ pub fn execute_nation_think(&mut self) {
     }
 
     let max_pid = self.state.players.iter().map(|p| p.id as usize).max().unwrap_or(0);
-    let aggs = aggregate_buildings_per_player(self.buildings.iter().copied(), max_pid);
-
-    if any_structures {
+    
+    let aggs = if any_structures {
         self.refresh_building_grid();
-    }
+        aggregate_buildings_per_player(self.buildings.iter().copied(), max_pid)
+    } else {
+        Vec::new()
+    };
     let mut decisions: Vec<BotDecision> = Vec::new();
 
     for (bot_id, interval, offset) in schedule {
@@ -165,17 +167,8 @@ pub fn execute_nation_think(&mut self) {
                     let mut tile_choice: Option<u32> = None;
                     if border_len > 0 {
                         let pick = bot_now.bot_rng.next_int(0, border_len as i32) as usize;
-                        // Collect a small sample around the pick point instead of nth(pick)
-                        let mut count = 0usize;
-                        let mut chosen_idx = 0u32;
-                        for idx in bot_now.border_tiles.ones() {
-                            if count == pick {
-                                chosen_idx = idx;
-                                break;
-                            }
-                            count += 1;
-                        }
-                        if count == pick {
+                        let chosen_idx_opt = bot_now.border_tiles.ones().nth(pick);
+                        if let Some(chosen_idx) = chosen_idx_opt {
                             let (bx, by) = (chosen_idx % map_w, chosen_idx / map_w);
                             let idx = by * map_w + bx;
                             if resolve_structure_spawn_tile(&self.state.map, bot_id, kind, idx, &self.building_grid, &mut self.placement_scratch).is_some() {

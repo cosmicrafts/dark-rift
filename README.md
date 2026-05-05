@@ -154,6 +154,13 @@ When porting the bots, we initially seeded a *new* PRNG every tick by hashing `g
 During the RNG migration, we cloned a repository that referenced Bevy's `main` branch directly (`git = "https://github.com/bevyengine/bevy"`). While it worked locally, mixing a git dependency with our `bevy = "0.18"` from crates.io caused `cargo` to compile two completely different versions of the engine (0.19-dev and 0.18). This exploded the WebAssembly build pipeline because sub-dependencies like `getrandom` misaligned their feature flags (`wasm_js`).
 * **The Poka-Yoke (Mistake-Proofing):** Never use `git = ...` dependencies for core architectural components (like ECS or math engines) unless you are ready to fork the entire ecosystem. Always use strict `crates.io` versioning (e.g., `version = "0.14"`) to guarantee feature-flag alignment across complex compile targets like WASM.
 
+### 18. The Unconditional Iteration Trap (Tick-Based Performance Drain)
+When adding the new `Nation` AI logic, we inadvertently introduced three silent performance killers that executed unconditionally every single tick, dragging the simulation to a crawl even during complete peace:
+1. **Global Defense Grid Rebuilding**: We correctly optimized `DefenseGrid::rebuild` to run globally instead of per-attack (`O(N^2)` -> `O(1)` query), but we left the rebuild call outside any conditional blocks. This forced the WASM client to clear 35,000 spatial cells 10 times a second, even with zero attacks. We fixed this by wrapping it in `if !self.attacks.is_empty()`.
+2. **O(Buildings) Aggregation**: The new `schedule` logic caused `aggregate_buildings_per_player` to linearly scan all 5,000 map buildings every tick, just in case a nation needed to build. Moving this inside the `if any_structures` block restricted it to the ~1% of ticks where a building was actually placed.
+3. **Fake "O(1)" Array Iteration**: A comment claimed to avoid an `O(pick)` iteration by not using `.nth()`, but the code actually implemented a manual `for` loop that iterated thousands of times on a bitset. Reverting to the standard library `.nth(pick)` restored the clean Rust iterator optimization.
+* **The Poka-Yoke (Mistake-Proofing):** When optimizing code from per-event to global per-tick, always wrap the heavy global recalculation in an early-exit check (e.g., `if is_empty()`). A fast `O(N)` operation run 60 times a second when it's not needed is worse than a slow `O(N^2)` operation run once an hour.
+
 ---
 ### 🤖 OpenClaw Integration Test
 This repository is currently being orchestrated and optimized via OpenClaw AI. Automated deployments, config management, and stress-testing logic have been validated.

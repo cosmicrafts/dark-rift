@@ -20,7 +20,9 @@ impl DarkRiftEngine {
         let tick_now = self.state.tick;
 
         // Pre-filter all active defense posts globally ONCE per tick (replaces per-attack O(N^2) rebuilding bottleneck)
-        self.defense_grid.rebuild(&self.buildings, map_w, map_h, 16);
+        if !self.attacks.is_empty() {
+            self.defense_grid.rebuild(&self.buildings, map_w, map_h, 16);
+        }
 
         // attacks are sorted on insertion
 
