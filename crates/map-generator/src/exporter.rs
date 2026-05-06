@@ -46,7 +46,7 @@ pub fn export_map(
     fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
 
     if single_player_config {
-        let ron_path = "crates/client/assets/configs/default_single_player.ron";
+        let ron_path = "assets/configs/default_single_player.ron";
         let bot_count = spawns.len();
         let ron_content = format!(
 r#"(
