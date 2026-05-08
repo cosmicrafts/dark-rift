@@ -324,7 +324,7 @@ fn main() {
             (system_refresh_buildable_hud, system_apply_buildable_hud).chain(),
             system_buildpill_interactions,
             system_build_structure_hotkeys,
-            system_sync_structure_ghost.run_if(bevy::time::common_conditions::on_timer(std::time::Duration::from_millis(33))),
+            system_sync_structure_ghost,
             system_attack_ratio_keyboard,
             system_attack_ratio_slider_drag,
             (player_click, system_animate_attack_command_rings).chain(),
@@ -388,15 +388,13 @@ fn main() {
                 system_sync_building_visual_lod,
                 system_sync_building_map_labels,
             )
-                .run_if(in_state(AppState::InGame))
-                .run_if(bevy::time::common_conditions::on_timer(std::time::Duration::from_millis(33))),
+                .run_if(in_state(AppState::InGame)),
         );
         
         app.add_systems(Update, (
             camera_movement_and_zoom,
             system_sync_player_labels
-                .run_if(|settings: Res<ClientSettings>| settings.config.visuals.enable_floating_labels)
-                .run_if(bevy::time::common_conditions::on_timer(std::time::Duration::from_millis(33))),
+                .run_if(|settings: Res<ClientSettings>| settings.config.visuals.enable_floating_labels),
         ).run_if(in_state(AppState::InGame)));
 
         app.add_systems(Update, clear_inputs_on_focus_loss);

@@ -100,7 +100,7 @@ impl SimPerfDiagnostics {
 #[derive(bevy::ecs::system::SystemParam)] pub struct StartGameParams<'w> { pub ready: ResMut<'w, GameReady>, pub my_id: ResMut<'w, MyPlayerId>, pub settings: Res<'w, ClientSettings>, pub queue: ResMut<'w, TurnQueue>, pub pending: ResMut<'w, PendingTicks>, pub highest: ResMut<'w, HighestReceivedTurn>, pub overlay: Option<ResMut<'w, OverlayDiagnostics>>, pub shell: Option<Res<'w, crate::ui::shell::HudShellRegions>>, pub asset_server: Res<'w, AssetServer>, pub meshes: Option<ResMut<'w, Assets<Mesh>>>, pub materials: Option<ResMut<'w, Assets<crate::rendering::BorderMaterial>>>, pub images: Option<ResMut<'w, Assets<Image>>>, pub next_state: ResMut<'w, NextState<AppState>> }
 #[derive(Component)] pub struct GameOverPanel;
 #[derive(Component)] pub struct GoBackButton;
-#[derive(Resource)] pub struct ShaderMapData { pub board_data: Handle<Image>, pub player_colors: Handle<Image>, pub colors_dirty: bool, pub border_material: Handle<crate::rendering::BorderMaterial> }
+#[derive(Resource)] pub struct ShaderMapData { pub board_data: Handle<Image>, pub player_colors: Handle<Image>, pub colors_dirty: bool, pub cpu_board_data: Vec<u8>, pub board_dirty: bool, pub border_material: Handle<crate::rendering::BorderMaterial> }
 #[derive(Component)] pub struct BuildingLabelTarget(pub Entity);
 #[derive(Component)] pub struct EventFeedLine { pub timer: Timer }
 #[inline] pub fn tile_idx_to_world(idx: u32, map_width: u32, map_height: u32) -> Vec2 { let x = (idx % map_width) as f32; let y = (idx / map_width) as f32; Vec2::new((x + 0.5) * crate::TILE_SIZE, (map_height as f32 - y - 0.5) * crate::TILE_SIZE) }

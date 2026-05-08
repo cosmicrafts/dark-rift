@@ -7,7 +7,7 @@ use instant::Instant;
 use crate::*;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub const NATIVE_NETCODE_SOCKET: &str = "74.208.246.177:25565";
+pub const NATIVE_NETCODE_SOCKET: &str = "127.0.0.1:25565";
 
 #[cfg(target_arch = "wasm32")]
 pub const WASM_MULTIPLAYER_WSS_URL: &str = "wss://darkrift.ai/ws/";

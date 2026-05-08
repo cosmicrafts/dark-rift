@@ -133,6 +133,8 @@ pub fn handle_tile_change(
     mut last_event_idx: Local<usize>,
     sim_hud: Res<crate::SimPerfHudEnabled>,
     mut sim_perf: ResMut<crate::SimPerfDiagnostics>,
+    time: Res<Time>,
+    mut upload_timer: Local<f32>,
 ) {
     let Some(ref mut engine) = engine_opt else { return };
     let Some(mut shader_map) = shader_map_opt else { return };
@@ -155,30 +157,48 @@ pub fn handle_tile_change(
                 .tile_handler_events_scanned
                 .saturating_add(scanned);
         }
-        if let Some(board_img) = images.get_mut(&shader_map.board_data)
-            && let Some(ref mut data) = board_img.data {
-                let mut cap_writes = 0u32;
-                for i in *last_event_idx..current_len {
-                    let ev = &engine.state.events[i];
-                    if let GameEvent::TileCaptured { x, y, new_owner: owner, .. } = ev {
-                        if sim_hud.0 {
-                            cap_writes = cap_writes.saturating_add(1);
-                        }
-                        // Update single owner ID at (x, y)
-                        let linear_index = (*y as usize * engine.state.map.width as usize) + *x as usize;
-                        let byte_offset = linear_index * 2;
-                        if byte_offset + 1 < data.len() {
-                            data[byte_offset..byte_offset+2].copy_from_slice(&owner.to_ne_bytes());
-                        }
-                    }
-                }
+        
+        let mut cap_writes = 0u32;
+        let mut dirtied = false;
+        for i in *last_event_idx..current_len {
+            let ev = &engine.state.events[i];
+            if let GameEvent::TileCaptured { x, y, new_owner: owner, .. } = ev {
                 if sim_hud.0 {
-                    sim_perf.tile_captured_writes = sim_perf
-                        .tile_captured_writes
-                        .saturating_add(cap_writes);
+                    cap_writes = cap_writes.saturating_add(1);
+                }
+                // Update single owner ID at (x, y) on CPU buffer
+                let linear_index = (*y as usize * engine.state.map.width as usize) + *x as usize;
+                let byte_offset = linear_index * 2;
+                if byte_offset + 1 < shader_map.cpu_board_data.len() {
+                    shader_map.cpu_board_data[byte_offset..byte_offset+2].copy_from_slice(&owner.to_ne_bytes());
+                    dirtied = true;
                 }
             }
+        }
+        
+        if dirtied {
+            shader_map.board_dirty = true;
+        }
+
+        if sim_hud.0 {
+            sim_perf.tile_captured_writes = sim_perf
+                .tile_captured_writes
+                .saturating_add(cap_writes);
+        }
+        
         *last_event_idx = current_len;
+    }
+
+    // Throttle GPU upload to 15 FPS (66ms)
+    *upload_timer += time.delta_secs();
+    if shader_map.board_dirty && *upload_timer >= 0.066 {
+        if let Some(board_img) = images.get_mut(&shader_map.board_data) {
+            if let Some(ref mut data) = board_img.data {
+                data.copy_from_slice(&shader_map.cpu_board_data);
+            }
+        }
+        shader_map.board_dirty = false;
+        *upload_timer = 0.0;
     }
 
     // Prevent unbounded event growth: once past 512 processed events, drain the older half.
@@ -215,7 +235,7 @@ pub fn spawn_shader_map(
     let mut board_img = Image::new(
         bevy::render::render_resource::Extent3d { width, height, depth_or_array_layers: 1 },
         bevy::render::render_resource::TextureDimension::D2,
-        board_data,
+        board_data.clone(),
         bevy::render::render_resource::TextureFormat::R16Uint,
         bevy::asset::RenderAssetUsages::MAIN_WORLD | bevy::asset::RenderAssetUsages::RENDER_WORLD,
     );
@@ -298,6 +318,8 @@ pub fn spawn_shader_map(
         board_data: board_handle,
         player_colors: colors_handle,
         colors_dirty: false,
+        cpu_board_data: board_data,
+        board_dirty: false,
         border_material: material_handle,
     }
 }

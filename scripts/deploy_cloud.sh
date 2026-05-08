@@ -10,6 +10,7 @@ VPS_IP="74.208.246.177"
 VPS_USER="bizkit"
 WEB_DEST_DIR="/var/www/darkrift.ai/html"
 BACKEND_DEST_DIR="/home/bizkit/darkrift"
+NETWORK_RS="${ROOT}/crates/client/src/network/network.rs"
 
 export CARGO_TARGET_DIR="${ROOT}/target"
 WASM_IN="${CARGO_TARGET_DIR}/wasm32-unknown-unknown/release/dark-rift-client.wasm"
@@ -23,6 +24,37 @@ red() { echo -e "\e[31m$1\e[0m"; }
 echo "========================================================="
 cyan "🚀 Iniciando Despliegue a Producción (Dark Rift -> VPS)"
 echo "========================================================="
+
+# Insurance guard: fuerza endpoints de producción antes de compilar.
+cyan "==> 0. Verificando endpoints de producción en network.rs..."
+python3 - <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path("crates/client/src/network/network.rs")
+content = path.read_text(encoding="utf-8")
+updated = content
+
+replacements = [
+    (r'(?m)^(pub const NATIVE_NETCODE_SOCKET: &str = ")[^"]+(";\s*)$', r'\g<1>74.208.246.177:25565\g<2>'),
+    (r'(?m)^(pub const WASM_MULTIPLAYER_WSS_URL: &str = ")[^"]+(";\s*)$', r'\g<1>wss://darkrift.ai/ws/\g<2>'),
+    (r'(?m)^(pub const WASM_NETCODE_SOCKET: &str = ")[^"]+(";\s*)$', r'\g<1>74.208.246.177:25565\g<2>'),
+]
+
+for pattern, repl in replacements:
+    updated, count = re.subn(pattern, repl, updated, count=1)
+    if count != 1:
+        print(f"ERROR: expected constant not found for pattern: {pattern}", file=sys.stderr)
+        sys.exit(1)
+
+if updated != content:
+    path.write_text(updated, encoding="utf-8")
+    print("Applied production endpoint reset in network.rs")
+else:
+    print("network.rs already on production endpoints")
+PY
+green "✅ Endpoints de producción validados."
 
 # 1. Bump Version before compilation
 cyan "==> 1. Actualizando version.txt..."
