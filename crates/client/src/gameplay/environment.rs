@@ -181,9 +181,9 @@ pub fn handle_tile_change(
         *last_event_idx = current_len;
     }
 
-    // Prevent unbounded event growth: once past 4096 processed events, drain the older half.
+    // Prevent unbounded event growth: once past 512 processed events, drain the older half.
     // This keeps memory bounded while allowing other consumers (hud_events) to catch up.
-    const EVENT_DRAIN_THRESHOLD: usize = 4096;
+    const EVENT_DRAIN_THRESHOLD: usize = 128;
     if *last_event_idx >= EVENT_DRAIN_THRESHOLD {
         let drain_count = *last_event_idx;
         engine.state.events.drain(..drain_count);

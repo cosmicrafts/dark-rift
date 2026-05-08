@@ -30,6 +30,9 @@ pub struct DarkRiftEngine {
     pub building_grid: BuildingGrid,
     pub building_aggregates: Vec<BuildingAggregate>,
     pub building_aggregates_dirty: bool,
+    /// Round-robin cursor for the unified AI pipeline.
+    /// Ensures fair distribution of bot/nation think work across ticks.
+    pub ai_round_robin: usize,
 }
 
 impl DarkRiftEngine {
@@ -47,6 +50,7 @@ impl DarkRiftEngine {
             building_grid: BuildingGrid::default(),
             building_aggregates: Vec::new(),
             building_aggregates_dirty: true,
+            ai_round_robin: 0,
         }
     }
 

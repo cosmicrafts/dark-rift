@@ -191,12 +191,8 @@ pub fn pop_turn(
             diag.us_income = diag.us_income.saturating_add(dur_us(t.elapsed()));
 
             let t = Instant::now();
-            engine.execute_bot_think(); // Tribes
-            diag.us_bot = diag.us_bot.saturating_add(dur_us(t.elapsed()));
-
-            let t = Instant::now();
-            engine.execute_nation_think(); // Nations
-            diag.us_nation = diag.us_nation.saturating_add(dur_us(t.elapsed()));
+            engine.execute_ai_think(); // Unified Bots + Nations
+            diag.us_ai = diag.us_ai.saturating_add(dur_us(t.elapsed()));
 
             let t = Instant::now();
             engine.execute_fleets();
@@ -216,8 +212,7 @@ pub fn pop_turn(
         } else {
             engine.apply_intents(&turn.intents);
             engine.execute_income();
-            engine.execute_bot_think();
-            engine.execute_nation_think();
+            engine.execute_ai_think();
             engine.execute_fleets();
             engine.execute_combat();
             engine.execute_construction();
@@ -248,8 +243,7 @@ pub fn system_sync_sim_perf_overlay(
     let sim_phase_us = diag
         .us_apply_intents
         .saturating_add(diag.us_income)
-        .saturating_add(diag.us_bot)
-        .saturating_add(diag.us_nation)
+        .saturating_add(diag.us_ai)
         .saturating_add(diag.us_fleets)
         .saturating_add(diag.us_combat)
         .saturating_add(diag.us_construction)

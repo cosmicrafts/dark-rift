@@ -199,6 +199,20 @@ pub fn system_sync_structure_ghost(
     }
 }
 
+pub struct BuildingNodes {
+    pub root: Entity,
+    pub ring: Entity,
+    pub icon: Entity,
+    pub badge: Entity,
+    pub label: Entity,
+}
+
+#[derive(Resource, Default)]
+pub struct BuildingVisualPool {
+    pub unused: Vec<BuildingNodes>,
+    pub used: std::collections::HashMap<u64, BuildingNodes>,
+}
+
 pub fn system_sync_building_visuals(
     mut commands: Commands,
     engine_opt: Option<Res<DarkRiftEngine>>,
@@ -208,32 +222,34 @@ pub fn system_sync_building_visuals(
     mut materials: ResMut<Assets<ColorMaterial>>,
     q_existing: Query<(Entity, &BuildingVisual)>,
     mut local_existing: Local<Vec<u64>>,
+    mut pool: Local<BuildingVisualPool>,
 ) {
-    let Some(engine) = engine_opt.as_deref() else {
-        return;
-    };
-    let Some(marker) = mesh.as_ref() else {
-        return;
-    };
+    let Some(engine) = engine_opt.as_deref() else { return; };
+    let Some(marker) = mesh.as_ref() else { return; };
     let mw = engine.state.map.width;
     let mh = engine.state.map.height;
 
-    local_existing.clear();
-    for (_, vis) in &q_existing {
-        local_existing.push(vis.0);
+    // 1. Despawn dead buildings -> return to pool
+    let mut to_recycle = Vec::new();
+    for (&id, nodes) in pool.used.iter() {
+        if engine.buildings.binary_search_by_key(&id, |b| b.id).is_err() {
+            to_recycle.push(id);
+        }
     }
-    local_existing.sort_unstable();
-
-    for (e, vis) in &q_existing {
-        if engine.buildings.binary_search_by_key(&vis.0, |b| b.id).is_err() {
-            commands.entity(e).try_despawn();
+    for id in to_recycle {
+        if let Some(nodes) = pool.used.remove(&id) {
+            // Hide the root to make it invisible
+            commands.entity(nodes.root).insert(Visibility::Hidden);
+            pool.unused.push(nodes);
         }
     }
 
+    // 2. Spawn / Update active buildings
     for b in engine.buildings.iter() {
-        if local_existing.binary_search(&b.id).is_ok() {
-            continue;
+        if pool.used.contains_key(&b.id) {
+            continue; // Already active
         }
+
         let rgb = engine.state
             .player(b.owner_id)
             .map(|p| p.color)
@@ -242,63 +258,98 @@ pub fn system_sync_building_visuals(
             rgb[0], rgb[1], rgb[2], 0.88,
         )));
         let pos = tile_idx_to_world(b.tile_idx, mw, mh);
-        
-        let e = commands.spawn((
-            BuildingVisual(b.id),
-            BuildingMapVisualRoot,
-            InGameEntity,
-            Transform::from_xyz(pos.x, pos.y, 268.0),
-            GlobalTransform::default(),
-            Visibility::default(),
-        )).id();
-        
         let font = settings.font.clone();
-        commands.entity(e).with_children(|ch| {
-            ch.spawn((
-                InGameEntity,
-                Mesh2d(marker.place_ring.clone()),
-                MeshMaterial2d(mat),
-                Transform::default(),
-                GlobalTransform::default(),
-                Visibility::default(),
+
+        // Try to recycle an unused building hierarchy
+        if let Some(nodes) = pool.unused.pop() {
+            // Update components in-place (no structural ECS changes)
+            commands.entity(nodes.root).insert((
+                BuildingVisual(b.id),
+                Transform::from_xyz(pos.x, pos.y, 268.0),
+                Visibility::Inherited,
             ));
-            ch.spawn((
-                InGameEntity,
-                Sprite {
-                    image: asset_server.load(building_kind_icon_path(b.kind)),
-                    custom_size: Some(Vec2::splat(TILE_SIZE * 2.4)),
-                    ..default()
-                },
-                Transform::from_xyz(0.0, 0.0, 1.0),
-                GlobalTransform::default(),
-                Visibility::default(),
+            
+            commands.entity(nodes.ring).insert(MeshMaterial2d(mat));
+            
+            commands.entity(nodes.icon).insert(Sprite {
+                image: asset_server.load(building_kind_icon_path(b.kind)),
+                custom_size: Some(Vec2::splat(TILE_SIZE * 2.4)),
+                ..default()
+            });
+
+            commands.entity(nodes.badge).insert(BuildingMapBadgeRoot(b.id));
+
+            commands.entity(nodes.label).insert((
+                BuildingLabelTarget(nodes.root),
+                Text2d::new(format!("{}{}", building_kind_short(b.kind), b.level)),
             ));
-            ch.spawn((
-                BuildingMapBadgeRoot(b.id),
-                Visibility::Hidden,
-                Transform::from_xyz(0.0, TILE_SIZE * 0.42, 2.0),
+
+            pool.used.insert(b.id, nodes);
+        } else {
+            // Pool empty -> spawn a new hierarchy
+            let root = commands.spawn((
+                BuildingVisual(b.id),
+                BuildingMapVisualRoot,
+                InGameEntity,
+                Transform::from_xyz(pos.x, pos.y, 268.0),
                 GlobalTransform::default(),
-            ))
-            .with_children(|badge| {
-                badge.spawn((
+                Visibility::Inherited,
+            )).id();
+            
+            let mut ring = Entity::PLACEHOLDER;
+            let mut icon = Entity::PLACEHOLDER;
+            let mut badge = Entity::PLACEHOLDER;
+            let mut label = Entity::PLACEHOLDER;
+
+            commands.entity(root).with_children(|ch| {
+                ring = ch.spawn((
                     InGameEntity,
-                    Text2d::new(String::new()),
-                    TextFont {
-                        font: font.clone(),
-                        font_size: 11.0,
-                        weight: FontWeight::SEMIBOLD,
-                        ..default()
-                    },
-                    TextColor(Color::WHITE),
-                    TextLayout::new_with_justify(Justify::Center),
+                    Mesh2d(marker.place_ring.clone()),
+                    MeshMaterial2d(mat),
                     Transform::default(),
                     GlobalTransform::default(),
-                    Visibility::default(),
-                ));
-            });
-            ch.spawn((
+                    Visibility::Inherited,
+                )).id();
+                
+                icon = ch.spawn((
+                    InGameEntity,
+                    Sprite {
+                        image: asset_server.load(building_kind_icon_path(b.kind)),
+                        custom_size: Some(Vec2::splat(TILE_SIZE * 2.4)),
+                        ..default()
+                    },
+                    Transform::from_xyz(0.0, 0.0, 1.0),
+                    GlobalTransform::default(),
+                    Visibility::Inherited,
+                )).id();
+                
+                badge = ch.spawn((
+                    BuildingMapBadgeRoot(b.id),
+                    Visibility::Hidden,
+                    Transform::from_xyz(0.0, TILE_SIZE * 0.42, 2.0),
+                    GlobalTransform::default(),
+                ))
+                .with_children(|badge| {
+                    badge.spawn((
+                        InGameEntity,
+                        Text2d::new(String::new()),
+                        TextFont {
+                            font: font.clone(),
+                            font_size: 11.0,
+                            weight: FontWeight::SEMIBOLD,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                        TextLayout::new_with_justify(Justify::Center),
+                        Transform::default(),
+                        GlobalTransform::default(),
+                        Visibility::Inherited,
+                    ));
+                }).id();
+            
+            label = ch.spawn((
                 InGameEntity,
-                BuildingLabelTarget(e),
+                BuildingLabelTarget(root),
                 Text2d::new(format!(
                     "{}{}",
                     building_kind_short(b.kind),
@@ -313,8 +364,13 @@ pub fn system_sync_building_visuals(
                 TextColor(Color::WHITE),
                 TextLayout::new_with_justify(Justify::Center),
                 Transform::from_xyz(0.0, TILE_SIZE * 0.42, 3.0),
-            ));
+                GlobalTransform::default(),
+                Visibility::Inherited,
+            )).id();
         });
+
+        pool.used.insert(b.id, BuildingNodes { root, ring, icon, badge, label });
+        }
     }
 }
 

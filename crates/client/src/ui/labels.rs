@@ -4,6 +4,7 @@ use crate::{
     BuildingMapBadgeRoot, ClientSettings, InGameEntity, TILE_SIZE, player_label_scale,
 };
 use crate::ui::write_guard::set_text_font_size_if_changed;
+use crate::core::EntityPool;
 
 #[derive(Component)]
 pub struct PlayerLabel(pub u16);
@@ -59,27 +60,31 @@ pub fn system_sync_player_labels(
         &mut TextFont,
         &mut Transform,
         &mut TextColor,
-        &PlayerLabel,
+        &mut PlayerLabel,
         &mut PlayerLabelRenderCache,
+        &mut Visibility,
     )>,
+    mut pool: Local<EntityPool>,
 ) {
     let Some(engine) = engine_opt.as_deref() else { return };
     let game = &engine.state;
     let Some(ui) = ui_opt else { return };
 
-    // 1. Despawn labels for dead players
-    for (entity, _, _, _, _, label, _) in &q_labels {
+    // 1. Recycle labels for dead players
+    for (entity, _, _, _, _, label, _, mut vis) in &mut q_labels {
+        if label.0 == 0 { continue; } // Already recycled
         let alive = game.players.iter().any(|p| p.id == label.0 && p.alive);
         if !alive {
-            commands.entity(entity).try_despawn();
+            pool.set_unused(entity);
+            *vis = Visibility::Hidden;
         }
     }
 
-    // 2. Spawn labels for alive players if they don't exist
+    // 2. Spawn or reuse labels for alive players
     for player in game.players.iter().filter(|p| p.alive) {
         let exists = q_labels
             .iter()
-            .any(|(_, _, _, _, _, label, _)| label.0 == player.id);
+            .any(|(_, _, _, _, _, label, _, _)| label.0 == player.id);
         if !exists {
             let base_font = ui.config.ui.font_size;
             let tiles = player.tile_count;
@@ -89,29 +94,51 @@ pub fn system_sync_player_labels(
                 ui.config.ui.label_max_scale,
             );
             let font_px = (base_font * mul).round().max(1.0);
-
             let label_text = format!("{}\n[{:.0}]", player.name, player.troops);
-            commands.spawn((
-                PlayerLabel(player.id),
-                InGameEntity,
-                PlayerLabelRenderCache {
-                    font_px,
-                    troops: player.troops.round() as i64,
-                },
-                Text2d::new(label_text),
-                TextFont {
-                    font: ui.font.clone(),
-                    font_size: font_px,
-                    ..default()
-                },
-                TextColor(Color::BLACK),
-                TextLayout::new_with_justify(Justify::Center),
-                Transform::from_xyz(0.0, 0.0, 150.0),
-            ));
+
+            let new_entity = pool.get_unused_or_spawn(|| {
+                commands.spawn((
+                    PlayerLabel(0), // Will be set below
+                    InGameEntity,
+                    PlayerLabelRenderCache {
+                        font_px: 0.0,
+                        troops: 0,
+                    },
+                    Text2d::new(""),
+                    TextFont {
+                        font: ui.font.clone(),
+                        font_size: 10.0,
+                        ..default()
+                    },
+                    TextColor(Color::BLACK),
+                    TextLayout::new_with_justify(Justify::Center),
+                    Transform::from_xyz(0.0, 0.0, 150.0),
+                    Visibility::Inherited,
+                )).id()
+            });
+
+            if let Ok((_, mut text, mut p_font, mut transform, mut text_color, mut label, mut cache, mut vis)) = q_labels.get_mut(new_entity) {
+                label.0 = player.id;
+                text.0 = label_text;
+                set_text_font_size_if_changed(&mut p_font, font_px);
+                cache.font_px = font_px;
+                cache.troops = player.troops.round() as i64;
+                text_color.0 = Color::BLACK;
+                transform.translation.z = 150.0;
+                *vis = Visibility::Inherited;
+            } else {
+                // First frame after spawn, components aren't in query yet. We already set them in the spawn bundle anyway (except player id).
+                commands.entity(new_entity).insert((
+                    PlayerLabel(player.id),
+                    PlayerLabelRenderCache { font_px, troops: player.troops.round() as i64 },
+                    Text2d::new(label_text),
+                    TextFont { font: ui.font.clone(), font_size: font_px, ..default() },
+                    Visibility::Inherited,
+                ));
+            }
         }
     }
 
-    // 3. Update positions and text based on territory center of mass
     for (
         _entity,
         mut text,
@@ -120,8 +147,10 @@ pub fn system_sync_player_labels(
         mut text_color,
         label,
         mut cache,
+        vis,
     ) in q_labels.iter_mut()
     {
+        if *vis == Visibility::Hidden || label.0 == 0 { continue; }
         if text_color.0 != Color::BLACK {
             text_color.0 = Color::BLACK;
         }

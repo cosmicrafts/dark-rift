@@ -72,6 +72,7 @@ pub fn system_force_boat_key(
     mut commands: Commands,
     ring_mesh: Res<AttackRingMesh>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    mut attack_pool: Local<crate::AttackRingPool>,
     settings: Res<ClientSettings>,
     mut senders: Query<&mut MessageSender<ClientGameplayMessage>>,
     local_buf: Option<ResMut<LocalIntentBuffer>>,
@@ -135,6 +136,7 @@ pub fn system_force_boat_key(
     };
     spawn_attack_command_ring(
         &mut commands,
+        &mut attack_pool,
         &ring_mesh,
         &mut materials,
         &settings,
@@ -160,6 +162,7 @@ pub fn player_click(
     mut commands: Commands,
     ring_mesh: Res<AttackRingMesh>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    mut attack_pool: Local<crate::AttackRingPool>,
     mouse:       Res<ButtonInput<MouseButton>>,
     touches:     Res<Touches>,
     q_camera:    Query<(&Camera, &GlobalTransform), With<Camera2d>>,
@@ -174,7 +177,6 @@ pub fn player_click(
     mut senders: Query<&mut MessageSender<ClientGameplayMessage>>,
     local_buf: Option<ResMut<LocalIntentBuffer>>,
     build_mode: Res<BuildStructureMode>,
-    _q_building: Query<(Entity, &BuildingVisual)>,
     mut ctx: ClickCtx,
 ) {
     // We trigger ONLY on release to support dragging.
@@ -367,6 +369,7 @@ pub fn player_click(
 
     spawn_attack_command_ring(
         &mut commands,
+        &mut attack_pool,
         &ring_mesh,
         &mut materials,
         &settings,

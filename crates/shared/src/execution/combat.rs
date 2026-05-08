@@ -84,9 +84,11 @@ impl DarkRiftEngine {
         tiles_to_conquer += fractional_extra_tiles_milli(max_tiles_f64, roll_milli);
 
         let mut expanded_this_tick = 0u32;
+        let mut stale_pops = 0u32;
+        let max_stale_pops = (tiles_to_conquer * 4).max(64);
 
         loop {
-            if expanded_this_tick >= tiles_to_conquer {
+            if expanded_this_tick >= tiles_to_conquer || stale_pops > max_stale_pops {
                 break;
             }
 
@@ -98,17 +100,20 @@ impl DarkRiftEngine {
             if let Some(target_tile) = execution.to_conquer.pop() {
                 // Check if target tile still belongs to the exact target
                 if self.state.map.owner_id(target_tile.x, target_tile.y) != execution.target_owner {
+                    stale_pops += 1;
                     continue; // Skip, no longer controlled by target
                 }
 
                 // Terrain Check: Water and Mountains are impassable for basic ground attacks
                 let terrain_type = self.state.map.terrain_type(target_tile.x, target_tile.y);
                 if terrain_type == TerrainType::Water {
+                    stale_pops += 1;
                     continue; // Skip, impassable terrain
                 }
 
                 // Check adjacency: ensure it still borders the attacker
                 if !self.state.map.is_adjacent_to_player(target_tile.x, target_tile.y, execution.owner_id) {
+                    stale_pops += 1;
                     continue; // Skip, edge was severed
                 }
 
@@ -250,9 +255,13 @@ impl DarkRiftEngine {
         }
     }
 
-    // Remove dead attacks in reverse order to maintain indices and sorting
+    // Remove dead attacks in O(1) and re-sort to preserve deterministic order
+    let has_removals = !to_remove.is_empty();
     for i in to_remove.into_iter().rev() {
-        self.attacks.remove(i);
+        self.attacks.swap_remove(i);
+    }
+    if has_removals {
+        self.attacks.sort_unstable_by_key(|a| a.id);
     }
 }
 
@@ -370,8 +379,13 @@ pub fn execute_fleets(&mut self) {
         to_remove.push(i);
     }
 
+    // Remove finished fleets in O(1) and re-sort to preserve deterministic order
+    let has_removals = !to_remove.is_empty();
     for i in to_remove.into_iter().rev() {
-        self.fleets.remove(i);
+        self.fleets.swap_remove(i);
+    }
+    if has_removals {
+        self.fleets.sort_unstable_by_key(|f| f.id);
     }
 }
 }

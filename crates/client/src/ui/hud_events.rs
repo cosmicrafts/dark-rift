@@ -21,6 +21,11 @@ const ROW_EXIT_DURATION: f32 = 0.18;
 #[derive(Component)]
 pub struct EventFeedContainer;
 
+#[derive(Resource, Default)]
+pub struct EventFeedBuffer {
+    pub lines: Vec<Entity>,
+}
+
 #[derive(Component)]
 pub struct OutgoingRowsContainer;
 
@@ -64,21 +69,13 @@ pub fn system_update_event_feed(
     mut last_event_idx: Local<usize>,
     settings: Res<ClientSettings>,
     q_container: Query<Entity, With<EventFeedContainer>>,
-    mut q_lines: Query<(Entity, &mut EventFeedLine, &mut TextColor)>,
+    mut q_lines: Query<(Entity, &mut EventFeedLine, &mut TextColor, &mut Text)>,
     ui_shell: Res<UiShellState>,
+    mut buffer: Local<EventFeedBuffer>,
 ) {
     let Some(container_ent) = q_container.iter().next() else { return };
 
-    for (entity, mut line, mut color) in q_lines.iter_mut() {
-        line.timer.tick(time.delta());
-        let alpha = line.timer.fraction_remaining();
-        if !approx_eq_f32(color.0.alpha(), alpha) {
-            color.0 = color.0.with_alpha(alpha);
-        }
-        if alpha <= 0.0 {
-            commands.entity(entity).try_despawn();
-        }
-    }
+    // ... EventFeedBuffer logic moved to after event parsing ...
 
     let Some(engine) = engine_opt.as_deref() else { return };
     let game = &engine.state;
@@ -92,9 +89,10 @@ pub fn system_update_event_feed(
     if *last_event_idx > current_len {
         *last_event_idx = 0;
     }
+    
+    // We fetch any new messages
+    let mut new_msgs = Vec::new();
     if *last_event_idx < current_len {
-        let s = clamp_ui_scale(settings.config.ui.combat_hud_scale);
-
         for i in *last_event_idx..current_len {
             let ev = &game.events[i];
             let msg = match ev {
@@ -109,31 +107,77 @@ pub fn system_update_event_feed(
                 GameEvent::StructureUpgraded { kind, level, .. } => {
                     format!("Upgraded: {} to Lvl {}", kind.as_str(), level)
                 }
-                GameEvent::TileCaptured { .. } => {
-                    // Ignore tile captures, too noisy
-                    continue;
-                }
+                GameEvent::TileCaptured { .. } => continue, // Ignore tile captures, too noisy
                 _ => continue,
             };
+            new_msgs.push(msg);
+        }
+        *last_event_idx = current_len;
+    }
 
-            commands.entity(container_ent).with_children(|p| {
-                p.spawn((
-                    EventFeedLine { timer: Timer::from_seconds(5.0, TimerMode::Once) },
-                    Text::new(msg),
+    let s = clamp_ui_scale(settings.config.ui.combat_hud_scale);
+
+    // If buffer isn't initialized, spawn EXACTLY 10 lines
+    if buffer.lines.is_empty() {
+        commands.entity(container_ent).with_children(|p| {
+            for _ in 0..10 {
+                let e = p.spawn((
+                    EventFeedLine { timer: Timer::from_seconds(0.0, TimerMode::Once) }, // expired
+                    Text::new(""),
                     TextFont {
                         font: settings.font.clone(),
                         font_size: 14.0 * s,
                         ..default()
                     },
-                    TextColor(Color::srgba(0.9, 0.9, 0.9, 1.0)),
+                    TextColor(Color::NONE),
                     Node {
                         margin: UiRect::bottom(Val::Px(4.0 * s)),
                         ..default()
                     },
-                ));
-            });
+                )).id();
+                buffer.lines.push(e);
+            }
+        });
+        return; // Wait 1 frame for entities to register
+    }
+
+    // Tick timers and gather states
+    let mut states = Vec::new();
+    for &entity in &buffer.lines {
+        let Ok((_, mut line, mut color, text)) = q_lines.get_mut(entity) else { continue };
+        line.timer.tick(time.delta());
+        let alpha = line.timer.fraction_remaining();
+        if !approx_eq_f32(color.0.alpha(), alpha) {
+            color.0 = color.0.with_alpha(alpha);
         }
-        *last_event_idx = current_len;
+        let txt = text.0.clone();
+        states.push((txt, alpha, line.timer.clone()));
+    }
+
+    // Append new messages, shifting out the oldest
+    for msg in new_msgs {
+        states.remove(0); // shift
+        let mut t = Timer::from_seconds(5.0, TimerMode::Once);
+        t.set_elapsed(std::time::Duration::ZERO);
+        states.push((msg, 1.0, t));
+    }
+
+    // Write back to the UI nodes (zero archetype changes!)
+    for (i, &entity) in buffer.lines.iter().enumerate() {
+        if let Some(state) = states.get(i) {
+            let Ok((_, mut line, mut color, mut t)) = q_lines.get_mut(entity) else { continue };
+            if t.0 != state.0 {
+                t.0 = state.0.clone();
+            }
+            line.timer = state.2.clone();
+            let mut c = Color::srgba(0.9, 0.9, 0.9, state.1);
+            if state.1 <= 0.0 || state.0.is_empty() {
+                c = Color::NONE;
+            }
+            if color.0 != c {
+                color.0 = c;
+            }
+        }
     }
 }
 
