@@ -195,6 +195,10 @@ pub fn system_cleanup_ingame_entities(
     mut drag_state: ResMut<CameraDragState>,
     mut pinch_state: ResMut<PinchState>,
     mut touch_gesture: ResMut<TouchGestureState>,
+    mut entity_pool: ResMut<EntityPool>,
+    mut fleet_visual_pool: ResMut<FleetVisualPool>,
+    mut attack_ring_pool: ResMut<AttackRingPool>,
+    mut building_visual_pool: ResMut<BuildingVisualPool>,
     mut cam_q: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     q_ingame: Query<Entity, With<InGameEntity>>,
 ) {
@@ -221,6 +225,10 @@ pub fn system_cleanup_ingame_entities(
     for e in q_ingame.iter() {
         commands.entity(e).try_despawn();
     }
+    entity_pool.clear();
+    fleet_visual_pool.clear();
+    attack_ring_pool.clear();
+    building_visual_pool.clear();
     commands.remove_resource::<DarkRiftEngine>();
     commands.remove_resource::<SinglePlayerState>();
     commands.remove_resource::<LocalIntentBuffer>();

@@ -63,4 +63,10 @@ impl EntityPool {
             self.unused.insert(entity);
         }
     }
+
+    /// Clears pool entries after `InGameEntity` hierarchies were despawned (e.g. match exit).
+    pub fn clear(&mut self) {
+        self.used.clear();
+        self.unused.clear();
+    }
 }

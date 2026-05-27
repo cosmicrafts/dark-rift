@@ -37,6 +37,12 @@ pub struct AttackRingPool {
     pub unused: Vec<AttackRingNodes>,
 }
 
+impl AttackRingPool {
+    pub fn clear(&mut self) {
+        self.unused.clear();
+    }
+}
+
 /// Meshes for local-only transport visuals (boat disc, wake speck, landing ring).
 #[derive(Resource)]
 pub struct FleetVisualMeshes {
@@ -76,6 +82,12 @@ pub struct FleetVisualPool {
     pub used: std::collections::HashMap<u64, FleetNodes>,
 }
 
+impl FleetVisualPool {
+    pub fn clear(&mut self) {
+        self.used.clear();
+        self.unused.clear();
+    }
+}
 
 pub fn system_sync_fleet_visuals(
     mut commands: Commands,
@@ -87,7 +99,7 @@ pub fn system_sync_fleet_visuals(
     mut boat_q: Query<(Entity, &mut FollowFleetBoat, &mut Transform), (Without<FollowFleetWake>, Without<FollowFleetTarget>)>,
     mut wake_q: Query<(&FollowFleetWake, &mut Transform, &mut Visibility), (Without<FollowFleetBoat>, Without<FollowFleetTarget>)>,
     mut target_q: Query<(Entity, &mut FollowFleetTarget, &mut Transform), (Without<FollowFleetBoat>, Without<FollowFleetWake>)>,
-    mut pool: Local<FleetVisualPool>,
+    mut pool: ResMut<FleetVisualPool>,
 ) {
     let Some(engine) = engine_opt.as_deref() else { return; };
     let Some(m) = meshes.as_ref() else { return; };
@@ -238,7 +250,7 @@ pub fn system_animate_attack_command_rings(
     mesh_q: Query<&MeshMaterial2d<ColorMaterial>, With<AttackPingMesh>>,
     mut text_color_q: Query<&mut TextColor, With<AttackPingTroopLabel>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    mut pool: Local<AttackRingPool>,
+    mut pool: ResMut<AttackRingPool>,
 ) {
     let dt = time.delta_secs();
     for (entity, mut ring, mut transform, children, opt_nodes) in &mut q {
