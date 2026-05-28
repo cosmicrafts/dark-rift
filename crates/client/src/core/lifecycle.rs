@@ -195,6 +195,10 @@ pub fn system_cleanup_ingame_entities(
     mut drag_state: ResMut<CameraDragState>,
     mut pinch_state: ResMut<PinchState>,
     mut touch_gesture: ResMut<TouchGestureState>,
+    mut label_pool: ResMut<crate::EntityPool>,
+    mut fleet_pool: ResMut<crate::FleetVisualPool>,
+    mut building_pool: ResMut<crate::BuildingVisualPool>,
+    mut attack_ring_pool: ResMut<crate::AttackRingPool>,
     mut cam_q: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
     q_ingame: Query<Entity, With<InGameEntity>>,
 ) {
@@ -221,6 +225,14 @@ pub fn system_cleanup_ingame_entities(
     for e in q_ingame.iter() {
         commands.entity(e).try_despawn();
     }
+
+    // Visual entity pools hold `Entity` ids; `Local` pools survived match exit and caused
+    // invalid reuse (WASM panic) on the next `InGame` session.
+    *label_pool = crate::EntityPool::default();
+    *fleet_pool = crate::FleetVisualPool::default();
+    *building_pool = crate::BuildingVisualPool::default();
+    *attack_ring_pool = crate::AttackRingPool::default();
+
     commands.remove_resource::<DarkRiftEngine>();
     commands.remove_resource::<SinglePlayerState>();
     commands.remove_resource::<LocalIntentBuffer>();

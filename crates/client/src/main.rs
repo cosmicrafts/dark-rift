@@ -91,7 +91,11 @@ fn main() {
             .init_resource::<WaterComponents>()
             .init_resource::<CombatDockUiScale>()
             .init_resource::<SimPerfDiagnostics>()
-            .init_resource::<SimPerfHudEnabled>();
+            .init_resource::<SimPerfHudEnabled>()
+            .init_resource::<EntityPool>()
+            .init_resource::<FleetVisualPool>()
+            .init_resource::<BuildingVisualPool>()
+            .init_resource::<AttackRingPool>();
 
         // `StartGameParams` includes `ClientSettings` (HUD scale / attack ratio); headless still runs `start_game_core`.
         app.insert_resource(ClientSettings {
@@ -162,6 +166,10 @@ fn main() {
             .init_resource::<OverlayDiagnostics>()
             .init_resource::<SimPerfDiagnostics>()
             .init_resource::<SimPerfHudEnabled>()
+            .init_resource::<EntityPool>()
+            .init_resource::<FleetVisualPool>()
+            .init_resource::<BuildingVisualPool>()
+            .init_resource::<AttackRingPool>()
         .init_resource::<UiShellState>()
         .init_resource::<CombatDockUiScale>()
         .init_resource::<WaterPathfinderScratch>()

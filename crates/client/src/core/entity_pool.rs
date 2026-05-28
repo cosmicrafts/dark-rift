@@ -63,4 +63,10 @@ impl EntityPool {
             self.unused.insert(entity);
         }
     }
+
+    /// Drop pooled entity ids that no longer exist (e.g. after `OnExit(InGame)` despawn).
+    pub fn retain_alive(&mut self, alive: &std::collections::HashSet<Entity>) {
+        self.unused.retain(|e| alive.contains(e));
+        self.used.retain(|e| alive.contains(e));
+    }
 }
