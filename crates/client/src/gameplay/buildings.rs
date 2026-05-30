@@ -213,6 +213,15 @@ pub struct BuildingVisualPool {
     pub used: std::collections::HashMap<u64, BuildingNodes>,
 }
 
+impl BuildingVisualPool {
+    pub fn retain_alive(&mut self, alive: &std::collections::HashSet<Entity>) {
+        self.unused
+            .retain(|n| alive.contains(&n.root) && alive.contains(&n.icon));
+        self.used
+            .retain(|_, n| alive.contains(&n.root) && alive.contains(&n.icon));
+    }
+}
+
 pub fn system_sync_building_visuals(
     mut commands: Commands,
     engine_opt: Option<Res<DarkRiftEngine>>,
@@ -222,10 +231,15 @@ pub fn system_sync_building_visuals(
     mut materials: ResMut<Assets<ColorMaterial>>,
     q_existing: Query<(Entity, &BuildingVisual)>,
     mut local_existing: Local<Vec<u64>>,
-    mut pool: Local<BuildingVisualPool>,
+    mut pool: ResMut<BuildingVisualPool>,
+    q_alive: Query<Entity, With<InGameEntity>>,
 ) {
     let Some(engine) = engine_opt.as_deref() else { return; };
     let Some(marker) = mesh.as_ref() else { return; };
+
+    let alive: std::collections::HashSet<Entity> = q_alive.iter().collect();
+    pool.retain_alive(&alive);
+
     let mw = engine.state.map.width;
     let mh = engine.state.map.height;
 
