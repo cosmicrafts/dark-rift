@@ -37,6 +37,12 @@ pub struct AttackRingPool {
     pub unused: Vec<AttackRingNodes>,
 }
 
+impl AttackRingPool {
+    pub fn clear(&mut self) {
+        self.unused.clear();
+    }
+}
+
 /// Meshes for local-only transport visuals (boat disc, wake speck, landing ring).
 #[derive(Resource)]
 pub struct FleetVisualMeshes {
@@ -76,6 +82,13 @@ pub struct FleetVisualPool {
     pub used: std::collections::HashMap<u64, FleetNodes>,
 }
 
+impl FleetVisualPool {
+    pub fn clear(&mut self) {
+        self.unused.clear();
+        self.used.clear();
+    }
+}
+
 
 pub fn system_sync_fleet_visuals(
     mut commands: Commands,
@@ -89,7 +102,10 @@ pub fn system_sync_fleet_visuals(
     mut target_q: Query<(Entity, &mut FollowFleetTarget, &mut Transform), (Without<FollowFleetBoat>, Without<FollowFleetWake>)>,
     mut pool: Local<FleetVisualPool>,
 ) {
-    let Some(engine) = engine_opt.as_deref() else { return; };
+    let Some(engine) = engine_opt.as_deref() else {
+        pool.clear();
+        return;
+    };
     let Some(m) = meshes.as_ref() else { return; };
     let pid = my_id.0;
     if pid == 0 { return; }
@@ -233,6 +249,7 @@ const ATTACK_COMMAND_RING_LIFETIME: f32 = 0.38;
 
 pub fn system_animate_attack_command_rings(
     time: Res<Time>,
+    engine_opt: Option<Res<DarkRiftEngine>>,
     mut commands: Commands,
     mut q: Query<(Entity, &mut AttackCommandRing, &mut Transform, &Children, Option<&AttackRingNodes>)>,
     mesh_q: Query<&MeshMaterial2d<ColorMaterial>, With<AttackPingMesh>>,
@@ -240,6 +257,10 @@ pub fn system_animate_attack_command_rings(
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut pool: Local<AttackRingPool>,
 ) {
+    if engine_opt.is_none() {
+        pool.clear();
+        return;
+    }
     let dt = time.delta_secs();
     for (entity, mut ring, mut transform, children, opt_nodes) in &mut q {
         ring.elapsed += dt;

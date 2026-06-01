@@ -213,6 +213,14 @@ pub struct BuildingVisualPool {
     pub used: std::collections::HashMap<u64, BuildingNodes>,
 }
 
+impl BuildingVisualPool {
+    /// Drop cached hierarchy ids after ingame teardown (entities are despawned).
+    pub fn clear(&mut self) {
+        self.unused.clear();
+        self.used.clear();
+    }
+}
+
 pub fn system_sync_building_visuals(
     mut commands: Commands,
     engine_opt: Option<Res<DarkRiftEngine>>,
@@ -224,7 +232,10 @@ pub fn system_sync_building_visuals(
     mut local_existing: Local<Vec<u64>>,
     mut pool: Local<BuildingVisualPool>,
 ) {
-    let Some(engine) = engine_opt.as_deref() else { return; };
+    let Some(engine) = engine_opt.as_deref() else {
+        pool.clear();
+        return;
+    };
     let Some(marker) = mesh.as_ref() else { return; };
     let mw = engine.state.map.width;
     let mh = engine.state.map.height;

@@ -63,4 +63,10 @@ impl EntityPool {
             self.unused.insert(entity);
         }
     }
+
+    /// Drop all pooled entity ids (e.g. after match teardown when entities were despawned).
+    pub fn clear(&mut self) {
+        self.used.clear();
+        self.unused.clear();
+    }
 }

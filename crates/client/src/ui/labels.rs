@@ -66,7 +66,10 @@ pub fn system_sync_player_labels(
     )>,
     mut pool: Local<EntityPool>,
 ) {
-    let Some(engine) = engine_opt.as_deref() else { return };
+    let Some(engine) = engine_opt.as_deref() else {
+        pool.clear();
+        return;
+    };
     let game = &engine.state;
     let Some(ui) = ui_opt else { return };
 
