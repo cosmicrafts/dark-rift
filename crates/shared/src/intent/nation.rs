@@ -180,6 +180,7 @@ pub fn execute_ai_think(&mut self) {
         // ── Structure building (Nations only) ───────────────────────
         if slot.do_structures && slot.is_nation {
             let Some(player) = self.state.player(bot_id) else {
+                processed += 1;
                 continue;
             };
             let player_gold = player.gold;

@@ -229,4 +229,14 @@ pub fn system_cleanup_ingame_entities(
     // Keep `CombatDockUiScale` present: shell/layout systems use `resource_changed::<CombatDockUiScale>` and must not panic when resource is missing after exit.
     commands.insert_resource(CombatDockUiScale::default());
     commands.remove_resource::<dark_rift_shared::game_config::GameConfig>();
+    commands.remove_resource::<crate::BuildingVisualPool>();
+    commands.remove_resource::<crate::FleetVisualPool>();
+    commands.remove_resource::<crate::AttackRingPool>();
+}
+
+/// Fresh visual entity pools for each match (avoids reusing despawned ECS entities after exit).
+pub fn system_init_ingame_visual_pools(mut commands: Commands) {
+    commands.init_resource::<crate::BuildingVisualPool>();
+    commands.init_resource::<crate::FleetVisualPool>();
+    commands.init_resource::<crate::AttackRingPool>();
 }

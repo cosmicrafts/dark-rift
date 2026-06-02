@@ -220,9 +220,7 @@ pub fn system_sync_building_visuals(
     settings: Res<ClientSettings>,
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    q_existing: Query<(Entity, &BuildingVisual)>,
-    mut local_existing: Local<Vec<u64>>,
-    mut pool: Local<BuildingVisualPool>,
+    mut pool: ResMut<BuildingVisualPool>,
 ) {
     let Some(engine) = engine_opt.as_deref() else { return; };
     let Some(marker) = mesh.as_ref() else { return; };
