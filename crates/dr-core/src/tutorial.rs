@@ -2,18 +2,20 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TutorialStep {
-    PulseThreeTimes,     // Step 0: Click 3 times to awaken the void
-    ReachTenKg,          // Step 1: Click until reaching 10 kg
-    BuyFirstTier,        // Step 2: Click the highlighted "Buy Quantum Gas" button
-    ExplainPassive,      // Step 3: Explain the passive accretion rate
-    Completed,           // Step 4: Full free play
+    ClickFloatingDebris, // Phase 1: Click 3 floating space rocks to suck them in
+    ReachTenKg,          // Phase 1: Click debris until reaching 10 kg
+    BuyFirstTier,        // Phase 2: Buy Gravitational Siphon on the right panel
+    ExplainPassive,      // Phase 2: Explain passive suction field
+    CatchAntimatter,     // Phase 3: Catch glowing Antimatter Shard
+    Completed,           // Phase 4: Free play & Proto-Moon milestone
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TutorialState {
     pub step: TutorialStep,
-    pub clicks_done: u32,
-    pub clicks_target: u32,
+    pub rocks_caught: u32,
+    pub rocks_target: u32,
+    pub antimatter_caught: bool,
     pub timer: f32,
 }
 
@@ -26,9 +28,10 @@ impl Default for TutorialState {
 impl TutorialState {
     pub fn new() -> Self {
         Self {
-            step: TutorialStep::PulseThreeTimes,
-            clicks_done: 0,
-            clicks_target: 3,
+            step: TutorialStep::ClickFloatingDebris,
+            rocks_caught: 0,
+            rocks_target: 3,
+            antimatter_caught: false,
             timer: 0.0,
         }
     }
@@ -37,17 +40,23 @@ impl TutorialState {
         self.step == TutorialStep::Completed
     }
 
-    pub fn on_click(&mut self, current_mass_kg: f64) {
+    pub fn on_rock_clicked(&mut self, is_antimatter: bool, current_mass_kg: f64) {
         match self.step {
-            TutorialStep::PulseThreeTimes => {
-                self.clicks_done += 1;
-                if self.clicks_done >= self.clicks_target {
+            TutorialStep::ClickFloatingDebris => {
+                self.rocks_caught += 1;
+                if self.rocks_caught >= self.rocks_target {
                     self.step = TutorialStep::ReachTenKg;
                 }
             }
             TutorialStep::ReachTenKg => {
                 if current_mass_kg >= 10.0 {
                     self.step = TutorialStep::BuyFirstTier;
+                }
+            }
+            TutorialStep::CatchAntimatter => {
+                if is_antimatter {
+                    self.antimatter_caught = true;
+                    self.step = TutorialStep::Completed;
                 }
             }
             _ => {}
@@ -77,8 +86,16 @@ impl TutorialState {
                 }
             }
             TutorialStep::ExplainPassive => {
-                // Auto-advance after 5 seconds or on dismiss
-                if self.timer >= 5.0 {
+                if self.timer >= 6.0 {
+                    self.step = if current_mass_kg < 50.0 {
+                        TutorialStep::CatchAntimatter
+                    } else {
+                        TutorialStep::Completed
+                    };
+                }
+            }
+            TutorialStep::CatchAntimatter => {
+                if current_mass_kg >= 150.0 {
                     self.step = TutorialStep::Completed;
                 }
             }
@@ -88,7 +105,7 @@ impl TutorialState {
 
     pub fn dismiss_explanation(&mut self) {
         if self.step == TutorialStep::ExplainPassive {
-            self.step = TutorialStep::Completed;
+            self.step = TutorialStep::CatchAntimatter;
         }
     }
 }

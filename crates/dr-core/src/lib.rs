@@ -1,19 +1,10 @@
 pub mod black_hole;
 pub mod game;
 pub mod math;
+pub mod objects;
 pub mod particles;
 pub mod prestige;
 pub mod quests;
 pub mod tiers;
 pub mod tutorial;
 pub mod upgrades;
-
-pub use black_hole::*;
-pub use game::*;
-pub use math::*;
-pub use particles::*;
-pub use prestige::*;
-pub use quests::*;
-pub use tiers::*;
-pub use tutorial::*;
-pub use upgrades::*;
