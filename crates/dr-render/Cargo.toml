@@ -1,0 +1,16 @@
+[package]
+name = "dr-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Dark Rift — GPU rendering pipelines, relativistic lensing, and particles in Blade"
+
+[dependencies]
+blade-graphics = { workspace = true }
+blade-macros = { workspace = true }
+bytemuck = { workspace = true }
+dr-core = { path = "../dr-core" }
+glam = { workspace = true }
+log = { workspace = true }
+raw-window-handle = { workspace = true }
+web-time = { workspace = true }

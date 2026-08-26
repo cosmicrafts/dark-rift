@@ -1,0 +1,14 @@
+[package]
+name = "dr-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Dark Rift — Core game simulation, relativistic physics, and zero-allocation large numbers"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+bytemuck = { workspace = true }
+libm = { workspace = true }
+bincode = { workspace = true }
+log = { workspace = true }

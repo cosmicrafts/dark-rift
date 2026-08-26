@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$DIR"
+
+cmd="${1:-native}"
+
+case "$cmd" in
+    native|"")
+        echo "=== Launching Dark Rift Native Desktop ==="
+        RUST_LOG=info cargo run -p dr-client --bin dr-client
+        ;;
+    release)
+        echo "=== Building Dark Rift Release ==="
+        cargo build --release -p dr-client
+        ;;
+    check|test)
+        echo "=== Running Workspace Tests ==="
+        cargo test
+        ;;
+    help|-h|--help)
+        echo "Dark Rift CLI"
+        echo "Usage: ./dr [command]"
+        echo "Commands:"
+        echo "  native      (default) Launch native desktop client"
+        echo "  release     Build release binary"
+        echo "  test/check  Run unit tests"
+        ;;
+    *)
+        echo "Unknown command: $cmd. Use ./dr --help"
+        exit 1
+        ;;
+esac
