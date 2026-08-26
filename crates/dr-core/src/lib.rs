@@ -1,7 +1,6 @@
 pub mod black_hole;
 pub mod game;
 pub mod math;
-pub mod objects;
 pub mod particles;
 pub mod prestige;
 pub mod quests;

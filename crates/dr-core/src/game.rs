@@ -1,6 +1,5 @@
 use crate::black_hole::BlackHole;
 use crate::math::MassiveNumber;
-use crate::objects::{FloatingObjectPool, ObjectType};
 use crate::particles::ParticleSim;
 use crate::prestige::{PrestigeState, ShardUpgradeId};
 use crate::quests::QuestManager;
@@ -16,8 +15,6 @@ pub struct GameState {
     pub upgrades: Vec<Upgrade>,
     pub prestige: PrestigeState,
     pub particles: ParticleSim,
-    #[serde(skip)]
-    pub objects: FloatingObjectPool,
     pub quests: QuestManager,
     pub tutorial: TutorialState,
     pub time_played_secs: f64,
@@ -46,7 +43,6 @@ impl GameState {
             upgrades: default_upgrades(),
             prestige: PrestigeState::new(),
             particles: ParticleSim::new(),
-            objects: FloatingObjectPool::new(),
             quests: QuestManager::new(),
             tutorial: TutorialState::new(),
             time_played_secs: 0.0,
@@ -54,7 +50,7 @@ impl GameState {
             pulse_timer: 0.0,
             polar_jet_timer: 0.0,
             polar_jet_active: false,
-            version: 4,
+            version: 5,
         }
     }
 
@@ -90,8 +86,8 @@ impl GameState {
         self.time_played_secs += dt as f64;
 
         // 1. Update tutorial state
-        let tier0_count = self.tiers.first().map(|t| t.count).unwrap_or(0);
-        self.tutorial.update(dt, self.black_hole.mass.to_f64(), tier0_count);
+        let first_tier_count = self.tiers.first().map(|t| t.count).unwrap_or(0);
+        self.tutorial.update(dt, self.black_hole.mass.to_f64(), first_tier_count);
 
         // 2. Check tier unlock conditions
         for tier in &mut self.tiers {
@@ -111,40 +107,27 @@ impl GameState {
         let dps = self.calculate_total_dps();
         self.black_hole.update(dt, dps);
 
-        // 5. Update Interactive Floating Objects
-        let siphon_dps = dps.to_f64();
-        let visual_rs = self.black_hole.visual_radius;
-        let mut mass_gained = MassiveNumber::ZERO;
-        let mut flash = false;
-
-        self.objects.tick(
-            dt,
-            self.black_hole.mass.to_f64(),
-            siphon_dps,
-            visual_rs,
-            |event| {
-                mass_gained += event.mass;
-                flash = true;
-            },
-        );
-
-        if mass_gained > MassiveNumber::ZERO {
-            self.black_hole.mass += mass_gained;
-            self.black_hole.lifetime_mass += mass_gained;
-            if flash {
-                self.black_hole.accretion_flash = 1.0;
-            }
+        // 5. Dynamic particle simulation based on active generators
+        let total_generators: u64 = self.tiers.iter().map(|t| t.count).sum();
+        if total_generators > 0 {
+            let target_count = 16 + ((total_generators as usize) * 8).min(480);
+            self.particles.set_active_count(target_count);
+            self.particles.update(
+                dt,
+                self.black_hole.visual_radius,
+                self.black_hole.spin,
+                self.pulse_active,
+            );
+        } else {
+            self.particles.set_active_count(0);
         }
 
-        // 6. Synchronize floating objects with GPU vertex stream
-        self.particles.sync_from_objects(&self.objects, visual_rs);
-
-        // 7. Spin adjustment based on frame dragging upgrade & prestige
+        // 6. Spin adjustment based on frame dragging upgrade & prestige
         let kerr_lvl = self.prestige.upgrade_level(ShardUpgradeId::KerrVortexResonance);
         let frame_drag_lvl = self.upgrade_level(UpgradeId::FrameDraggingCatalyst);
         self.black_hole.spin = (0.10 + (frame_drag_lvl as f32) * 0.015 + (kerr_lvl as f32) * 0.03).min(0.998);
 
-        // 8. Pulse timer decay
+        // 7. Pulse timer decay
         if self.pulse_timer > 0.0 {
             self.pulse_timer = (self.pulse_timer - dt).max(0.0);
             if self.pulse_timer == 0.0 {
@@ -152,7 +135,7 @@ impl GameState {
             }
         }
 
-        // 9. Polar jet periodic eruption
+        // 8. Polar jet periodic eruption
         self.polar_jet_timer += dt;
         if self.polar_jet_timer >= 12.0 {
             self.polar_jet_timer = 0.0;
@@ -167,7 +150,7 @@ impl GameState {
             self.polar_jet_active = false;
         }
 
-        // 10. Update quests
+        // 9. Update quests
         let total_tech: u32 = self.upgrades.iter().map(|u| u.level).sum();
         let terrestrial_count = self.tiers.iter().find(|t| t.id == MatterTierId::TerrestrialPlanets).map(|t| t.count).unwrap_or(0);
         if let Some(reward) = self.quests.update(
@@ -187,45 +170,6 @@ impl GameState {
         }
     }
 
-    pub fn click_at_position(
-        &mut self,
-        click_screen_pos: [f32; 2],
-        bh_center_screen: [f32; 2],
-        aspect: f32,
-        screen_height: f32,
-    ) -> Option<(MassiveNumber, ObjectType)> {
-        if let Some((_id, obj_type, is_destroyed)) = self.objects.hit_test(
-            click_screen_pos,
-            bh_center_screen,
-            aspect,
-            screen_height,
-        ) {
-            let is_am = obj_type == ObjectType::AntimatterShard;
-            self.tutorial.on_rock_clicked(is_am, self.black_hole.mass.to_f64());
-            self.black_hole.total_pulses += 1;
-            self.black_hole.accretion_flash = 0.7;
-
-            let mult = self.calculate_pulse_multiplier();
-            let base_mass = match obj_type {
-                ObjectType::QuantumPebble => 1.0,
-                ObjectType::DenseAsteroid => 15.0,
-                ObjectType::AntimatterShard => 50.0,
-                ObjectType::ProtoMoon => 30.0,
-            };
-
-            let mass_gain = MassiveNumber::from_f64(base_mass) * mult;
-            if is_destroyed {
-                self.black_hole.mass += mass_gain;
-                self.black_hole.lifetime_mass += mass_gain;
-            }
-            return Some((mass_gain, obj_type));
-        }
-
-        // Fallback: general pulse when clicking anywhere else
-        let gained = self.trigger_pulse();
-        Some((gained, ObjectType::QuantumPebble))
-    }
-
     pub fn trigger_pulse(&mut self) -> MassiveNumber {
         let mult = self.calculate_pulse_multiplier();
         let gained = self.black_hole.trigger_pulse(mult);
@@ -233,10 +177,10 @@ impl GameState {
         self.pulse_timer = 0.35;
 
         // Advance tutorial
-        self.tutorial.on_rock_clicked(false, self.black_hole.mass.to_f64());
+        self.tutorial.on_click(self.black_hole.mass.to_f64());
 
-        // Penrose Boost
-        if self.black_hole.penrose_timer <= 0.0 && self.black_hole.accretion_flash > 0.3 {
+        // Penrose Boost trigger
+        if self.black_hole.penrose_timer <= 0.0 && self.black_hole.accretion_flash > 0.4 {
             let penrose_lvl = self.upgrade_level(UpgradeId::PenroseResonanceChamber);
             let duration = 3.0 + (penrose_lvl as f32) * 1.5;
             let boost_mult = 2.0 + (penrose_lvl as f32) * 0.5;
@@ -254,7 +198,7 @@ impl GameState {
                 self.black_hole.mass -= cost;
                 if let Some(tier) = self.tiers.iter_mut().find(|t| t.id == id) {
                     tier.buy(amount);
-                    self.tutorial.on_tier_bought();
+                    self.tutorial.on_generator_bought();
                     return true;
                 }
             }
@@ -298,7 +242,6 @@ impl GameState {
         self.black_hole = BlackHole::new();
         self.tiers = default_matter_tiers();
         self.upgrades = default_upgrades();
-        self.objects = FloatingObjectPool::new();
         self.particles.init_particles();
         true
     }
@@ -330,7 +273,6 @@ impl GameState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tutorial::TutorialStep;
 
     #[test]
     fn test_game_tick_and_pulse() {
@@ -345,37 +287,18 @@ mod tests {
     #[test]
     fn test_tutorial_progression() {
         let mut game = GameState::new();
-        assert_eq!(game.tutorial.step, TutorialStep::ClickFloatingDebris);
+        assert_eq!(game.tutorial.step, TutorialStep::AwakenSingularity);
 
-        game.tutorial.on_rock_clicked(false, 1.0);
-        game.tutorial.on_rock_clicked(false, 2.0);
-        game.tutorial.on_rock_clicked(false, 3.0);
-        assert_eq!(game.tutorial.step, TutorialStep::ReachTenKg);
-
-        game.black_hole.mass = MassiveNumber::from_f64(10.0);
-        game.tick(0.1);
-        assert_eq!(game.tutorial.step, TutorialStep::BuyFirstTier);
+        for _ in 0..10 {
+            game.trigger_pulse();
+        }
+        assert_eq!(game.tutorial.step, TutorialStep::BuyFirstGenerator);
 
         let bought = game.buy_tier(MatterTierId::QuantumDust, 1);
         assert!(bought);
         assert_eq!(game.tutorial.step, TutorialStep::ExplainPassive);
-    }
 
-    #[test]
-    fn test_floating_objects_spawning_and_click() {
-        let mut game = GameState::new();
-        assert!(game.objects.active_count > 0);
-
-        // Click first object
-        let first_obj = game.objects.objects.iter().find(|o| o.is_active).unwrap();
-        let center = [500.0, 400.0];
-        let aspect = 1.6;
-        let height = 800.0;
-
-        let screen_x = center[0] + (first_obj.pos[0] * height) / (2.0 * aspect);
-        let screen_y = center[1] + (first_obj.pos[1] * height) / 2.0;
-
-        let res = game.click_at_position([screen_x, screen_y], center, aspect, height);
-        assert!(res.is_some());
+        game.tick(7.0);
+        assert_eq!(game.tutorial.step, TutorialStep::Completed);
     }
 }

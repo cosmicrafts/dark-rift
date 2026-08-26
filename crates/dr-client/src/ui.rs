@@ -1,5 +1,4 @@
 use dr_core::game::GameState;
-use dr_core::objects::ObjectType;
 use dr_core::prestige::ShardUpgradeId;
 use dr_core::tiers::MatterTierId;
 use dr_core::tutorial::TutorialStep;
@@ -29,7 +28,6 @@ pub enum BuyAmount {
 pub struct ClickPopup {
     pub pos: Pos2,
     pub text: String,
-    pub color: Color32,
     pub lifetime: f32,
     pub max_lifetime: f32,
 }
@@ -55,6 +53,7 @@ impl Default for GameUi {
 }
 
 impl GameUi {
+    #[allow(deprecated)]
     pub fn draw(&mut self, ctx: &egui::Context, state: &mut GameState) {
         self.anim_time += 0.016;
         self.apply_theme(ctx);
@@ -69,91 +68,76 @@ impl GameUi {
         let center_x = viewport_rect.min.x + (viewport_rect.width() - 380.0) * 0.5;
         let center_y = viewport_rect.center().y;
         let bh_center = Pos2::new(center_x, center_y);
-        let aspect = viewport_rect.width() / viewport_rect.height().max(1.0);
-        let screen_height = viewport_rect.height().max(1.0);
 
-        // Top Status Header Panel
-        Panel::top("top_header")
-            .frame(Frame::NONE.fill(Color32::from_rgba_unmultiplied(10, 10, 18, 245)).inner_margin(12.0))
-            .show(ctx, |ui| {
-                self.draw_top_bar(ui, state);
-            });
-
-        // Center Interactive Play Area
         let central_frame = Frame::NONE.fill(Color32::TRANSPARENT);
         egui::CentralPanel::default().frame(central_frame).show(ctx, |ui| {
+            // 1. Top Status Header Panel
+            Panel::top("top_header")
+                .frame(Frame::NONE.fill(Color32::from_rgba_unmultiplied(10, 10, 18, 245)).inner_margin(12.0))
+                .show_inside(ui, |ui| {
+                    self.draw_top_bar(ui, state);
+                });
+
+            // 2. Right Control Sidebar
+            Panel::right("right_panel")
+                .resizable(false)
+                .default_size(380.0)
+                .frame(Frame::NONE.fill(Color32::from_rgba_unmultiplied(12, 14, 24, 248)).inner_margin(14.0))
+                .show_inside(ui, |ui| {
+                    if !matter_unlocked && state.tutorial.step == TutorialStep::AwakenSingularity {
+                        self.draw_intro_guide(ui, state);
+                    } else {
+                        self.draw_tabs(ui, tech_unlocked, prestige_unlocked, stats_unlocked);
+                        ui.add_space(10.0);
+                        egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+                            match self.current_tab {
+                                UiTab::Tiers => self.draw_tiers_tab(ui, state),
+                                UiTab::Upgrades => {
+                                    if tech_unlocked {
+                                        self.draw_upgrades_tab(ui, state);
+                                    } else {
+                                        ui.label(RichText::new("LOCKED // REACH 150 kg TO UNLOCK TECH").font(FontId::proportional(14.0)).color(Color32::GRAY));
+                                    }
+                                }
+                                UiTab::Prestige => {
+                                    if prestige_unlocked {
+                                        self.draw_prestige_tab(ui, state);
+                                    } else {
+                                        ui.label(RichText::new("LOCKED // REACH 1,000,000 t MASS TO COLLAPSE").font(FontId::proportional(14.0)).color(Color32::GRAY));
+                                    }
+                                }
+                                UiTab::Stats => {
+                                    if stats_unlocked {
+                                        self.draw_stats_tab(ui, state);
+                                    } else {
+                                        ui.label(RichText::new("LOCKED // ACCUMULATE MORE MASS").font(FontId::proportional(14.0)).color(Color32::GRAY));
+                                    }
+                                }
+                            }
+                        });
+                    }
+                });
+
+            // 3. Central Interactive Canvas
             let (rect, response) = ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
 
             if response.clicked() {
-                if let Some(pos) = response.interact_pointer_pos() {
-                    if let Some((gained, obj_type)) = state.click_at_position(
-                        [pos.x, pos.y],
-                        [bh_center.x, bh_center.y],
-                        aspect,
-                        screen_height,
-                    ) {
-                        let popup_color = match obj_type {
-                            ObjectType::QuantumPebble => Color32::from_rgb(0, 255, 200),
-                            ObjectType::DenseAsteroid => Color32::from_rgb(255, 180, 50),
-                            ObjectType::AntimatterShard => Color32::from_rgb(255, 100, 240),
-                            ObjectType::ProtoMoon => Color32::from_rgb(180, 220, 255),
-                        };
+                let gained = state.trigger_pulse();
 
-                        self.popups.push(ClickPopup {
-                            pos,
-                            text: format!("+ {}", gained.format_mass_kg()),
-                            color: popup_color,
-                            lifetime: 0.85,
-                            max_lifetime: 0.85,
-                        });
-                    }
+                if let Some(pos) = response.interact_pointer_pos() {
+                    self.popups.push(ClickPopup {
+                        pos,
+                        text: format!("+ {}", gained.format_mass_kg()),
+                        lifetime: 0.85,
+                        max_lifetime: 0.85,
+                    });
                 }
             }
 
-            // Draw center HUD overlays, interactive object reticles, vector arrows & popups
-            self.draw_center_overlays(ui, state, rect, ctx, matter_unlocked, bh_center, aspect, screen_height);
+            // Draw crisp HUD overlays, single target reticle & floating numbers
+            self.draw_center_overlays(ui, state, rect, matter_unlocked, bh_center);
             self.draw_popups(ui);
         });
-
-        // Right Control Sidebar
-        Panel::right("right_panel")
-            .resizable(false)
-            .default_size(380.0)
-            .frame(Frame::NONE.fill(Color32::from_rgba_unmultiplied(12, 14, 24, 248)).inner_margin(14.0))
-            .show(ctx, |ui| {
-                if !matter_unlocked && state.tutorial.step == TutorialStep::ClickFloatingDebris {
-                    self.draw_intro_guide(ui, state);
-                } else {
-                    self.draw_tabs(ui, tech_unlocked, prestige_unlocked, stats_unlocked);
-                    ui.add_space(10.0);
-                    egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
-                        match self.current_tab {
-                            UiTab::Tiers => self.draw_tiers_tab(ui, state),
-                            UiTab::Upgrades => {
-                                if tech_unlocked {
-                                    self.draw_upgrades_tab(ui, state);
-                                } else {
-                                    ui.label(RichText::new("LOCKED // REACH 150 kg TO UNLOCK TECH").font(FontId::proportional(14.0)).color(Color32::GRAY));
-                                }
-                            }
-                            UiTab::Prestige => {
-                                if prestige_unlocked {
-                                    self.draw_prestige_tab(ui, state);
-                                } else {
-                                    ui.label(RichText::new("LOCKED // REACH 1,000,000 t MASS TO COLLAPSE").font(FontId::proportional(14.0)).color(Color32::GRAY));
-                                }
-                            }
-                            UiTab::Stats => {
-                                if stats_unlocked {
-                                    self.draw_stats_tab(ui, state);
-                                } else {
-                                    ui.label(RichText::new("LOCKED // ACCUMULATE MORE MASS").font(FontId::proportional(14.0)).color(Color32::GRAY));
-                                }
-                            }
-                        }
-                    });
-                }
-            });
     }
 
     fn apply_theme(&self, ctx: &egui::Context) {
@@ -179,14 +163,12 @@ impl GameUi {
     fn draw_popups(&self, ui: &Ui) {
         for p in &self.popups {
             let alpha = ((p.lifetime / p.max_lifetime) * 255.0) as u8;
-            let mut col = p.color;
-            col = Color32::from_rgba_unmultiplied(col.r(), col.g(), col.b(), alpha);
             ui.painter().text(
                 p.pos,
                 Align2::CENTER_CENTER,
                 &p.text,
                 FontId::proportional(22.0),
-                col,
+                Color32::from_rgba_unmultiplied(0, 255, 200, alpha),
             );
         }
     }
@@ -230,129 +212,46 @@ impl GameUi {
         ui: &mut Ui,
         state: &mut GameState,
         rect: Rect,
-        _ctx: &egui::Context,
         matter_unlocked: bool,
         bh_center: Pos2,
-        aspect: f32,
-        screen_height: f32,
     ) {
-        // 1. Interactive Object Target Reticles & Visual Guidance
-        for obj in state.objects.objects.iter() {
-            if !obj.is_active {
-                continue;
-            }
-
-            let screen_x = bh_center.x + (obj.pos[0] * screen_height) / (2.0 * aspect);
-            let screen_y = bh_center.y + (obj.pos[1] * screen_height) / 2.0;
-            let obj_center = Pos2::new(screen_x, screen_y);
-
-            match obj.obj_type {
-                ObjectType::QuantumPebble => {
-                    if state.tutorial.step == TutorialStep::ClickFloatingDebris {
-                        let pulse = (self.anim_time * 6.0).sin();
-                        let radius = 24.0 + pulse * 4.0;
-                        ui.painter().circle_stroke(
-                            obj_center,
-                            radius,
-                            Stroke::new(2.0_f32, Color32::from_rgba_unmultiplied(0, 230, 255, 220)),
-                        );
-                    }
-                }
-                ObjectType::DenseAsteroid => {
-                    let pulse = (self.anim_time * 5.0).sin();
-                    let radius = 32.0 + pulse * 5.0;
-                    ui.painter().circle_stroke(
-                        obj_center,
-                        radius,
-                        Stroke::new(2.5_f32, Color32::from_rgba_unmultiplied(255, 180, 50, 240)),
-                    );
-                    ui.painter().text(
-                        Pos2::new(obj_center.x, obj_center.y - 42.0),
-                        Align2::CENTER_CENTER,
-                        format!("ASTEROIDE DENSO [HP: {}]", obj.hp),
-                        FontId::proportional(11.0),
-                        Color32::from_rgb(255, 200, 80),
-                    );
-                }
-                ObjectType::AntimatterShard => {
-                    let pulse = (self.anim_time * 10.0).sin();
-                    let radius = 30.0 + pulse * 6.0;
-                    ui.painter().circle_stroke(
-                        obj_center,
-                        radius,
-                        Stroke::new(3.0_f32, Color32::from_rgba_unmultiplied(255, 80, 240, 255)),
-                    );
-                    ui.painter().text(
-                        Pos2::new(obj_center.x, obj_center.y - 40.0),
-                        Align2::CENTER_CENTER,
-                        "¡ANTIMATERIA! [SUCCIÓN TOTAL]",
-                        FontId::proportional(12.0),
-                        Color32::from_rgb(255, 120, 240),
-                    );
-                }
-                ObjectType::ProtoMoon => {
-                    let pulse = (self.anim_time * 4.0).sin();
-                    let radius = 55.0 + pulse * 8.0;
-                    ui.painter().circle_stroke(
-                        obj_center,
-                        radius,
-                        Stroke::new(3.5_f32, Color32::from_rgba_unmultiplied(100, 220, 255, 255)),
-                    );
-                    ui.painter().text(
-                        Pos2::new(obj_center.x, obj_center.y - 68.0),
-                        Align2::CENTER_CENTER,
-                        format!("PROTO-LUNA [RESISTENCIA: {} / {}]", obj.hp, obj.max_hp),
-                        FontId::proportional(13.0),
-                        Color32::from_rgb(180, 230, 255),
-                    );
-                }
-            }
-        }
-
-        // 2. TUTORIAL STEPS & STEP-BY-STEP GUIDANCE
         match state.tutorial.step {
-            TutorialStep::ClickFloatingDebris => {
+            TutorialStep::AwakenSingularity => {
                 let pulse_anim = (self.anim_time * 5.0).sin();
+                let ring_radius = 85.0 + pulse_anim * 8.0;
 
-                // Vector arrow pointing to black hole
+                // Pulsating concentric target ring directly centered over the black hole
+                ui.painter().circle_stroke(
+                    bh_center,
+                    ring_radius,
+                    Stroke::new(2.5_f32, Color32::from_rgba_unmultiplied(0, 230, 255, 220)),
+                );
+                ui.painter().circle_stroke(
+                    bh_center,
+                    ring_radius * 0.70,
+                    Stroke::new(1.5_f32, Color32::from_rgba_unmultiplied(0, 255, 180, 160)),
+                );
+
+                // Animated vector arrow pointing down into the black hole
                 let arrow_start = Pos2::new(bh_center.x, bh_center.y - 110.0 + pulse_anim * 6.0);
                 ui.painter().arrow(arrow_start, vec2(0.0, 55.0), Stroke::new(4.5_f32, Color32::from_rgb(0, 230, 255)));
 
-                // Pointer badge
+                // Single clean callout badge directly above the arrow
                 let badge_pos = Pos2::new(bh_center.x, bh_center.y - 145.0 + pulse_anim * 6.0);
-                let badge_rect = Rect::from_center_size(badge_pos, vec2(380.0, 52.0));
-                ui.painter().rect_filled(badge_rect, 8.0, Color32::from_rgba_unmultiplied(0, 40, 70, 245));
+                let badge_rect = Rect::from_center_size(badge_pos, vec2(360.0, 52.0));
+                ui.painter().rect_filled(badge_rect, 8.0, Color32::from_rgba_unmultiplied(0, 35, 60, 245));
                 ui.painter().rect_stroke(badge_rect, 8.0, Stroke::new(2.0_f32, Color32::from_rgb(0, 220, 255)), egui::StrokeKind::Outside);
 
+                let current_mass = state.black_hole.mass.to_f64();
                 ui.painter().text(
                     badge_rect.center(),
                     Align2::CENTER_CENTER,
-                    format!("HAZ CLIC EN LOS ESCOMBROS FLOTANTES\n[ {} / 3 ABSORBIDOS ]", state.tutorial.rocks_caught),
+                    format!("HAZ CLIC EN EL AGUJERO NEGRO\n[ {:.1} / 10.0 kg ]", current_mass),
                     FontId::proportional(15.0),
                     Color32::WHITE,
                 );
             }
-            TutorialStep::ReachTenKg => {
-                let pulse_anim = (self.anim_time * 4.0).sin();
-
-                let arrow_start = Pos2::new(bh_center.x, bh_center.y - 110.0 + pulse_anim * 5.0);
-                ui.painter().arrow(arrow_start, vec2(0.0, 55.0), Stroke::new(4.5_f32, Color32::from_rgb(0, 255, 180)));
-
-                let badge_pos = Pos2::new(bh_center.x, bh_center.y - 145.0 + pulse_anim * 5.0);
-                let badge_rect = Rect::from_center_size(badge_pos, vec2(380.0, 52.0));
-                ui.painter().rect_filled(badge_rect, 8.0, Color32::from_rgba_unmultiplied(10, 40, 60, 245));
-                ui.painter().rect_stroke(badge_rect, 8.0, Stroke::new(2.0_f32, Color32::from_rgb(0, 255, 180)), egui::StrokeKind::Outside);
-
-                let current = state.black_hole.mass.to_f64();
-                ui.painter().text(
-                    badge_rect.center(),
-                    Align2::CENTER_CENTER,
-                    format!("HAZ CLIC EN ESCOMBROS HASTA 10 KG\n[ {:.1} / 10.0 kg ]", current),
-                    FontId::proportional(15.0),
-                    Color32::from_rgb(0, 255, 180),
-                );
-            }
-            TutorialStep::BuyFirstTier => {
+            TutorialStep::BuyFirstGenerator => {
                 let banner_pos = Pos2::new(bh_center.x, rect.min.y + 65.0);
                 let banner_rect = Rect::from_center_size(banner_pos, vec2(500.0, 58.0));
                 ui.painter().rect_filled(banner_rect, 8.0, Color32::from_rgba_unmultiplied(50, 35, 10, 250));
@@ -362,12 +261,12 @@ impl GameUi {
                 ui.painter().text(
                     banner_pos,
                     Align2::CENTER_CENTER,
-                    "¡10 KG ALCANZADOS!\nCOMPRA 'GRAVITATIONAL SIPHON' EN EL PANEL DERECHO",
+                    "¡10 KG ALCANZADOS!\nCOMPRA 'QUANTUM GAS & PHOTONS' EN EL PANEL DERECHO",
                     FontId::proportional(14.0),
                     Color32::from_rgb(255, 220, 100),
                 );
 
-                // Large vector arrow on the right side pointing left into the Buy button
+                // Golden arrow on the right pointing into the first generator
                 let arrow_start = Pos2::new(rect.max.x + 20.0 + arrow_bounce, rect.min.y + 160.0);
                 ui.painter().arrow(arrow_start, vec2(-55.0, 0.0), Stroke::new(4.5_f32, Color32::from_rgb(255, 210, 40)));
 
@@ -383,93 +282,79 @@ impl GameUi {
             TutorialStep::ExplainPassive => {
                 let modal_rect = Rect::from_center_size(
                     Pos2::new(bh_center.x, rect.center().y),
-                    vec2(500.0, 160.0),
+                    vec2(480.0, 150.0),
                 );
                 ui.painter().rect_filled(modal_rect, 10.0, Color32::from_rgba_unmultiplied(14, 20, 36, 252));
                 ui.painter().rect_stroke(modal_rect, 10.0, Stroke::new(2.5_f32, Color32::from_rgb(0, 255, 180)), egui::StrokeKind::Outside);
 
                 ui.painter().text(
-                    Pos2::new(modal_rect.center().x, modal_rect.min.y + 28.0),
+                    Pos2::new(modal_rect.center().x, modal_rect.min.y + 26.0),
                     Align2::CENTER_CENTER,
-                    "¡SUCCIÓN GRAVITACIONAL ACTIVA (+1 kg/s)!",
+                    "¡PRODUCCIÓN AUTOMÁTICA ACTIVA (+1 kg/s)!",
                     FontId::proportional(16.0),
                     Color32::from_rgb(0, 255, 180),
                 );
                 ui.painter().text(
-                    Pos2::new(modal_rect.center().x, modal_rect.min.y + 70.0),
+                    Pos2::new(modal_rect.center().x, modal_rect.min.y + 65.0),
                     Align2::CENTER_CENTER,
-                    "El campo de gravedad ahora absorbe escombros automáticamente.\nHaz clic en asteroides para acelerar tu crecimiento.",
+                    "Tu singularidad ahora absorbe partículas cuánticas continuamente.\nHaz clic en el agujero negro para acelerar la acumulación.",
                     FontId::proportional(13.0),
                     Color32::WHITE,
                 );
 
                 let btn_rect = Rect::from_center_size(
-                    Pos2::new(modal_rect.center().x, modal_rect.max.y - 32.0),
-                    vec2(180.0, 34.0),
+                    Pos2::new(modal_rect.center().x, modal_rect.max.y - 30.0),
+                    vec2(180.0, 32.0),
                 );
                 ui.painter().rect_filled(btn_rect, 6.0, Color32::from_rgb(0, 180, 140));
                 ui.painter().text(
                     btn_rect.center(),
                     Align2::CENTER_CENTER,
                     "ENTENDIDO [CONTINUAR]",
-                    FontId::proportional(13.0),
+                    FontId::proportional(12.0),
                     Color32::BLACK,
                 );
                 if ui.rect_contains_pointer(btn_rect) && ui.input(|i| i.pointer.primary_clicked()) {
                     state.tutorial.dismiss_explanation();
                 }
             }
-            TutorialStep::CatchAntimatter => {
-                let banner_pos = Pos2::new(bh_center.x, rect.min.y + 40.0);
-                let banner_rect = Rect::from_center_size(banner_pos, vec2(460.0, 48.0));
-                ui.painter().rect_filled(banner_rect, 8.0, Color32::from_rgba_unmultiplied(40, 15, 50, 230));
-                ui.painter().rect_stroke(banner_rect, 8.0, Stroke::new(1.5_f32, Color32::from_rgb(255, 100, 240)), egui::StrokeKind::Outside);
-
-                ui.painter().text(
-                    banner_pos,
-                    Align2::CENTER_CENTER,
-                    "¡ATRAPA ESQUIRLAS DE ANTIMATERIA O ASTEROIDES DENSOS!\nDesatan ondas de succión masiva hacia el horizonte de sucesos.",
-                    FontId::proportional(12.0),
-                    Color32::from_rgb(255, 180, 255),
-                );
-            }
             TutorialStep::Completed => {
                 if let Some(quest) = state.quests.current_quest() {
                     let quest_rect = Rect::from_center_size(
                         Pos2::new(bh_center.x, rect.min.y + 40.0),
-                        vec2(440.0, 56.0),
+                        vec2(440.0, 52.0),
                     );
 
                     ui.painter().rect_filled(quest_rect, 8.0, Color32::from_rgba_unmultiplied(16, 18, 30, 230));
                     ui.painter().rect_stroke(quest_rect, 8.0, Stroke::new(1.5_f32, Color32::from_rgb(0, 180, 255)), egui::StrokeKind::Outside);
 
                     let frac = quest.progress_fraction();
-                    let title_pos = Pos2::new(quest_rect.min.x + 14.0, quest_rect.min.y + 16.0);
-                    let desc_pos = Pos2::new(quest_rect.min.x + 14.0, quest_rect.min.y + 36.0);
+                    let title_pos = Pos2::new(quest_rect.min.x + 14.0, quest_rect.min.y + 15.0);
+                    let desc_pos = Pos2::new(quest_rect.min.x + 14.0, quest_rect.min.y + 33.0);
 
                     ui.painter().text(title_pos, Align2::LEFT_CENTER, &quest.title, FontId::proportional(13.0), Color32::from_rgb(0, 220, 255));
-                    ui.painter().text(desc_pos, Align2::LEFT_CENTER, &quest.instruction, FontId::proportional(12.0), Color32::from_rgb(200, 215, 240));
+                    ui.painter().text(desc_pos, Align2::LEFT_CENTER, &quest.instruction, FontId::proportional(11.0), Color32::from_rgb(200, 215, 240));
 
-                    let bar_rect = Rect::from_min_size(Pos2::new(quest_rect.max.x - 110.0, quest_rect.min.y + 20.0), vec2(95.0, 18.0));
+                    let bar_rect = Rect::from_min_size(Pos2::new(quest_rect.max.x - 105.0, quest_rect.min.y + 18.0), vec2(90.0, 16.0));
                     ui.painter().rect_filled(bar_rect, 4.0, Color32::from_rgb(30, 35, 55));
                     let fill_rect = Rect::from_min_size(bar_rect.min, vec2(bar_rect.width() * frac, bar_rect.height()));
                     ui.painter().rect_filled(fill_rect, 4.0, Color32::from_rgb(0, 255, 180));
-                    ui.painter().text(bar_rect.center(), Align2::CENTER_CENTER, format!("{:.0}%", frac * 100.0), FontId::monospace(11.0), Color32::BLACK);
+                    ui.painter().text(bar_rect.center(), Align2::CENTER_CENTER, format!("{:.0}%", frac * 100.0), FontId::monospace(10.0), Color32::BLACK);
                 }
             }
         }
 
-        // Antimatter Suction Surge Banner
-        if state.objects.antimatter_active_timer > 0.0 {
+        // Penrose Boost Indicator Banner
+        if state.black_hole.penrose_timer > 0.0 {
             let banner_rect = Rect::from_center_size(
                 Pos2::new(bh_center.x, rect.min.y + 110.0),
-                vec2(340.0, 36.0),
+                vec2(300.0, 36.0),
             );
-            ui.painter().rect_filled(banner_rect, 6.0, Color32::from_rgba_unmultiplied(200, 30, 180, 230));
+            ui.painter().rect_filled(banner_rect, 6.0, Color32::from_rgba_unmultiplied(255, 150, 0, 210));
             ui.painter().text(
                 banner_rect.center(),
                 Align2::CENTER_CENTER,
-                format!("★ ANTIMATTER SURGE ACTIVE ({:.1}s) ★", state.objects.antimatter_active_timer),
+                format!("PENROSE BOOST ACTIVO ({:.1}s)", state.black_hole.penrose_timer),
                 FontId::proportional(13.0),
                 Color32::WHITE,
             );
@@ -477,17 +362,17 @@ impl GameUi {
 
         // Bottom instruction prompt
         let prompt_text = if !matter_unlocked {
-            "HAZ CLIC EN LOS OBJETOS PARA ATRAERLOS A LA SINGULARIDAD"
+            "HAZ CLIC EN EL AGUJERO NEGRO PARA EMITIR UN PULSO GRAVITACIONAL"
         } else {
-            "HAZ CLIC EN ASTEROIDES O EMITE ONDAS DE CHOQUE GRAVITACIONALES"
+            "HAZ CLIC PARA EMITIR ONDAS DE CHOQUE GRAVITACIONALES"
         };
-        let hint_pos = Pos2::new(bh_center.x, rect.max.y - 30.0);
+        let hint_pos = Pos2::new(bh_center.x, rect.max.y - 25.0);
         ui.painter().text(
             hint_pos,
             Align2::CENTER_CENTER,
             prompt_text,
             FontId::proportional(13.0),
-            Color32::from_rgba_unmultiplied(200, 230, 255, 170),
+            Color32::from_rgba_unmultiplied(200, 230, 255, 150),
         );
     }
 
@@ -506,9 +391,9 @@ impl GameUi {
                 .corner_radius(8.0)
                 .inner_margin(14.0)
                 .show(ui, |ui| {
-                    ui.label(RichText::new("PASO 1 // RECOLECCIÓN:").strong().font(FontId::proportional(14.0)).color(Color32::from_rgb(255, 200, 80)));
+                    ui.label(RichText::new("PASO 1 // DESPERTAR:").strong().font(FontId::proportional(14.0)).color(Color32::from_rgb(255, 200, 80)));
                     ui.add_space(6.0);
-                    ui.label(RichText::new("Haz clic en los escombros y rocas espaciales para lanzarlos a la singularidad.").font(FontId::proportional(12.0)));
+                    ui.label(RichText::new("Haz clic en el agujero negro de la izquierda para emitir ondas de gravedad y acumular masa.").font(FontId::proportional(12.0)));
                     ui.add_space(12.0);
                     let mass_num = state.black_hole.mass.to_f64();
                     let progress = (mass_num / 10.0).clamp(0.0, 1.0) as f32;
@@ -581,7 +466,7 @@ impl GameUi {
             let cost = tier.cost_for(count_to_buy, discount);
             let can_afford = state.black_hole.mass >= cost;
 
-            let is_tutorial_highlight = state.tutorial.step == TutorialStep::BuyFirstTier && tier.id == MatterTierId::QuantumDust;
+            let is_tutorial_highlight = state.tutorial.step == TutorialStep::BuyFirstGenerator && tier.id == MatterTierId::QuantumDust;
 
             let border_color = if is_tutorial_highlight {
                 let pulse = (self.anim_time * 8.0).sin().abs();

@@ -51,6 +51,32 @@ impl DarkRiftApp {
             prev_sync_point: None,
         }
     }
+
+    pub fn cleanup(&mut self) {
+        if let Some(context) = self.context.as_ref() {
+            if let Some(sp) = self.prev_sync_point.take() {
+                let _ = context.wait_for(&sp, !0);
+            }
+            if let Some(mut command_encoder) = self.command_encoder.take() {
+                context.destroy_command_encoder(&mut command_encoder);
+            }
+            if let Some(mut renderer) = self.renderer.take() {
+                renderer.destroy(context);
+            }
+            if let Some(mut gui_painter) = self.gui_painter.take() {
+                gui_painter.destroy(context);
+            }
+            if let Some(mut surface) = self.surface.take() {
+                context.destroy_surface(&mut surface);
+            }
+        }
+    }
+}
+
+impl Drop for DarkRiftApp {
+    fn drop(&mut self) {
+        self.cleanup();
+    }
 }
 
 impl ApplicationHandler for DarkRiftApp {
@@ -70,7 +96,7 @@ impl ApplicationHandler for DarkRiftApp {
             Arc::new(
                 gpu::Context::init(gpu::ContextDesc {
                     presentation: true,
-                    validation: cfg!(debug_assertions),
+                    validation: false,
                     overlay: false,
                     ..Default::default()
                 })
@@ -143,20 +169,7 @@ impl ApplicationHandler for DarkRiftApp {
 
         match event {
             WindowEvent::CloseRequested => {
-                if let Some(context) = self.context.as_ref() {
-                    if let Some(sp) = self.prev_sync_point.take() {
-                        let _ = context.wait_for(&sp, !0);
-                    }
-                    if let Some(mut renderer) = self.renderer.take() {
-                        renderer.destroy(context);
-                    }
-                    if let Some(mut gui_painter) = self.gui_painter.take() {
-                        gui_painter.destroy(context);
-                    }
-                    if let Some(mut surface) = self.surface.take() {
-                        context.destroy_surface(&mut surface);
-                    }
-                }
+                self.cleanup();
                 event_loop.exit();
             }
             WindowEvent::Resized(size) => {
