@@ -1,3 +1,13 @@
+// ============================================================================
+// WARNING / ANTI-PATTERN FOR FUTURE AGENTS:
+// When using `blade_graphics` (Vulkan/Metal HAL), every created resource
+// (CommandEncoder, Surface, GuiPainter, Renderer, Buffers, Textures) MUST be
+// explicitly destroyed via `context.destroy_*` before the context drops.
+// Failing to destroy the `command_encoder` or `surface` causes VRAM memory leaks:
+// `ERROR blade_graphics::hal::init: Leaked GPU memory block: '_scratch'`.
+// ALWAYS implement `cleanup(&mut self)` and `impl Drop` to guarantee 0 leaks!
+// ============================================================================
+
 use dr_core::game::GameState;
 use dr_render::black_hole_renderer::BlackHoleUniforms;
 use dr_render::renderer::Renderer;

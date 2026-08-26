@@ -34,7 +34,7 @@ impl Default for GameState {
 impl GameState {
     pub fn new() -> Self {
         let mut black_hole = BlackHole::new();
-        black_hole.mass = MassiveNumber::ZERO; // Start at 0 kg
+        black_hole.mass = MassiveNumber::ZERO; // Start at exact 0.0 kg
         black_hole.lifetime_mass = MassiveNumber::ZERO;
 
         Self {
@@ -135,7 +135,7 @@ impl GameState {
             }
         }
 
-        // 8. Polar jet periodic eruption
+        // 8. Polar jet periodic eruption (only if unlocked)
         self.polar_jet_timer += dt;
         if self.polar_jet_timer >= 12.0 {
             self.polar_jet_timer = 0.0;
@@ -150,22 +150,24 @@ impl GameState {
             self.polar_jet_active = false;
         }
 
-        // 9. Update quests
-        let total_tech: u32 = self.upgrades.iter().map(|u| u.level).sum();
-        let terrestrial_count = self.tiers.iter().find(|t| t.id == MatterTierId::TerrestrialPlanets).map(|t| t.count).unwrap_or(0);
-        if let Some(reward) = self.quests.update(
-            self.black_hole.total_pulses,
-            self.black_hole.mass,
-            self.tiers[0].count,
-            total_tech,
-            self.black_hole.penrose_timer > 0.0,
-            terrestrial_count,
-            self.prestige.total_collapses,
-        ) {
-            if reward > MassiveNumber::ZERO {
-                self.black_hole.mass += reward;
-                self.black_hole.lifetime_mass += reward;
-                self.black_hole.accretion_flash = 1.0;
+        // 9. Update quests (only after tutorial is fully completed)
+        if self.tutorial.is_completed() {
+            let total_tech: u32 = self.upgrades.iter().map(|u| u.level).sum();
+            let terrestrial_count = self.tiers.iter().find(|t| t.id == MatterTierId::TerrestrialPlanets).map(|t| t.count).unwrap_or(0);
+            if let Some(reward) = self.quests.update(
+                self.black_hole.total_pulses,
+                self.black_hole.mass,
+                self.tiers[0].count,
+                total_tech,
+                self.black_hole.penrose_timer > 0.0,
+                terrestrial_count,
+                self.prestige.total_collapses,
+            ) {
+                if reward > MassiveNumber::ZERO {
+                    self.black_hole.mass += reward;
+                    self.black_hole.lifetime_mass += reward;
+                    self.black_hole.accretion_flash = 1.0;
+                }
             }
         }
     }
@@ -179,9 +181,15 @@ impl GameState {
         // Advance tutorial
         self.tutorial.on_click(self.black_hole.mass.to_f64());
 
-        // Penrose Boost trigger
-        if self.black_hole.penrose_timer <= 0.0 && self.black_hole.accretion_flash > 0.4 {
-            let penrose_lvl = self.upgrade_level(UpgradeId::PenroseResonanceChamber);
+        // ============================================================================
+        // WARNING / ANTI-PATTERN FOR FUTURE AGENTS:
+        // NEVER trigger locked mechanics autonomously! ALWAYS check upgrade level > 0.
+        // Failing to verify `penrose_lvl > 0` caused Penrose Boost to fire on the
+        // player's first click, displaying confusing banners and multiplying mass
+        // without user intent.
+        // ============================================================================
+        let penrose_lvl = self.upgrade_level(UpgradeId::PenroseResonanceChamber);
+        if penrose_lvl > 0 && self.black_hole.penrose_timer <= 0.0 && self.black_hole.accretion_flash > 0.4 {
             let duration = 3.0 + (penrose_lvl as f32) * 1.5;
             let boost_mult = 2.0 + (penrose_lvl as f32) * 0.5;
             self.black_hole.activate_penrose_boost(duration, boost_mult);
@@ -280,7 +288,7 @@ mod tests {
         assert_eq!(game.black_hole.mass.to_f64(), 0.0);
 
         game.trigger_pulse();
-        assert!(game.black_hole.mass > MassiveNumber::ZERO);
+        assert_eq!(game.black_hole.mass.to_f64(), 1.0);
         assert!(game.pulse_active);
     }
 
@@ -293,6 +301,7 @@ mod tests {
             game.trigger_pulse();
         }
         assert_eq!(game.tutorial.step, TutorialStep::BuyFirstGenerator);
+        assert_eq!(game.black_hole.mass.to_f64(), 10.0);
 
         let bought = game.buy_tier(MatterTierId::QuantumDust, 1);
         assert!(bought);

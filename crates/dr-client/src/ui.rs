@@ -1,3 +1,13 @@
+// ============================================================================
+// WARNING / ANTI-PATTERN FOR FUTURE AGENTS:
+// In egui, `ui.painter().arrow(origin, vec, stroke)` draws an arrow starting
+// at `origin` and pointing towards `origin + vec`.
+// If `vec.x` is negative (e.g. `vec2(-50.0, 0.0)`), the arrow points to the LEFT!
+// If your target element (such as the sidebar button) is to the RIGHT, your
+// vector MUST have positive X (e.g. `vec2(50.0, 0.0)`).
+// Always verify arrow vectors against actual screen-space bounding boxes!
+// ============================================================================
+
 use dr_core::game::GameState;
 use dr_core::prestige::ShardUpgradeId;
 use dr_core::tiers::MatterTierId;
@@ -134,7 +144,7 @@ impl GameUi {
                 }
             }
 
-            // Draw crisp HUD overlays, single target reticle & floating numbers
+            // Draw crisp HUD overlays, target reticles & floating numbers
             self.draw_center_overlays(ui, state, rect, matter_unlocked, bh_center);
             self.draw_popups(ui);
         });
@@ -257,7 +267,6 @@ impl GameUi {
                 ui.painter().rect_filled(banner_rect, 8.0, Color32::from_rgba_unmultiplied(50, 35, 10, 250));
                 ui.painter().rect_stroke(banner_rect, 8.0, Stroke::new(2.5_f32, Color32::from_rgb(255, 200, 50)), egui::StrokeKind::Outside);
 
-                let arrow_bounce = (self.anim_time * 8.0).sin() * 10.0;
                 ui.painter().text(
                     banner_pos,
                     Align2::CENTER_CENTER,
@@ -266,16 +275,18 @@ impl GameUi {
                     Color32::from_rgb(255, 220, 100),
                 );
 
-                // Golden arrow on the right pointing into the first generator
-                let arrow_start = Pos2::new(rect.max.x + 20.0 + arrow_bounce, rect.min.y + 160.0);
-                ui.painter().arrow(arrow_start, vec2(-55.0, 0.0), Stroke::new(4.5_f32, Color32::from_rgb(255, 210, 40)));
+                // Golden arrow starting from the center canvas pointing RIGHT towards the sidebar button
+                let arrow_bounce = (self.anim_time * 8.0).sin() * 8.0;
+                let arrow_target_y = rect.min.y + 115.0;
+                let arrow_start = Pos2::new(rect.max.x - 70.0 + arrow_bounce, arrow_target_y);
+                ui.painter().arrow(arrow_start, vec2(55.0, 0.0), Stroke::new(4.5_f32, Color32::from_rgb(255, 210, 40)));
 
-                let text_pos = Pos2::new(arrow_start.x - 65.0, arrow_start.y);
+                let text_pos = Pos2::new(arrow_start.x - 12.0, arrow_target_y);
                 ui.painter().text(
                     text_pos,
                     Align2::RIGHT_CENTER,
                     "[ COMPRA AQUÍ ]",
-                    FontId::proportional(18.0),
+                    FontId::proportional(16.0),
                     Color32::from_rgb(255, 220, 50),
                 );
             }
@@ -344,7 +355,7 @@ impl GameUi {
             }
         }
 
-        // Penrose Boost Indicator Banner
+        // Penrose Boost Indicator Banner (only visible when actively running)
         if state.black_hole.penrose_timer > 0.0 {
             let banner_rect = Rect::from_center_size(
                 Pos2::new(bh_center.x, rect.min.y + 110.0),

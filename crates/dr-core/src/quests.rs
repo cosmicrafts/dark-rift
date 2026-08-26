@@ -1,14 +1,22 @@
+// ============================================================================
+// WARNING / ANTI-PATTERN FOR FUTURE AGENTS:
+// NEVER inject bulk mass rewards into early quests that destroy the player's
+// onboarding tempo. If a player is supposed to experience the gradual growth
+// from 0 to 10 kg, injecting a +5 kg or +10 kg quest reward on the 3rd click
+// completely skips the tutorial stage and breaks the game feel.
+// Quests must only activate or scale rewards AFTER the player has mastered
+// the basic loop.
+// ============================================================================
+
 use crate::math::MassiveNumber;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum QuestId {
-    AwakenSingularity,
-    FirstAccretion,
-    QuantumGenerator,
-    CriticalDensity,
+    FirstAccretionMilestone,
+    QuantumExpansion,
+    RelativisticSpeed,
     TechnologicalSingularity,
-    PenroseResonance,
     PlanetaryDestruction,
     TheBigCrunch,
     CompletedAll,
@@ -86,11 +94,11 @@ impl QuestManager {
 
     pub fn update(
         &mut self,
-        total_pulses: u64,
+        _total_pulses: u64,
         current_mass: MassiveNumber,
         quantum_tiers: u64,
         tech_upgrades: u32,
-        penrose_active: bool,
+        _penrose_active: bool,
         terrestrial_planets: u64,
         total_collapses: u64,
     ) -> Option<MassiveNumber> {
@@ -100,25 +108,17 @@ impl QuestManager {
         }
 
         match quest.id {
-            QuestId::AwakenSingularity => {
-                quest.current_progress = total_pulses as f64;
-            }
-            QuestId::FirstAccretion => {
+            QuestId::FirstAccretionMilestone => {
                 quest.current_progress = current_mass.to_f64().min(quest.target_progress);
             }
-            QuestId::QuantumGenerator => {
+            QuestId::QuantumExpansion => {
                 quest.current_progress = quantum_tiers as f64;
             }
-            QuestId::CriticalDensity => {
+            QuestId::RelativisticSpeed => {
                 quest.current_progress = current_mass.to_f64().min(quest.target_progress);
             }
             QuestId::TechnologicalSingularity => {
                 quest.current_progress = tech_upgrades as f64;
-            }
-            QuestId::PenroseResonance => {
-                if penrose_active {
-                    quest.current_progress = 1.0;
-                }
             }
             QuestId::PlanetaryDestruction => {
                 quest.current_progress = terrestrial_planets as f64;
@@ -126,9 +126,7 @@ impl QuestManager {
             QuestId::TheBigCrunch => {
                 quest.current_progress = total_collapses as f64;
             }
-            QuestId::CompletedAll => {
-                quest.current_progress = 1.0;
-            }
+            QuestId::CompletedAll => {}
         }
 
         if quest.current_progress >= quest.target_progress {
@@ -145,76 +143,52 @@ impl QuestManager {
 pub fn default_quests() -> Vec<Quest> {
     vec![
         Quest::new(
-            QuestId::AwakenSingularity,
-            "1. AWAKEN THE SINGULARITY",
-            "Click on the Black Hole 3 times to pulse spacetime.",
-            3.0,
-            MassiveNumber::from_f64(5.0),
+            QuestId::FirstAccretionMilestone,
+            "1. EXPAND THE EVENT HORIZON",
+            "Reach 50 kg of mass using passive matter generators.",
+            50.0,
+            MassiveNumber::from_f64(25.0),
             0,
         ),
         Quest::new(
-            QuestId::FirstAccretion,
-            "2. GATHER INITIAL MASS",
-            "Reach 10 kg of mass to unlock the Matter Streams.",
-            10.0,
-            MassiveNumber::from_f64(10.0),
-            0,
-        ),
-        Quest::new(
-            QuestId::QuantumGenerator,
-            "3. AUTOMATED ACCRETION",
-            "Purchase 1x Quantum Gas & Photons in the Matter tab.",
-            1.0,
-            MassiveNumber::from_f64(20.0),
-            0,
-        ),
-        Quest::new(
-            QuestId::CriticalDensity,
-            "4. CRITICAL MASS",
-            "Accumulate 100 kg of mass to destabilize local space.",
-            100.0,
+            QuestId::QuantumExpansion,
+            "2. QUANTUM HARVEST",
+            "Own at least 5 Quantum Gas & Photons generators.",
+            5.0,
             MassiveNumber::from_f64(50.0),
             0,
         ),
         Quest::new(
-            QuestId::TechnologicalSingularity,
-            "5. SINGULARITY TECHNOLOGY",
-            "Purchase 1x Upgrade in the Tech tab.",
-            1.0,
-            MassiveNumber::from_f64(250.0),
+            QuestId::RelativisticSpeed,
+            "3. RELATIVISTIC CRITICALITY",
+            "Reach 150 kg mass to unlock Singularity Technologies.",
+            150.0,
+            MassiveNumber::from_f64(100.0),
             0,
         ),
         Quest::new(
-            QuestId::PenroseResonance,
-            "6. HARNESS THE ERGOSPHERE",
-            "Click during an Accretion Flash to trigger Penrose Boost!",
-            1.0,
-            MassiveNumber::from_f64(1_000.0),
+            QuestId::TechnologicalSingularity,
+            "4. TECHNOLOGICAL ADVANCE",
+            "Purchase 3 upgrades in the Tech panel.",
+            3.0,
+            MassiveNumber::from_f64(500.0),
             0,
         ),
         Quest::new(
             QuestId::PlanetaryDestruction,
-            "7. TERRESTRIAL DEVOURER",
-            "Unlock and purchase 1x Terrestrial Planet.",
+            "5. PLANETARY CONSUMPTION",
+            "Own 1 Terrestrial Planet matter harvester.",
             1.0,
-            MassiveNumber::from_f64(500_000.0),
+            MassiveNumber::from_f64(10_000.0),
             0,
         ),
         Quest::new(
             QuestId::TheBigCrunch,
-            "8. THE POINT OF NO RETURN",
-            "Reach 1,000,000 t mass and trigger The Big Crunch.",
+            "6. COSMIC COLLAPSE",
+            "Trigger the Big Crunch to unlock Primordial Dark Matter Shards.",
             1.0,
             MassiveNumber::ZERO,
-            10,
-        ),
-        Quest::new(
-            QuestId::CompletedAll,
-            "★ MASTER OF THE DARK RIFT ★",
-            "The universe bows to your singularity.",
-            1.0,
-            MassiveNumber::ZERO,
-            0,
+            1,
         ),
     ]
 }
