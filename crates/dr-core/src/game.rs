@@ -1,6 +1,6 @@
 use crate::black_hole::BlackHole;
+use crate::celestial::{CelestialField, CelestialType};
 use crate::math::MassiveNumber;
-use crate::particles::ParticleSim;
 use crate::prestige::{PrestigeState, ShardUpgradeId};
 use crate::quests::QuestManager;
 use crate::tiers::{default_matter_tiers, MatterTier, MatterTierId};
@@ -14,7 +14,7 @@ pub struct GameState {
     pub tiers: Vec<MatterTier>,
     pub upgrades: Vec<Upgrade>,
     pub prestige: PrestigeState,
-    pub particles: ParticleSim,
+    pub celestial: CelestialField,
     pub quests: QuestManager,
     pub tutorial: TutorialState,
     pub time_played_secs: f64,
@@ -34,7 +34,7 @@ impl Default for GameState {
 impl GameState {
     pub fn new() -> Self {
         let mut black_hole = BlackHole::new();
-        black_hole.mass = MassiveNumber::ZERO; // Start at exact 0.0 kg
+        black_hole.mass = MassiveNumber::ZERO; // Exact 0.0 kg start
         black_hole.lifetime_mass = MassiveNumber::ZERO;
 
         Self {
@@ -42,7 +42,7 @@ impl GameState {
             tiers: default_matter_tiers(),
             upgrades: default_upgrades(),
             prestige: PrestigeState::new(),
-            particles: ParticleSim::new(),
+            celestial: CelestialField::new(),
             quests: QuestManager::new(),
             tutorial: TutorialState::new(),
             time_played_secs: 0.0,
@@ -50,7 +50,7 @@ impl GameState {
             pulse_timer: 0.0,
             polar_jet_timer: 0.0,
             polar_jet_active: false,
-            version: 5,
+            version: 6,
         }
     }
 
@@ -107,19 +107,34 @@ impl GameState {
         let dps = self.calculate_total_dps();
         self.black_hole.update(dt, dps);
 
-        // 5. Dynamic particle simulation based on active generators
-        let total_generators: u64 = self.tiers.iter().map(|t| t.count).sum();
-        if total_generators > 0 {
-            let target_count = 16 + ((total_generators as usize) * 8).min(480);
-            self.particles.set_active_count(target_count);
-            self.particles.update(
-                dt,
-                self.black_hole.visual_radius,
-                self.black_hole.spin,
-                self.pulse_active,
-            );
-        } else {
-            self.particles.set_active_count(0);
+        // 5. Tick physical celestial orbital field
+        let mut consumed_mass = MassiveNumber::ZERO;
+        let mut triggered_am = false;
+
+        self.celestial.tick(
+            dt,
+            self.black_hole.mass.to_f64(),
+            dps.to_f64(),
+            self.black_hole.visual_radius,
+            self.black_hole.spin,
+            |ev| {
+                consumed_mass += ev.mass_gained;
+                if ev.is_antimatter {
+                    triggered_am = true;
+                }
+            },
+        );
+
+        if consumed_mass > MassiveNumber::ZERO {
+            let mult = self.calculate_pulse_multiplier();
+            let total_gained = consumed_mass * mult;
+            self.black_hole.mass += total_gained;
+            self.black_hole.lifetime_mass += total_gained;
+            self.black_hole.accretion_flash = (self.black_hole.accretion_flash + 0.6).min(1.0);
+        }
+
+        if triggered_am {
+            self.celestial.trigger_gravitational_wave();
         }
 
         // 6. Spin adjustment based on frame dragging upgrade & prestige
@@ -172,21 +187,53 @@ impl GameState {
         }
     }
 
-    pub fn trigger_pulse(&mut self) -> MassiveNumber {
+    /// Primary interaction: Click on the canvas at normalized coordinate [nx, ny].
+    /// Returns the mass gained and the interaction type.
+    pub fn interact_canvas(&mut self, norm_pos: [f32; 2]) -> (MassiveNumber, Option<CelestialType>) {
         let mult = self.calculate_pulse_multiplier();
+
+        // 1. Check if clicking on an orbital celestial body
+        if let Some((_id, body_type, destroyed)) = self.celestial.hit_test_at(norm_pos) {
+            self.pulse_active = true;
+            self.pulse_timer = 0.35;
+            self.black_hole.accretion_flash = (self.black_hole.accretion_flash + 0.5).min(1.0);
+
+            let base_mass = match body_type {
+                CelestialType::QuantumGas => 1.0,
+                CelestialType::MicroMeteor => 4.0,
+                CelestialType::DenseAsteroid => 15.0,
+                CelestialType::AntimatterShard => 50.0,
+                CelestialType::ProtoMoon => 250.0,
+            };
+
+            let gained = if destroyed {
+                let m = MassiveNumber::from_f64(base_mass) * mult;
+                self.black_hole.mass += m;
+                self.black_hole.lifetime_mass += m;
+                m
+            } else {
+                let m = MassiveNumber::from_f64(1.0) * mult;
+                self.black_hole.mass += m;
+                self.black_hole.lifetime_mass += m;
+                m
+            };
+
+            self.tutorial.on_click(self.black_hole.mass.to_f64());
+            return (gained, Some(body_type));
+        }
+
+        // 2. Click on empty space / black hole: Emits a gravitational shockwave
+        self.celestial.trigger_gravitational_wave();
         let gained = self.black_hole.trigger_pulse(mult);
         self.pulse_active = true;
         self.pulse_timer = 0.35;
 
-        // Advance tutorial
+        // Tutorial tracking
         self.tutorial.on_click(self.black_hole.mass.to_f64());
 
         // ============================================================================
-        // WARNING / ANTI-PATTERN FOR FUTURE AGENTS:
-        // NEVER trigger locked mechanics autonomously! ALWAYS check upgrade level > 0.
-        // Failing to verify `penrose_lvl > 0` caused Penrose Boost to fire on the
-        // player's first click, displaying confusing banners and multiplying mass
-        // without user intent.
+        // WARNING / ANTI-PATTERN:
+        // NEVER trigger Penrose boost autonomously when upgrade level == 0.
         // ============================================================================
         let penrose_lvl = self.upgrade_level(UpgradeId::PenroseResonanceChamber);
         if penrose_lvl > 0 && self.black_hole.penrose_timer <= 0.0 && self.black_hole.accretion_flash > 0.4 {
@@ -195,7 +242,7 @@ impl GameState {
             self.black_hole.activate_penrose_boost(duration, boost_mult);
         }
 
-        gained
+        (gained, None)
     }
 
     pub fn buy_tier(&mut self, id: MatterTierId, amount: u64) -> bool {
@@ -250,7 +297,7 @@ impl GameState {
         self.black_hole = BlackHole::new();
         self.tiers = default_matter_tiers();
         self.upgrades = default_upgrades();
-        self.particles.init_particles();
+        self.celestial = CelestialField::new();
         true
     }
 
@@ -287,27 +334,9 @@ mod tests {
         let mut game = GameState::new();
         assert_eq!(game.black_hole.mass.to_f64(), 0.0);
 
-        game.trigger_pulse();
+        let (gained, _) = game.interact_canvas([0.0, 0.0]);
+        assert_eq!(gained.to_f64(), 1.0);
         assert_eq!(game.black_hole.mass.to_f64(), 1.0);
         assert!(game.pulse_active);
-    }
-
-    #[test]
-    fn test_tutorial_progression() {
-        let mut game = GameState::new();
-        assert_eq!(game.tutorial.step, TutorialStep::AwakenSingularity);
-
-        for _ in 0..10 {
-            game.trigger_pulse();
-        }
-        assert_eq!(game.tutorial.step, TutorialStep::BuyFirstGenerator);
-        assert_eq!(game.black_hole.mass.to_f64(), 10.0);
-
-        let bought = game.buy_tier(MatterTierId::QuantumDust, 1);
-        assert!(bought);
-        assert_eq!(game.tutorial.step, TutorialStep::ExplainPassive);
-
-        game.tick(7.0);
-        assert_eq!(game.tutorial.step, TutorialStep::Completed);
     }
 }

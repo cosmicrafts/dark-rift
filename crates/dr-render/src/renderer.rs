@@ -1,7 +1,7 @@
 use crate::black_hole_renderer::{BlackHoleRenderer, BlackHoleUniforms};
 use crate::particle_renderer::{ParticleGlobals, ParticleRenderer};
 use blade_graphics as gpu;
-use dr_core::particles::{ParticleGpu, MAX_PARTICLES};
+use dr_core::celestial::{CelestialGpu, MAX_CELESTIAL_BODIES};
 
 pub struct Renderer {
     black_hole: BlackHoleRenderer,
@@ -11,7 +11,7 @@ pub struct Renderer {
 impl Renderer {
     pub fn new(context: &gpu::Context, surface_format: gpu::TextureFormat) -> Self {
         let black_hole = BlackHoleRenderer::new(context, surface_format);
-        let particles = ParticleRenderer::new(context, surface_format, MAX_PARTICLES);
+        let particles = ParticleRenderer::new(context, surface_format, MAX_CELESTIAL_BODIES);
 
         Self {
             black_hole,
@@ -25,13 +25,13 @@ impl Renderer {
         context: &gpu::Context,
         target_view: gpu::TextureView,
         bh_uniforms: BlackHoleUniforms,
-        particle_data: &[ParticleGpu],
-        active_particle_count: u32,
+        celestial_data: &[CelestialGpu],
+        active_celestial_count: u32,
     ) {
         // Pass 1: Fullscreen Black Hole + Gravitational Lensing + Accretion Disk
         self.black_hole.draw(encoder, target_view, bh_uniforms);
 
-        // Pass 2: Instanced Particles orbiting the black hole
+        // Pass 2: Instanced Celestial Bodies orbiting the black hole
         let particle_globals = ParticleGlobals {
             screen_size: bh_uniforms.screen_size,
             bh_center_uv: bh_uniforms.bh_center_uv,
@@ -45,8 +45,8 @@ impl Renderer {
             context,
             target_view,
             particle_globals,
-            particle_data,
-            active_particle_count,
+            celestial_data,
+            active_celestial_count,
         );
     }
 

@@ -270,14 +270,14 @@ impl ApplicationHandler for DarkRiftApp {
                     _pad0: 0.0,
                 };
 
-                let active_particle_count = self.game_state.particles.active_count as u32;
+                let active_count = self.game_state.celestial.active_count as u32;
                 renderer.render(
                     command_encoder,
                     context,
                     frame.texture_view(),
                     bh_uniforms,
-                    &self.game_state.particles.particles,
-                    active_particle_count,
+                    &self.game_state.celestial.gpu_instances,
+                    active_count,
                 );
 
                 // 4. Render UI Layer on top of frame

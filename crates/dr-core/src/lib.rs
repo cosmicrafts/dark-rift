@@ -1,7 +1,7 @@
 pub mod black_hole;
+pub mod celestial;
 pub mod game;
 pub mod math;
-pub mod particles;
 pub mod prestige;
 pub mod quests;
 pub mod tiers;

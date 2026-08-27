@@ -1,6 +1,6 @@
 use blade_graphics as gpu;
 use bytemuck::{Pod, Zeroable};
-use dr_core::particles::ParticleGpu;
+use dr_core::celestial::CelestialGpu;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -39,12 +39,12 @@ impl ParticleRenderer {
         let data_layout = <ParticleShaderData as gpu::ShaderData>::layout();
 
         let pipeline = context.create_render_pipeline(gpu::RenderPipelineDesc {
-            name: "particle_pipeline",
+            name: "celestial_pipeline",
             data_layouts: &[&data_layout],
             vertex: shader.at("vs_main"),
             vertex_fetches: &[gpu::VertexFetchState {
                 layout: &gpu::VertexLayout {
-                    stride: std::mem::size_of::<ParticleGpu>() as u32,
+                    stride: std::mem::size_of::<CelestialGpu>() as u32,
                     attributes: vec![
                         ("pos", gpu::VertexAttribute {
                             offset: 0,
@@ -92,9 +92,9 @@ impl ParticleRenderer {
             multisample_state: gpu::MultisampleState::default(),
         });
 
-        let buffer_size = (capacity * std::mem::size_of::<ParticleGpu>()) as u64;
+        let buffer_size = (capacity * std::mem::size_of::<CelestialGpu>()) as u64;
         let instance_buffer = context.create_buffer(gpu::BufferDesc {
-            name: "particle_instances",
+            name: "celestial_instances",
             size: buffer_size,
             memory: gpu::Memory::Shared,
         });
@@ -112,7 +112,7 @@ impl ParticleRenderer {
         context: &gpu::Context,
         target_view: gpu::TextureView,
         globals: ParticleGlobals,
-        particles: &[ParticleGpu],
+        particles: &[CelestialGpu],
         active_count: u32,
     ) {
         let count = (active_count as usize).min(self.capacity).min(particles.len());
@@ -120,7 +120,7 @@ impl ParticleRenderer {
             return;
         }
 
-        let byte_size = (count * std::mem::size_of::<ParticleGpu>()) as u64;
+        let byte_size = (count * std::mem::size_of::<CelestialGpu>()) as u64;
         let slice = bytemuck::cast_slice(&particles[..count]);
         unsafe {
             let ptr = self.instance_buffer.data();
@@ -129,7 +129,7 @@ impl ParticleRenderer {
         context.sync_buffer(self.instance_buffer, 0, byte_size);
 
         let mut pass = encoder.render(
-            "particles_pass",
+            "celestial_pass",
             gpu::RenderTargetSet {
                 colors: &[gpu::RenderTarget {
                     view: target_view,
