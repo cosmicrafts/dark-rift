@@ -241,7 +241,15 @@ fn main() {
                     .run_if(|cli: Res<Cli>| !cli.bot),
             )
             .add_systems(OnExit(AppState::LobbyBrowser), system_cleanup_lobby_browser.run_if(|cli: Res<Cli>| !cli.bot))
-            .add_systems(OnEnter(AppState::InGame), leaderboard::setup_leaderboard.run_if(|cli: Res<Cli>| !cli.bot))
+            .add_systems(
+                OnEnter(AppState::InGame),
+                (
+                    system_init_ingame_visual_pools,
+                    leaderboard::setup_leaderboard,
+                )
+                    .chain()
+                    .run_if(|cli: Res<Cli>| !cli.bot),
+            )
             .add_systems(
                 OnExit(AppState::InGame),
                 (
