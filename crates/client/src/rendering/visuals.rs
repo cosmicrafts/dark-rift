@@ -37,6 +37,14 @@ pub struct AttackRingPool {
     pub unused: Vec<AttackRingNodes>,
 }
 
+impl AttackRingPool {
+    pub fn retain_alive(&mut self, alive: &std::collections::HashSet<Entity>) {
+        self.unused.retain(|n| {
+            alive.contains(&n.root) && alive.contains(&n.mesh) && alive.contains(&n.label)
+        });
+    }
+}
+
 /// Meshes for local-only transport visuals (boat disc, wake speck, landing ring).
 #[derive(Resource)]
 pub struct FleetVisualMeshes {
@@ -76,6 +84,14 @@ pub struct FleetVisualPool {
     pub used: std::collections::HashMap<u64, FleetNodes>,
 }
 
+impl FleetVisualPool {
+    pub fn retain_alive(&mut self, alive: &std::collections::HashSet<Entity>) {
+        self.unused
+            .retain(|n| alive.contains(&n.root) && alive.contains(&n.boat));
+        self.used
+            .retain(|_, n| alive.contains(&n.root) && alive.contains(&n.boat));
+    }
+}
 
 pub fn system_sync_fleet_visuals(
     mut commands: Commands,
@@ -87,12 +103,17 @@ pub fn system_sync_fleet_visuals(
     mut boat_q: Query<(Entity, &mut FollowFleetBoat, &mut Transform), (Without<FollowFleetWake>, Without<FollowFleetTarget>)>,
     mut wake_q: Query<(&FollowFleetWake, &mut Transform, &mut Visibility), (Without<FollowFleetBoat>, Without<FollowFleetTarget>)>,
     mut target_q: Query<(Entity, &mut FollowFleetTarget, &mut Transform), (Without<FollowFleetBoat>, Without<FollowFleetWake>)>,
-    mut pool: Local<FleetVisualPool>,
+    mut pool: ResMut<FleetVisualPool>,
+    q_alive: Query<Entity, With<InGameEntity>>,
 ) {
     let Some(engine) = engine_opt.as_deref() else { return; };
     let Some(m) = meshes.as_ref() else { return; };
     let pid = my_id.0;
     if pid == 0 { return; }
+
+    let alive: std::collections::HashSet<Entity> = q_alive.iter().collect();
+    pool.retain_alive(&alive);
+
     let mw = engine.state.map.width;
     let mh = engine.state.map.height;
 
@@ -238,8 +259,12 @@ pub fn system_animate_attack_command_rings(
     mesh_q: Query<&MeshMaterial2d<ColorMaterial>, With<AttackPingMesh>>,
     mut text_color_q: Query<&mut TextColor, With<AttackPingTroopLabel>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    mut pool: Local<AttackRingPool>,
+    mut pool: ResMut<AttackRingPool>,
+    q_alive: Query<Entity, With<InGameEntity>>,
 ) {
+    let alive: std::collections::HashSet<Entity> = q_alive.iter().collect();
+    pool.retain_alive(&alive);
+
     let dt = time.delta_secs();
     for (entity, mut ring, mut transform, children, opt_nodes) in &mut q {
         ring.elapsed += dt;

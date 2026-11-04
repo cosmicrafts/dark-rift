@@ -64,11 +64,15 @@ pub fn system_sync_player_labels(
         &mut PlayerLabelRenderCache,
         &mut Visibility,
     )>,
-    mut pool: Local<EntityPool>,
+    mut pool: ResMut<EntityPool>,
+    q_alive: Query<Entity, With<InGameEntity>>,
 ) {
     let Some(engine) = engine_opt.as_deref() else { return };
     let game = &engine.state;
     let Some(ui) = ui_opt else { return };
+
+    let alive: std::collections::HashSet<Entity> = q_alive.iter().collect();
+    pool.retain_alive(&alive);
 
     // 1. Recycle labels for dead players
     for (entity, _, _, _, _, label, _, mut vis) in &mut q_labels {
