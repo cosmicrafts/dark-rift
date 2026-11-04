@@ -87,6 +87,7 @@ pub fn system_force_boat_key(
         return;
     }
     let Some(engine) = ctx.engine_opt.as_deref() else {
+        attack_pool.clear();
         return;
     };
     let Some((x, y)) = hovered.0 else {
@@ -200,7 +201,10 @@ pub fn player_click(
         return;
     }
 
-    let Some(engine) = ctx.engine_opt.as_mut() else { return };
+    let Some(engine) = ctx.engine_opt.as_mut() else {
+        attack_pool.clear();
+        return;
+    };
     let target = hovered.0.or_else(|| {
         let viewport = touch_gesture.last_touch_pos?;
         let (camera, cam_t) = q_camera.single().ok()?;
