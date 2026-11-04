@@ -213,6 +213,13 @@ pub struct BuildingVisualPool {
     pub used: std::collections::HashMap<u64, BuildingNodes>,
 }
 
+impl BuildingVisualPool {
+    pub fn clear(&mut self) {
+        self.used.clear();
+        self.unused.clear();
+    }
+}
+
 pub fn system_sync_building_visuals(
     mut commands: Commands,
     engine_opt: Option<Res<DarkRiftEngine>>,
@@ -221,8 +228,7 @@ pub fn system_sync_building_visuals(
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     q_existing: Query<(Entity, &BuildingVisual)>,
-    mut local_existing: Local<Vec<u64>>,
-    mut pool: Local<BuildingVisualPool>,
+    mut pool: ResMut<BuildingVisualPool>,
 ) {
     let Some(engine) = engine_opt.as_deref() else { return; };
     let Some(marker) = mesh.as_ref() else { return; };

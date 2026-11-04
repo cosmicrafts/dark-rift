@@ -169,7 +169,11 @@ fn main() {
         .init_resource::<BuildStructureMode>()
         .init_resource::<StructureGhostParts>()
         .init_resource::<BuildableHudState>()
-        .init_resource::<BuildableHudDirty>();
+        .init_resource::<BuildableHudDirty>()
+        .init_resource::<EntityPool>()
+        .init_resource::<FleetVisualPool>()
+        .init_resource::<AttackRingPool>()
+        .init_resource::<BuildingVisualPool>();
 
         // Insert ClientSettings BEFORE app.run() so it exists when OnEnter(LobbyBrowser) fires.
         // Font handle is Handle::default() here; init_client_font patches it in Startup.
