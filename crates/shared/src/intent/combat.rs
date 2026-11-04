@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use crate::game::GameState;
 use crate::engine::DarkRiftEngine;
@@ -9,14 +10,31 @@ use rand_core::SeedableRng;
 use crate::rng::NextIntExt;
 use crate::map::TerrainType;
 pub fn merge_frontiers(
-    mut a: BinaryHeap<PrioritizedTile>,
+    a: BinaryHeap<PrioritizedTile>,
     b: BinaryHeap<PrioritizedTile>,
 ) -> BinaryHeap<PrioritizedTile> {
-    if a.capacity() < b.len() {
-        a.reserve(b.len());
+    if a.is_empty() {
+        return b;
     }
-    a.extend(b);
-    a
+    if b.is_empty() {
+        return a;
+    }
+
+    let mut tiles = Vec::with_capacity(a.len() + b.len());
+    tiles.extend(a.into_iter());
+    tiles.extend(b.into_iter());
+    tiles.sort_by(compare_prioritized_tile);
+    tiles.dedup_by_key(|t| (t.x, t.y));
+    BinaryHeap::from(tiles)
+}
+
+#[inline]
+fn compare_prioritized_tile(a: &PrioritizedTile, b: &PrioritizedTile) -> Ordering {
+    a.priority
+        .cmp(&b.priority)
+        .then_with(|| a.insert_seq.cmp(&b.insert_seq))
+        .then_with(|| a.y.cmp(&b.y))
+        .then_with(|| a.x.cmp(&b.x))
 }
 
 pub fn build_attack_frontier(

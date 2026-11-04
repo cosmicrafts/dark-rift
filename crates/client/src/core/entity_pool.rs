@@ -63,4 +63,10 @@ impl EntityPool {
             self.unused.insert(entity);
         }
     }
+
+    /// Drop all pooled entity handles (e.g. when leaving a match and despawning visuals).
+    pub fn clear(&mut self) {
+        self.used.clear();
+        self.unused.clear();
+    }
 }

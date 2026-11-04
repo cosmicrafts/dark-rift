@@ -224,7 +224,11 @@ pub fn system_sync_building_visuals(
     mut local_existing: Local<Vec<u64>>,
     mut pool: Local<BuildingVisualPool>,
 ) {
-    let Some(engine) = engine_opt.as_deref() else { return; };
+    let Some(engine) = engine_opt.as_deref() else {
+        pool.used.clear();
+        pool.unused.clear();
+        return;
+    };
     let Some(marker) = mesh.as_ref() else { return; };
     let mw = engine.state.map.width;
     let mh = engine.state.map.height;
